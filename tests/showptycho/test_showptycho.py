@@ -2049,6 +2049,19 @@ def test_regularized_review_uses_direct_solver_and_restores_its_method(tmp_path)
             expected, _ = ptycho.preview(START, compute_loss=False, **requested)
             np.testing.assert_array_equal(_shown(viewer), expected)
             assert json.loads(viewer.result_json)["method"] == method
+        # A dragged strength is applied in Python but not echoed: the browser already shows it,
+        # so each drag frame is one message carrying the phase.
+        sent = []
+        viewer.send_state = lambda key=None: sent.append(set(key or ()))
+        for strength in (0.05, 0.07):
+            viewer._on_request({"new": json.dumps({
+                "id": 10, **START, "method": "complex", "phase_regularization": strength,
+                "amplitude_regularization": 0.15, "committed": False,
+            })})
+            assert viewer.phase_regularization == strength
+        sent = [keys for keys in sent if keys]
+        assert sent and all("phase_bytes" in keys and "phase_regularization" not in keys for keys in sent)
+        del viewer.send_state
         record = viewer.calibration(include_phase=True)
         assert record["reconstruction"] == {
             "method": "complex", "phase_regularization": 0.07,

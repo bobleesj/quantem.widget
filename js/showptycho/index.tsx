@@ -10,6 +10,7 @@
 import * as React from "react";
 import { useLocalTiltWorkspace } from "./localTilt";
 import { idleDiagnostic, latestFrame } from "./interaction";
+import { GPUFrameDisplay, GPUPanelPainter, gpuPanelSources, type GPUPanelSource } from "./gpuFrame";
 import { FFTMagnitudeDisplay } from "./fftDisplay";
 import { fftAutoFrameZoom } from "./fftFraming";
 import { createRender, useModel, useModelState } from "@anywidget/react";
@@ -379,8 +380,20 @@ function drawCanvas(
   bgColor: string,
   textColor: string,
   smooth: boolean = false,
+  gpuCanvas: HTMLCanvasElement | null = null,
 ) {
   if (!canvas) return;
+  // A GPU-resident frame paints into the panel's WebGPU canvas, layered over this one.
+  const source = offscreen ? gpuPanelSources.get(offscreen) : undefined;
+  if (source && gpuCanvas && source.painter.paint(gpuCanvas, source, size, zoom, bgColor, smooth)) {
+    gpuCanvas.style.visibility = "visible";
+    const dpr = window.devicePixelRatio || 1;
+    const target = Math.round(size * dpr);
+    if (canvas.width !== target || canvas.height !== target) { canvas.width = target; canvas.height = target; }
+    stampFrame(canvas, offscreen!);
+    return;
+  }
+  if (gpuCanvas) gpuCanvas.style.visibility = "hidden";
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
 
@@ -424,8 +437,12 @@ function drawCanvas(
   }
   ctx.drawImage(offscreen, (size - drawW) / 2 + panX, (size - drawH) / 2 + panY, drawW, drawH);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  // Passive timing evidence for real image updates. Zoom, layout and contrast
-  // redraws of the same data do not count as new scientific frames.
+  stampFrame(canvas, offscreen);
+}
+
+/** Passive timing evidence for real image updates. Zoom, layout and contrast redraws of the
+ *  same data do not count as new scientific frames. */
+function stampFrame(canvas: HTMLCanvasElement, offscreen: HTMLCanvasElement) {
   const frame = offscreen.dataset.quantemDataFrame;
   if (frame && canvas.dataset.quantemDataFrame !== frame) {
     canvas.dataset.quantemDataFrame = frame;
@@ -577,6 +594,85 @@ function Histogram({
   );
 }
 
+/** A regularization strength on a log10 slider that shows its own value while dragged, so a drag
+ *  re-renders this slider alone; the widget takes the strength on release. */
+function RegularizationSlider({ name, value, onDrag, onCommit }: {
+  name: string; value: number; onDrag: (value: number) => void; onCommit: (value: number) => void;
+}) {
+  const [dragged, setDragged] = React.useState<number | null>(null);
+  const shown = dragged ?? value;
+  return (
+    <Box sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 230 }}>
+      <Typography sx={{ ...typography.label, whiteSpace: "nowrap" }}>{name} regularization {formatNumber(shown, 4)}</Typography>
+      <Slider size="small" aria-label={`${name} regularization`}
+        min={-4} max={0} step={0.01} value={Math.log10(Math.max(1e-4, shown))}
+        onChange={(_, next) => { const strength = 10 ** (next as number); setDragged(strength); onDrag(strength); }}
+        onChangeCommitted={(_, next) => { setDragged(null); onCommit(10 ** (next as number)); }}
+        sx={{ minWidth: 90, width: 130 }} />
+    </Box>
+  );
+}
+
+/** A three-thumb aberration slider (outer thumbs: sweep stoppers, middle: the value). While the
+ *  middle thumb is dragged the slider shows its own value, so each pointer move re-renders this
+ *  slider and not the whole widget; the widget takes the value on release. */
+function AberrationSlider({
+  label, unit, value, displayPrec, tip, min, max, step, range, isActiveSweep, isAtFull, disabled, tc,
+  onDrag, onCommit, onRange,
+}: {
+  label: string; unit: string; value: number; displayPrec: number; tip: string;
+  min: number; max: number; step: number; range: [number, number];
+  isActiveSweep: boolean; isAtFull: boolean; disabled: boolean; tc: ThemeColors;
+  onDrag: (value: number) => void; onCommit: (value: number) => void; onRange: (range: [number, number]) => void;
+}) {
+  const [dragged, setDragged] = React.useState<number | null>(null);
+  const shown = dragged ?? value;
+  const visibleValue = Math.max(min, Math.min(max, shown));
+  return (
+    <>
+      <Tooltip title={tip} placement="top" arrow>
+        <Typography sx={{ ...typography.labelSmall, color: tc.textMuted, mb: -0.5, cursor: "help" }}>
+          {label} <b>{shown.toFixed(displayPrec)}</b> {unit}
+          {!isAtFull && (
+            <span style={{ color: isActiveSweep ? tc.accent : tc.textMuted, opacity: 0.65 }}>
+              {" ["}{range[0].toFixed(displayPrec)}, {range[1].toFixed(displayPrec)}{"]"}
+            </span>
+          )}
+        </Typography>
+      </Tooltip>
+      {/* Show3D-style 3-thumb slider: disableSwap keeps order stable; to push the value outside
+          the stopper window, drag the relevant stopper first. */}
+      <Slider
+        value={[range[0], visibleValue, range[1]]}
+        min={min} max={max} step={step}
+        disabled={disabled}
+        disableSwap
+        onChange={(_, next, activeThumb) => {
+          const thumbs = next as number[];
+          if (activeThumb === 1) {
+            setDragged(thumbs[1]);
+            onDrag(thumbs[1]);
+          } else {
+            onRange([thumbs[0], thumbs[2]]);
+          }
+        }}
+        onChangeCommitted={(_, next) => {
+          const thumbs = next as number[];
+          setDragged(null);
+          onCommit(thumbs[1]);
+        }}
+        size="small"
+        sx={{
+          py: 0.5,
+          "& .MuiSlider-thumb[data-index='0']": { width: 8, height: 8, bgcolor: tc.textMuted, opacity: isActiveSweep ? 1 : 0.7 },
+          "& .MuiSlider-thumb[data-index='1']": { width: 12, height: 12 },
+          "& .MuiSlider-thumb[data-index='2']": { width: 8, height: 8, bgcolor: tc.textMuted, opacity: isActiveSweep ? 1 : 0.7 },
+        }}
+      />
+    </>
+  );
+}
+
 /* ================================================================
    ImagePanel: canvas with zoom/pan, cursor readout and scale bar overlay
    ================================================================ */
@@ -627,8 +723,9 @@ function ImagePanel({
   const [fftClickInfo, setFftClickInfo] = React.useState<FFTPeakMark | null>(null);
   const peakRequest = React.useRef(0);
 
+  const gpuCanvasRef = React.useRef<HTMLCanvasElement>(null);
   useCanvasFrame(offscreen, React.useCallback(() => {
-    drawCanvas(canvasRef.current, offscreen, size, zoom, tc.bgAlt, tc.textMuted, !!smooth);
+    drawCanvas(canvasRef.current, offscreen, size, zoom, tc.bgAlt, tc.textMuted, !!smooth, gpuCanvasRef.current);
   }, [offscreen, size, zoom, tc, smooth]));
 
   // Scale bar overlay
@@ -860,6 +957,8 @@ function ImagePanel({
           onDoubleClick={() => { onZoomChange(resetZoom); if (isFFT) { ++peakRequest.current; setFftClickInfo(null); } }}
           style={{ width: size, height: size, cursor: isFFT || cropSelecting ? "crosshair" : "grab", display: "block", imageRendering: smooth ? "auto" : "pixelated" }}
         />
+        <canvas ref={gpuCanvasRef} aria-hidden
+          style={{ position: "absolute", top: 0, left: 0, width: size, height: size, pointerEvents: "none", visibility: "hidden" }} />
         <Typography sx={{ position: "absolute", top: 4, left: 5, px: 0.5,
           fontSize: 10, fontFamily: "monospace", color: "#fff",
           bgcolor: "rgba(0,0,0,0.5)", pointerEvents: "none" }}>{label}</Typography>
@@ -952,8 +1051,9 @@ function FFTInset({
   const [fftClickInfo, setFftClickInfo] = React.useState<FFTPeakMark | null>(null);
   const peakRequest = React.useRef(0);
 
+  const gpuCanvasRef = React.useRef<HTMLCanvasElement>(null);
   useCanvasFrame(offscreen, React.useCallback(() => {
-    drawCanvas(canvasRef.current, offscreen, size, view, "#000", "#fff", !!smooth);
+    drawCanvas(canvasRef.current, offscreen, size, view, "#000", "#fff", !!smooth, gpuCanvasRef.current);
   }, [offscreen, size, smooth, autoZoom, relativeZoom]));
 
   React.useEffect(() => {
@@ -1069,6 +1169,8 @@ function FFTInset({
         aria-label="FFT inset"
         style={{ width: size, height: size, display: "block", imageRendering: smooth ? "auto" : "pixelated", pointerEvents: "none" }}
       />
+      <canvas ref={gpuCanvasRef} aria-hidden
+        style={{ position: "absolute", inset: 0, width: size, height: size, pointerEvents: "none", visibility: "hidden" }} />
       <canvas
         ref={overlayRef}
         aria-label="FFT inset peak marker"
@@ -1291,7 +1393,7 @@ function SamplePanel({
 }
 
 function HigherOrderPanel({
-  tc, open, onToggle, activeCount, values, setValues, onCommit, disabled = false,
+  tc, open, onToggle, activeCount, values: committedValues, setValues, onDrag, onCommit, disabled = false,
 }: {
   tc: ThemeColors;
   open: boolean;
@@ -1301,13 +1403,23 @@ function HigherOrderPanel({
   disabled?: boolean;
   values: Record<string, number>;
   setValues: React.Dispatch<React.SetStateAction<Record<string, number>>>;
+  /** A dragged coefficient, before release: the panel shows it, the widget requests its phase. */
+  onDrag: (key: string, value: number) => void;
 }) {
-  const updateMag = React.useCallback((name: string, value: number) => {
-    setValues(prev => ({ ...prev, [name]: value }));
-  }, [setValues]);
-  const updateAngle = React.useCallback((name: string, deg: number) => {
-    setValues(prev => ({ ...prev, [higherOrderAzimuthKey(name)]: deg }));
-  }, [setValues]);
+  // Dragged coefficients live here until release, so a drag re-renders this panel, not the widget.
+  const [dragged, setDragged] = React.useState<Record<string, number>>({});
+  const values = React.useMemo(() => ({ ...committedValues, ...dragged }), [committedValues, dragged]);
+  const drag = React.useCallback((key: string, value: number) => {
+    setDragged(previous => ({ ...previous, [key]: value }));
+    onDrag(key, value);
+  }, [onDrag]);
+  const release = React.useCallback((key: string, value: number) => {
+    setDragged({});
+    setValues(prev => ({ ...prev, [key]: value }));
+    onCommit();
+  }, [setValues, onCommit]);
+  const updateMag = React.useCallback((name: string, value: number) => drag(name, value), [drag]);
+  const updateAngle = React.useCallback((name: string, deg: number) => drag(higherOrderAzimuthKey(name), deg), [drag]);
   const resetAll = React.useCallback(() => { onCommit(); setValues({}); }, [setValues, onCommit]);
   const resetMag = React.useCallback((name: string) => {
     onCommit();
@@ -1358,7 +1470,7 @@ function HigherOrderPanel({
             value={mag} min={-entry.mag_max} max={entry.mag_max} step={entry.step_nm}
             aria-label={`${entry.name} magnitude`}
             onChange={(_, value) => updateMag(magKey, value as number)}
-            onChangeCommitted={onCommit}
+            onChangeCommitted={(_, value) => release(magKey, value as number)}
             size="small" sx={{ py: 0.5 }}
           />
         </Box>
@@ -1384,7 +1496,7 @@ function HigherOrderPanel({
                 value={angle} min={-180} max={180} step={1}
                 aria-label={`${entry.name} angle`}
                 onChange={(_, value) => updateAngle(entry.name, value as number)}
-                onChangeCommitted={onCommit}
+                onChangeCommitted={(_, value) => release(higherOrderAzimuthKey(entry.name), value as number)}
                 size="small" sx={{ py: 0.5 }}
                 disabled={disabled || !isActive}
               />
@@ -1413,7 +1525,7 @@ function HigherOrderPanel({
         )}
       </Box>
     );
-  }, [disabled, resetAngle, resetMag, tc, updateAngle, updateMag, values]);
+  }, [disabled, resetAngle, resetMag, tc, updateAngle, updateMag, release, values]);
 
   return (
     <Box sx={{
@@ -1699,7 +1811,9 @@ function Explore() {
   const hoActiveCountRef = React.useRef(0);
   hoActiveCountRef.current = hoActiveCount;
   const higherOrderRef = React.useRef<Record<string, number>>({});
-  higherOrderRef.current = higherOrder;
+  // A dragged higher-order coefficient, not yet released into `higherOrder`.
+  const higherOrderDragRef = React.useRef<Record<string, number>>({});
+  higherOrderRef.current = { ...higherOrder, ...higherOrderDragRef.current };
   const [loss, setLoss] = React.useState<number | null>(null);
   // Set on every request and reply; an unchanged value must not re-render the widget per frame.
   const [busy, setBusy] = useChangedState(false);
@@ -1754,6 +1868,7 @@ function Explore() {
   // User zoom is relative to calibrated framing, so changes in output sampling preserve the view.
   const [fftZoom, setFFTZoom] = React.useState(ZOOM_RESET);
   const [fftSourceShape, setFFTSourceShape] = React.useState<[number, number]>([0, 0]);
+  const fftSourceShapeRef = React.useRef(fftSourceShape); fftSourceShapeRef.current = fftSourceShape;
   // Every phase clears the panels it does not show; an unchanged null must not re-render the widget.
   const [phaseOff, setPhaseOff] = useChangedState<HTMLCanvasElement | null>(null);
   const [ampOff, setAmpOff] = useChangedState<HTMLCanvasElement | null>(null);
@@ -2064,6 +2179,7 @@ function Explore() {
   const gpuSlotCanvasRef = React.useRef<Record<GPUColormapSlot, HTMLCanvasElement | null>>({ 0: null, 1: null, 2: null });
   const gpuCmapBusyRef = React.useRef<Record<GPUColormapSlot, boolean>>({ 0: false, 1: false, 2: false });
   const gpuCmapPendingRef = React.useRef<Record<GPUColormapSlot, (() => void) | null>>({ 0: null, 1: null, 2: null });
+  const gpuCmapPendingSettleRef = React.useRef<Record<GPUColormapSlot, (() => void) | null>>({ 0: null, 1: null, 2: null });
   // The frame each panel shows, read by the histograms and the cursor readouts: painting a new
   // phase re-renders those, not this component.
   const panelFrames = React.useMemo(createPanelFrames, []);
@@ -2080,6 +2196,10 @@ function Explore() {
     return () => { worker.dispose(); statsWorkerRef.current = null; };
   }, []);
   const gpuCmapReadyRef = React.useRef(false);
+  // Statistics and the Fourier panel of each new phase on the colormap engine's device.
+  const gpuFrameRef = React.useRef<GPUFrameDisplay | null>(null);
+  // Paints each panel's slot into its own WebGPU canvas (colormap, window, zoom, pan in one pass).
+  const gpuPainterRef = React.useRef<GPUPanelPainter | null>(null);
   // Track the data uploaded to each slot so we only re-upload on real data change.
   const gpuSlotDataRef = React.useRef<Record<GPUColormapSlot, Float32Array | null>>({ 0: null, 1: null, 2: null });
   // This view's own engine, so its slots 0-2 never hold another view's images; destroyed on unmount.
@@ -2089,10 +2209,14 @@ function Explore() {
       if (!engine) return;
       if (cancelled) { engine.destroy(); return; }
       gpuCmapRef.current = engine;
+      gpuPainterRef.current = new GPUPanelPainter(engine);
       gpuCmapReadyRef.current = true;
     });
     return () => {
       cancelled = true;
+      gpuFrameRef.current?.destroy();
+      gpuFrameRef.current = null;
+      gpuPainterRef.current = null;
       gpuCmapRef.current?.destroy();
       gpuCmapRef.current = null;
       gpuCmapReadyRef.current = false;
@@ -2169,21 +2293,37 @@ function Explore() {
   const inflightDragRef = React.useRef(false);
   const pendingDragRef = React.useRef<{ values: [number, number, number]; committed: boolean } | null>(null);
   // The outstanding requests, oldest first: a reply releases its own request and any older one.
-  const sentRequestsRef = React.useRef<{ id: number; regionId: string | null }[]>([]);
+  const sentRequestsRef = React.useRef<{ id: number; regionId: string | null; key: string }[]>([]);
   const [previewError, setPreviewError] = useChangedState('');
   const requestCapacity = () => (regionContextRef.current ? 1 : PREVIEW_REQUESTS_IN_FLIGHT);
+
+  /** Everything a preview request reconstructs from, so an identical one can be recognised. */
+  const requestKey = (c10Val: number, c12Val: number, phi12Val: number) => JSON.stringify([
+    c10Val, c12Val, phi12Val, regionContextRef.current?.id ?? null, sampleRef.current, higherOrderRef.current,
+    reconstructionRef.current, model.get("tilt_correction"), model.get("scan_detector_rotation_deg"),
+  ]);
+
+  // The busy mark shows at once and clears only after a short quiet spell: a drag answered faster
+  // than the next pointer move would otherwise re-render the widget twice per frame.
+  const busyTimerRef = React.useRef<number | null>(null);
+  const showBusy = React.useCallback((value: boolean) => {
+    if (busyTimerRef.current !== null) { window.clearTimeout(busyTimerRef.current); busyTimerRef.current = null; }
+    if (value) { setBusy(true); return; }
+    busyTimerRef.current = window.setTimeout(() => { busyTimerRef.current = null; setBusy(false); }, 200);
+  }, [setBusy]);
+  React.useEffect(() => () => { if (busyTimerRef.current !== null) window.clearTimeout(busyTimerRef.current); }, []);
 
   const fireRequest = React.useCallback((c10Val: number, c12Val: number, phi12Val: number, committed: boolean) => {
     const region = regionContextRef.current;
     if (region && !region.ready) {
       inflightDragRef.current = sentRequestsRef.current.length > 0;
-      setBusy(inflightDragRef.current);
+      showBusy(inflightDragRef.current);
       return;
     }
     const id = ++requestIdRef.current;
-    sentRequestsRef.current = [...sentRequestsRef.current, { id, regionId: region ? region.id : null }];
+    sentRequestsRef.current = [...sentRequestsRef.current, { id, regionId: region ? region.id : null, key: requestKey(c10Val, c12Val, phi12Val) }];
     inflightDragRef.current = true;
-    setBusy(true);
+    showBusy(true);
     if (viewPinRef.current !== null) setViewPin(null);
     const sample = sampleRef.current;
     // Our bounded in-flight queue already supplies backpressure. A custom command
@@ -2197,10 +2337,13 @@ function Explore() {
       tilt_correction: model.get("tilt_correction") !== false,
       scan_detector_rotation_deg: model.get("scan_detector_rotation_deg"),
     }});
-  }, [model]);
+  }, [model, showBusy]);
 
   const sendDrag = React.useCallback((c10Val: number, c12Val: number, phi12Val: number, rotationVal = rotationDegRef.current) => {
     if (reconstructionRef.current.method === "ssb" && !regionContextRef.current && frontendPreviewRef.current?.(c10Val, c12Val, phi12Val, rotationVal)) return;
+    // The same complete state already on its way gives the same phase: one input event can report a value twice.
+    const latest = sentRequestsRef.current[sentRequestsRef.current.length - 1];
+    if (!pendingDragRef.current && latest && latest.key === requestKey(c10Val, c12Val, phi12Val)) return;
     if (sentRequestsRef.current.length >= requestCapacity()) {
       pendingDragRef.current = { values: [c10Val, c12Val, phi12Val], committed: false };
       return;
@@ -2220,8 +2363,8 @@ function Explore() {
 
   /* --- Slider values ref (so callbacks read fresh values without re-creating) --- */
   const sliderVals = React.useRef({ c10: 0, c12: 0, phi12: 0 });
-  // A dragged aberration thumb and its label re-render once per animation frame; every pointer
-  // event still sends its request with its own value, and the ref always holds the newest values.
+  // A dragged value waits here (its slider shows it) until release; every pointer event still
+  // sends its request with its own value, and the ref always holds the newest values.
   const sliderPendingRef = React.useRef<Partial<Record<"c10" | "c12" | "phi12", number>>>({});
   sliderVals.current = {
     c10: sliderPendingRef.current.c10 ?? c10,
@@ -2235,19 +2378,17 @@ function Explore() {
     if (next.c12 !== undefined) setC12(next.c12);
     if (next.phi12 !== undefined) setPhi12(next.phi12);
   }, []);
-  const sliderStateFrame = React.useMemo(() => latestFrame(flushSliderState), [flushSliderState]);
-  React.useEffect(() => () => sliderStateFrame.cancel(), [sliderStateFrame]);
-  const dragSliderValue = React.useCallback((key: "c10" | "c12" | "phi12", value: number) => {
+  // A slider showing its own dragged value: the widget adopts the value on release, so a drag
+  // re-renders that slider alone instead of the whole widget per animation frame.
+  const holdSliderValue = React.useCallback((key: "c10" | "c12" | "phi12", value: number) => {
     sliderPendingRef.current[key] = value;
     sliderVals.current = { ...sliderVals.current, [key]: value };
-    sliderStateFrame.schedule();
-  }, [sliderStateFrame]);
+  }, []);
   // A release shows its committed value at once.
   const commitSliderValue = React.useCallback((key: "c10" | "c12" | "phi12", value: number) => {
-    sliderStateFrame.cancel();
     sliderPendingRef.current[key] = value;
     flushSliderState();
-  }, [sliderStateFrame, flushSliderState]);
+  }, [flushSliderState]);
   // Regularization uses the same latest-wins queue as optics. Only the small
   // reconstructed phase travels back; each strength is solved by quantem.gpu.
   const reconstructionFrame = React.useMemo(() => latestFrame(() => {
@@ -2263,9 +2404,16 @@ function Explore() {
     };
     setReconstructionControls({ ...reconstructionRef.current });
   }, [methodModel, phaseRegularizationModel, amplitudeRegularizationModel, smoothnessModel, weightingModel]);
-  const changeReconstruction = (next: Partial<ReconstructionControls>, committed: boolean) => {
+  // `render` false: the control shows its own value while dragged; the widget renders on release.
+  const changeReconstruction = (next: Partial<ReconstructionControls>, committed: boolean, render = true) => {
     reconstructionRef.current = { ...reconstructionRef.current, ...next };
-    reconstructionFrame.schedule();
+    if (render) reconstructionFrame.schedule();
+    // Python does not echo a strength the browser sent; the browser's model takes it on release.
+    if (committed) {
+      for (const key of ["phase_regularization", "amplitude_regularization", "smoothness_inv_A"] as const) {
+        if (next[key] !== undefined) model.set(key, next[key]);
+      }
+    }
     const current = sliderVals.current;
     (committed ? sendCommit : sendDrag)(current.c10, current.c12, current.phi12);
   };
@@ -2301,9 +2449,15 @@ function Explore() {
     if (webgpuStandalone) panelFrame.schedule();
   }, [tiltCorrection, webgpuStandalone, panelFrame]);
   const commitSample = React.useCallback(() => {
+    higherOrderDragRef.current = {};
     sampleCommitPendingRef.current = true;
     setSample(prev => ({ ...prev }));
   }, []);
+  const dragHigherOrder = React.useCallback((key: string, value: number) => {
+    higherOrderDragRef.current = { ...higherOrderDragRef.current, [key]: value };
+    higherOrderRef.current = { ...higherOrderRef.current, [key]: value };
+    panelFrame.schedule();
+  }, [panelFrame]);
 
   /* --- Play control: sweep one parameter over its range ---
      Like Show3D playback: pick which aberration to sweep, set FPS, hit play.
@@ -2558,7 +2712,7 @@ function Explore() {
       // Replies arrive in request order: this one also retires any older request.
       sentRequestsRef.current = sent.slice(answered + 1);
       inflightDragRef.current = sentRequestsRef.current.length > 0;
-      setBusy(inflightDragRef.current);
+      showBusy(inflightDragRef.current);
       if (result.error) {
         // Queued values were relative to the failed request; drop them and say why.
         pendingDragRef.current = null;
@@ -2601,9 +2755,11 @@ function Explore() {
    *  JS applyColormap with the same float32 window math, so both paths paint the same pixels.
    *  The percentile window comes from the frame's histogram, binned once per frame in the
    *  display worker; painting publishes the frame to its histogram without a widget render. */
-  const renderPanel = React.useCallback((data: Float32Array, w: number, h: number, slot: GPUColormapSlot, cmapName: string, pctLo: number, pctHi: number, given?: FrameStats) => {
+  const renderPanel = React.useCallback((data: Float32Array, w: number, h: number, slot: GPUColormapSlot, cmapName: string, pctLo: number, pctHi: number, given?: FrameStats): Promise<void> => {
     const gen = ++gpuCmapGenRef.current[slot];
-    const paint = (pixels: Uint8ClampedArray | ImageBitmap, min: number, max: number, stats: FrameStats) => {
+    // `pixels` null: the panel paints the slot straight from the GPU (`source`); the canvas only
+    // carries the frame's size and its frame event.
+    const paint = (pixels: Uint8ClampedArray | ImageBitmap | null, min: number, max: number, stats: FrameStats, source?: GPUPanelSource) => {
       // Launches run one at a time per slot, so a later generation never paints before an earlier one.
       if (gen < paintedGenRef.current[slot]) return;
       paintedGenRef.current[slot] = gen;
@@ -2614,14 +2770,19 @@ function Explore() {
         canvas.width = w; canvas.height = h;
         gpuSlotCanvasRef.current[slot] = canvas;
       }
-      const ctx = canvas!.getContext("2d");
-      if (!ctx) return;
-      if (pixels instanceof ImageBitmap) {
-        ctx.drawImage(pixels, 0, 0);
+      if (pixels === null && source) {
+        gpuPanelSources.set(canvas!, source);
       } else {
-        const image = ctx.createImageData(w, h);
-        image.data.set(pixels);
-        ctx.putImageData(image, 0, 0);
+        gpuPanelSources.delete(canvas!);
+        const ctx = canvas!.getContext("2d");
+        if (!ctx) return;
+        if (pixels instanceof ImageBitmap) {
+          ctx.drawImage(pixels, 0, 0);
+        } else if (pixels) {
+          const image = ctx.createImageData(w, h);
+          image.data.set(pixels);
+          ctx.putImageData(image, 0, 0);
+        }
       }
       if (panelFrames[slot].get().data !== data) {
         canvas!.dataset.quantemDataFrame = String(gen);
@@ -2645,10 +2806,12 @@ function Explore() {
         paint(rgba, min, max, stats);
       };
       const stats = slotStats(slot, data, given);
-      if (stats instanceof Promise) void stats.then(cpuPaint);
-      else cpuPaint(stats);
-      return;
+      if (stats instanceof Promise) return stats.then(cpuPaint);
+      cpuPaint(stats);
+      return Promise.resolve();
     }
+    let settle = () => {};
+    const settled = new Promise<void>(resolve => { settle = resolve; });
     const launch = () => {
       gpuCmapBusyRef.current[slot] = true;
       // Upload data only if it actually changed (new reconstruction), not on every contrast tick.
@@ -2661,6 +2824,11 @@ function Explore() {
       // completed GPU image transfers directly, without reading RGBA into JS.
       Promise.resolve(slotStats(slot, data, given)).then(stats => {
         const { vmin, vmax, min, max } = percentileWindow(stats.histogram, pctLo, pctHi);
+        const painter = gpuPainterRef.current;
+        if (painter) {
+          paint(null, min, max, stats, { painter, slot, vmin, vmax, lutName: cmapName, lut });
+          return;
+        }
         return engine.renderSlotsToImageBitmapAsync([slot], [{ vmin, vmax }], false, cmapName, lut).then(bitmaps => {
           const bitmap = bitmaps?.[0];
           if (!bitmap) return;
@@ -2672,21 +2840,26 @@ function Explore() {
         }
       }).finally(() => {
         gpuCmapBusyRef.current[slot] = false;
+        settle();
         const pending = gpuCmapPendingRef.current[slot];
         gpuCmapPendingRef.current[slot] = null;
         pending?.();
       });
     };
     if (gpuCmapBusyRef.current[slot]) {
+      // a replaced pending launch never runs: its caller is released now
+      gpuCmapPendingSettleRef.current[slot]?.();
       gpuCmapPendingRef.current[slot] = launch;
+      gpuCmapPendingSettleRef.current[slot] = settle;
     } else {
       launch();
     }
+    return settled;
   }, [panelFrames, slotStats]);
 
   /* --- Re-render real-space displays when additive views/contrast/cmap changes. --- */
-  const renderRealDisplay = React.useCallback((phase: Float32Array, w: number, h: number) => {
-    renderPanel(phase, w, h, 0, cmapRef.current, contrastRange[0], contrastRange[1]);
+  const renderRealDisplay = React.useCallback((phase: Float32Array, w: number, h: number, given?: FrameStats): Promise<void> => {
+    const painted = renderPanel(phase, w, h, 0, cmapRef.current, contrastRange[0], contrastRange[1], given);
     const extras = extraRealViewsRef.current;
     const objectAmp = objectAmplitudeRef.current;
     // only an object-wave array carries an amplitude (SSB recovers the phase alone)
@@ -2698,7 +2871,10 @@ function Explore() {
       setAmpOff(null);
     }
     setComplexOff(amp && extras.complex ? renderComplexPhaseOffscreen(phase, w, h, contrastRange[0], contrastRange[1], amp).canvas : null);
+    return painted;
   }, [contrastRange, renderPanel]);
+  const renderRealDisplayRef = React.useRef(renderRealDisplay);
+  renderRealDisplayRef.current = renderRealDisplay;
 
   /* --- Re-render FFT when its contrast/cmap changes (no FFT recompute).
          Uses the user-selected FFT colormap
@@ -2706,6 +2882,8 @@ function Explore() {
   const rerenderFFT = React.useCallback(() => {
     const fft = fftMagRef.current;
     if (!fft) return;
+    // A spectrum still being computed on the GPU paints with its own statistics when it lands.
+    if (gpuFrameRef.current && slotStatsRef.current[1]?.data !== fft.mag) return;
     // Slot 1 holds the FFT magnitude.
     renderPanel(fft.mag, fft.w, fft.h, 1, fftCmap, fftContrastRange[0], fftContrastRange[1]);
   }, [fftContrastRange, fftCmap, renderPanel]);
@@ -2720,6 +2898,77 @@ function Explore() {
     renderRealDisplay(data, w, h);
   }, [renderRealDisplay]);
 
+  /* --- GPU frame: one upload of the phase, then its statistics, the Fourier panel and both
+         colormaps on the device; one frame at a time, only the newest waiting phase kept. --- */
+  const gpuFrameBusyRef = React.useRef(false);
+  const gpuFrameQueuedRef = React.useRef<{ data: Float32Array; w: number; h: number } | null>(null);
+  const fftReadbackTimerRef = React.useRef<number | null>(null);
+  const gpuFrameCountRef = React.useRef(0);
+  const fftHostRef = React.useRef<[Float32Array, Float32Array] | null>(null);
+  const renderFrameOnGPU = React.useCallback((data: Float32Array, w: number, h: number): boolean => {
+    const engine = gpuCmapRef.current;
+    const fft = displayFFTRef.current;
+    if (!engine || !gpuCmapReadyRef.current || !fft) return false;
+    if (!gpuFrameRef.current) {
+      if (!GPUFrameDisplay.compatible(engine, fft as unknown as { path: string })) return false;
+      gpuFrameRef.current = new GPUFrameDisplay(engine, fft as never);
+    }
+    if (gpuFrameBusyRef.current) {
+      gpuFrameQueuedRef.current = { data, w, h };
+      return true;
+    }
+    const gpuFrame = gpuFrameRef.current;
+    gpuFrameBusyRef.current = true;
+    const frame = ++gpuFrameCountRef.current;
+    const withFFT = showFFTRef.current;
+    engine.uploadData(0, data, w, h);
+    gpuSlotDataRef.current[0] = data;
+    let magnitude: Float32Array | null = null;
+    const [pw, ph] = GPUFrameDisplay.fftShape(w, h);
+    if (withFFT) {
+      // Host copy of the spectrum, filled from the device only when the panel is idle (cursor readout,
+      // peak picks). Two buffers alternate: each frame needs its own identity, not a fresh 16 MB array.
+      let pair = fftHostRef.current;
+      if (!pair || pair[0].length !== pw * ph) pair = fftHostRef.current = [new Float32Array(pw * ph), new Float32Array(pw * ph)];
+      magnitude = pair[frame % 2];
+      const slot = engine.slots[1];
+      if (!slot || slot.width !== pw || slot.height !== ph) engine.uploadData(1, magnitude, pw, ph);
+      gpuSlotDataRef.current[1] = magnitude;
+      fftMagRef.current = { mag: magnitude, w: pw, h: ph };
+    } else {
+      fftMagRef.current = null;
+    }
+    const paints: Promise<unknown>[] = [];
+    void gpuFrame.process(0, w, h, withFFT ? 1 : null, phaseStats => {
+      slotStatsRef.current[0] = { data, stats: phaseStats };
+      paints.push(renderRealDisplayRef.current(data, w, h, phaseStats));
+    }).then(result => {
+      if (result.fft && magnitude) {
+        // an unchanged shape must not re-render the widget on every frame
+        if (fftSourceShapeRef.current[0] !== h || fftSourceShapeRef.current[1] !== w) setFFTSourceShape([h, w]);
+        slotStatsRef.current[1] = { data: magnitude, stats: result.fft.stats };
+        const range = fftAutoContrastRef.current ? [1, 99] : fftContrastRef.current;
+        paints.push(renderPanel(magnitude, pw, ph, 1, fftCmapRef.current, range[0], range[1], result.fft.stats));
+        if (fftReadbackTimerRef.current !== null) window.clearTimeout(fftReadbackTimerRef.current);
+        const spectrum = magnitude;
+        fftReadbackTimerRef.current = window.setTimeout(() => {
+          fftReadbackTimerRef.current = null;
+          if (gpuFrameCountRef.current !== frame || gpuFrameBusyRef.current || gpuFrameRef.current !== gpuFrame) return;
+          void gpuFrame.readSlot(1, spectrum).catch(() => {});
+        }, 150);
+      }
+      return Promise.all(paints);
+    }).catch(error => {
+      setWebgpuRuntimeStatus(`WebGPU display failed: ${error instanceof Error ? error.message : String(error)}`);
+    }).finally(() => {
+      gpuFrameBusyRef.current = false;
+      const queued = gpuFrameQueuedRef.current;
+      gpuFrameQueuedRef.current = null;
+      if (queued) renderAllRef.current(queued.data, queued.w, queued.h);
+    });
+    return true;
+  }, [renderPanel]);
+
   const renderAll = React.useCallback((data: Float32Array, w: number, h: number) => {
     rawPhaseRef.current = { data, w, h };
     // Auto-contrast: new data snaps clip back to 1-99 percentile on every
@@ -2733,6 +2982,7 @@ function Explore() {
       const fftRange = fftContrastRef.current;
       if (fftRange[0] !== 1 || fftRange[1] !== 99) setFftContrastRange([1, 99]);
     }
+    if (renderFrameOnGPU(data, w, h)) return;
     renderRealDisplay(data, w, h);
 
     // Skip the FFT entirely when hidden: saves 30-80 ms/frame.
@@ -2781,7 +3031,7 @@ function Explore() {
       return;
     }
     launchFFT(data, w, h);
-  }, [renderPanel, renderRealDisplay]);
+  }, [renderPanel, renderRealDisplay, renderFrameOnGPU]);
 
   const renderAllRef = React.useRef(renderAll);
   renderAllRef.current = renderAll;
@@ -2970,14 +3220,14 @@ function Explore() {
          without throttling those pile up and arrive interleaved, which makes the
          phase and histogram flicker/jitter while dragging. --- */
   const contrastRafRef = React.useRef<number | null>(null);
-  const renderRealDisplayRef = React.useRef(renderRealDisplay);
-  renderRealDisplayRef.current = renderRealDisplay;
   React.useEffect(() => {
     if (!rawPhaseRef.current || contrastRafRef.current !== null) return;
     contrastRafRef.current = requestAnimationFrame(() => {
       contrastRafRef.current = null;
       const latest = rawPhaseRef.current;
-      if (latest) renderRealDisplayRef.current(latest.data, latest.w, latest.h);
+      // A phase still on its way through the GPU frame paints with the current contrast when it lands.
+      if (latest && gpuFrameRef.current && slotStatsRef.current[0]?.data !== latest.data) return;
+      if (latest) void renderRealDisplayRef.current(latest.data, latest.w, latest.h);
     });
   }, [cmap, contrastRange, extraRealViews]);
   React.useEffect(() => {
@@ -3926,14 +4176,9 @@ function Explore() {
             {(["phase_regularization", ...(reconstructionControls.method === "complex" ? ["amplitude_regularization"] : [])] as const).map(key => {
               const name = key as "phase_regularization" | "amplitude_regularization";
               const value = reconstructionControls[name];
-              return <Box key={name} sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 230 }}>
-                <Typography sx={{ ...typography.label, whiteSpace: "nowrap" }}>{name === "phase_regularization" ? "Phase" : "Amplitude"} regularization {formatNumber(value, 4)}</Typography>
-                <Slider size="small" aria-label={name === "phase_regularization" ? "Phase regularization" : "Amplitude regularization"}
-                  min={-4} max={0} step={0.01} value={Math.log10(Math.max(1e-4, value))}
-                  onChange={(_, next) => changeReconstruction({ [name]: 10 ** (next as number) }, false)}
-                  onChangeCommitted={(_, next) => changeReconstruction({ [name]: 10 ** (next as number) }, true)}
-                  sx={{ minWidth: 90, width: 130 }} />
-              </Box>;
+              return <RegularizationSlider key={name} name={name === "phase_regularization" ? "Phase" : "Amplitude"} value={value}
+                onDrag={next => changeReconstruction({ [name]: next }, false, false)}
+                onCommit={next => changeReconstruction({ [name]: next }, true)} />;
             })}
             <Typography sx={typography.labelSmall}>Live CUDA reconstruction · phase image</Typography>
           </>}
@@ -4196,21 +4441,21 @@ function Explore() {
               key: "c10" as AberKey, label: "C10", unit: "nm", value: c10, displayPrec: 1,
               tipFull: "C10: defocus.  Positive = overfocus, negative = underfocus.  The dominant aberration.",
               min: c10UiMin, max: c10UiMax, step: 0.1,
-              setValue: (value: number) => { dragSliderValue("c10", value); sendDrag(value, sliderVals.current.c12, sliderVals.current.phi12); },
+              setValue: (value: number) => { holdSliderValue("c10", value); sendDrag(value, sliderVals.current.c12, sliderVals.current.phi12); },
               commitValue: (value: number) => { commitSliderValue("c10", value); if (shouldCommitOnReleaseRef.current) sendCommit(value, sliderVals.current.c12, sliderVals.current.phi12); },
             },
             {
               key: "c12" as AberKey, label: "C12", unit: "nm", value: c12, displayPrec: 1,
               tipFull: "C12: 2-fold astigmatism magnitude.  Paired with φ₁₂.",
               min: c12UiMin, max: c12UiMax, step: 0.1,
-              setValue: (value: number) => { dragSliderValue("c12", value); sendDrag(sliderVals.current.c10, value, sliderVals.current.phi12); },
+              setValue: (value: number) => { holdSliderValue("c12", value); sendDrag(sliderVals.current.c10, value, sliderVals.current.phi12); },
               commitValue: (value: number) => { commitSliderValue("c12", value); if (shouldCommitOnReleaseRef.current) sendCommit(sliderVals.current.c10, value, sliderVals.current.phi12); },
             },
             {
               key: "phi12" as AberKey, label: "φ₁₂", unit: "°", value: phi12, displayPrec: 0,
               tipFull: "φ₁₂: angle of 2-fold astigmatism.  Meaningful when C12 ≠ 0.",
               min: phi12UiMin, max: phi12UiMax, step: 1,
-              setValue: (value: number) => { dragSliderValue("phi12", value); sendDrag(sliderVals.current.c10, sliderVals.current.c12, value); },
+              setValue: (value: number) => { holdSliderValue("phi12", value); sendDrag(sliderVals.current.c10, sliderVals.current.c12, value); },
               commitValue: (value: number) => { commitSliderValue("phi12", value); if (shouldCommitOnReleaseRef.current) sendCommit(sliderVals.current.c10, sliderVals.current.c12, value); },
             },
             {
@@ -4230,51 +4475,14 @@ function Explore() {
             const isActiveSweep = sweepMainKeys(sweepParam).includes(aberration.key);
             const isAtFull = range[0] === aberration.min && range[1] === aberration.max;
             const sliderWidth = aberration.key === "rot" ? ROTATION_SLIDER_WIDTH : ABERRATION_SLIDER_WIDTH;
-            const visibleValue = Math.max(aberration.min, Math.min(aberration.max, aberration.value));
             return (
               <Box key={aberration.key} sx={{ flex: `0 0 ${sliderWidth}px`, width: sliderWidth, minWidth: 0 }}>
-                <Tooltip title={aberration.tipFull} placement="top" arrow>
-                  <Typography sx={{ ...typography.labelSmall, color: tc.textMuted, mb: -0.5, cursor: "help" }}>
-                    {aberration.label} <b>{aberration.value.toFixed(aberration.displayPrec)}</b> {aberration.unit}
-                    {!isAtFull && (
-                      <span style={{ color: isActiveSweep ? tc.accent : tc.textMuted, opacity: 0.65 }}>
-                        {" ["}{range[0].toFixed(aberration.displayPrec)}, {range[1].toFixed(aberration.displayPrec)}{"]"}
-                      </span>
-                    )}
-                  </Typography>
-                </Tooltip>
-                {/* Show3D-style 3-thumb slider: outer thumbs = sweep stoppers,
-                    middle thumb = current value.  disableSwap keeps order stable;
-                    to push the value outside the stopper window, drag the relevant
-                    stopper first. */}
-                <Slider
-                  value={[range[0], visibleValue, range[1]]}
-                  min={aberration.min} max={aberration.max} step={aberration.step}
-                  disabled={controlsLocked}
-                  disableSwap
-                  onChange={(_, value, activeThumb) => {
-                    const thumbs = value as number[];
-                    if (activeThumb === 1) {
-                      aberration.setValue(thumbs[1]);
-                    } else {
-                      updateSweepRange(aberration.key, [thumbs[0], thumbs[2]]);
-                    }
-                  }}
-                  onChangeCommitted={(_, value) => {
-                    const thumbs = value as number[];
-                    aberration.commitValue(thumbs[1]);
-                  }}
-                  size="small"
-                  sx={{
-                    py: 0.5,
-                    "& .MuiSlider-thumb[data-index='0']": {
-                      width: 8, height: 8, bgcolor: tc.textMuted, opacity: isActiveSweep ? 1 : 0.7,
-                    },
-                    "& .MuiSlider-thumb[data-index='1']": { width: 12, height: 12 },
-                    "& .MuiSlider-thumb[data-index='2']": {
-                      width: 8, height: 8, bgcolor: tc.textMuted, opacity: isActiveSweep ? 1 : 0.7,
-                    },
-                  }}
+                <AberrationSlider
+                  label={aberration.label} unit={aberration.unit} value={aberration.value} displayPrec={aberration.displayPrec}
+                  tip={aberration.tipFull} min={aberration.min} max={aberration.max} step={aberration.step}
+                  range={range} isActiveSweep={isActiveSweep} isAtFull={isAtFull} disabled={controlsLocked} tc={tc}
+                  onDrag={aberration.setValue} onCommit={aberration.commitValue}
+                  onRange={(next) => updateSweepRange(aberration.key, next)}
                 />
               </Box>
             );
@@ -4314,6 +4522,7 @@ function Explore() {
           activeCount={hoActiveCount}
           values={higherOrder}
           setValues={setHigherOrder}
+          onDrag={dragHigherOrder}
           onCommit={commitSample}
         />}
 

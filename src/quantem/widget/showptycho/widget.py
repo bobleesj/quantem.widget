@@ -50,6 +50,8 @@ CALIBRATION_FILENAME = "calibration.json"
 CALIBRATION_SCHEMA = "quantem.ssb-calibration/6"
 STARS_SCHEMA = "quantem.ssb-stars/3"
 MIN_CROP_SPAN = 32
+# Regularization strengths a slider drags: the browser sends them and shows them itself.
+_BROWSER_STRENGTHS = ("phase_regularization", "amplitude_regularization", "smoothness_inv_A")
 
 
 def session_note() -> str:
@@ -1223,6 +1225,10 @@ class ShowPtycho(anywidget.AnyWidget):
             return
         # One complete slider state gives one reconstruction. Direct notebook
         # edits to either panel trait retain their normal observer behavior.
+        # A dragged strength came from the browser, which already shows it: it is not echoed back,
+        # so a drag sends one message per frame (the phase) and no extra widget render.
+        previous_lock = self._property_lock
+        self._property_lock = {**previous_lock, **{name: request[name] for name in _BROWSER_STRENGTHS if name in request}}
         self._adopting = True
         try:
             with self.hold_sync():
@@ -1241,6 +1247,7 @@ class ShowPtycho(anywidget.AnyWidget):
                     self._ssb.set_scan_detector_rotation(float(rotation))
         finally:
             self._adopting = False
+            self._property_lock = previous_lock
         self._inflight_id = request["id"]
         try:
             self._reconstruct(request["id"], {name: request[name] for name in ("C10_nm", "C12_nm", "phi12_deg")},
