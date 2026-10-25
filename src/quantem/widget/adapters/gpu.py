@@ -500,9 +500,50 @@ class DirectSession:
         float32, so a panel left at zero changed the last bits of most pixels of
         the two-term phase.
         """
-        higher_order = any(value != 0.0 for name, value in aberrations.items() if name.endswith("_nm") and name not in ("C10_nm", "C12_nm"))
-        primary = aberrations if higher_order else {name: aberrations[name] for name in ("C10_nm", "C12_nm", "phi12_deg")}
-        return self.ssb.preview(primary, **options)
+        return self.ssb.preview(_named_orders(aberrations), **options)
+
+    @property
+    def drag_windows(self) -> bool:
+        """Whether ``drag`` / ``prepare`` / ``advance`` apply: quantem.gpu builds drag windows on CUDA only."""
+        return self.ssb.backend == "cuda"
+
+    def drag(self, control: str, aberrations: dict, **options):
+        """Transient float32 phase while one slider ``control`` (``C10_nm``, ``phi12_deg``, ...) is dragged.
+
+        ``quantem.gpu.ssb.direct_workflow.drag``: ``preview``'s image to a few
+        float32 ulps, served from a Chebyshev window along that control once
+        ``advance`` has built it (1 ms phase, 3 ms complex, 7 ms SSB at 3x on a
+        512 x 512 scan with a 192 x 192 detector), exact frames until then. ``options`` are ``preview``'s
+        except ``compute_loss``; committed frames use ``preview``.
+        """
+        from quantem.gpu.ssb import direct_workflow
+
+        return direct_workflow.drag(self.ssb, control, *self._drag_inputs(aberrations, **options)).get()
+
+    def prepare(self, controls, aberrations: dict, **options) -> None:
+        """Ask for drag windows along ``controls`` at these optics, built by ``advance`` while the sliders are idle."""
+        from quantem.gpu.ssb import direct_workflow
+
+        direct_workflow.prepare(self.ssb, tuple(controls), *self._drag_inputs(aberrations, **options))
+
+    def advance(self) -> bool:
+        """Build one more node of a pending drag window; True when none is left."""
+        from quantem.gpu.ssb import direct_workflow
+
+        return direct_workflow.advance(self.ssb)
+
+    def _drag_inputs(self, aberrations: dict, *, upsampling_factor, method: str = "ssb", sample_tilt_mrad=(0.0, 0.0),
+                     depth_spread_nm: float = 0.0, phase_estimator=None, **strengths):
+        """``preview``'s options as ``direct_workflow``'s (aberrations, tilt, depth, factor, policy)."""
+        from quantem.gpu.ssb import direct_workflow
+        from quantem.gpu.ssb.units import validate_aberrations
+
+        policy = direct_workflow.settings(method, *(strengths.get(name) for name in (
+            "phase_regularization", "amplitude_regularization", "smoothness_inv_A", "detector_weighting")))
+        if method == "ssb" and phase_estimator is not None:
+            policy = {"phase_estimator": phase_estimator}
+        return (validate_aberrations(_named_orders(aberrations), higher_order=True), tuple(sample_tilt_mrad),
+                float(depth_spread_nm), self.ssb._resolve_upsampling_factor(upsampling_factor), policy)
 
     def browser_state(self) -> dict:
         """The compact state a browser SSB engine rebuilds its reducers from.
@@ -767,3 +808,9 @@ class AcquisitionSeries:
 
 # Compatibility for integrations using the previous adapter name.
 SsbSession = DirectSession
+
+
+def _named_orders(aberrations: dict) -> dict:
+    """The terms that reach quantem.gpu: the higher orders only while one magnitude is non-zero (see ``DirectSession.preview``)."""
+    higher_order = any(value != 0.0 for name, value in aberrations.items() if name.endswith("_nm") and name not in ("C10_nm", "C12_nm"))
+    return aberrations if higher_order else {name: aberrations[name] for name in ("C10_nm", "C12_nm", "phi12_deg")}
