@@ -987,7 +987,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     def compute_ssb(self, *, set_source: bool = True, verbose: bool = False, **kwargs) -> np.ndarray:
         """Reconstruct the SSB phase of the current dataset and show it as the image.
 
-        The fit is quantem.gpu's default ``SSB.find_aberrations()``, model-based
+        The fit is quantem.gpu's default ``SSB.fit_aberrations()``, model-based
         and tilt-corrected: the SSB model fitted to the data together with the
         sample tilt and depth spread (C10 is then the defocus at mid-depth). The
         other two methods take quantem.gpu's names:
@@ -1893,14 +1893,14 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 ssb.ssb.depth_spread_nm = float(self._ssb_compute_sample["depth_spread_nm"])
             if manual or (trials == 0 and not do_refine):
                 self.ssb_compute_status = f"Reconstructing SSB with the given coefficients ({num_bright_field_pixels} BF pixels)..."
-                result = ssb.run()
+                result = ssb.reconstruct()
             else:
                 method = "with sample tilt" if tilt else "at tilt 0" if objective == "agreement" else "by phase variance"
                 self.ssb_compute_status = (f"Fitting SSB aberrations {method} ({trials} trials"
                                            f"{', refined' if do_refine else ''}, {num_bright_field_pixels} BF pixels)...")
                 search = ("standard" if tilt and objective == "agreement" and not fit_options
                           and trials > 0 and refinement is not None else "primary")
-                result = ssb.find_aberrations(search=search,
+                result = ssb.fit_aberrations(search=search,
                                               tilt=tilt, objective=objective, num_trials=trials, refinement=refinement,
                                               seed=int(seed), verbose=verbose, show=False, **fit_options)
                 self._ssb_compute_sample = None if result.get("sample_tilt_mrad") is None else {

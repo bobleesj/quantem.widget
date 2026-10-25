@@ -187,7 +187,7 @@ class _PaddedSession:
         import contextlib
         return contextlib.nullcontext(self)
 
-    def find_aberrations(self, *, seed, **options):
+    def fit_aberrations(self, *, seed, **options):
         self.seeds.append(seed)
         self.options = options
         return _Fit(self.agreements[len(self.seeds) - 1], seed)

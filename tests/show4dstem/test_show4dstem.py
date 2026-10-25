@@ -1008,7 +1008,7 @@ def test_compute_ssb_accepts_a_1024_scan(monkeypatch):
         def __exit__(self, *exc):
             return False
 
-        def run(self):
+        def reconstruct(self):
             return types.SimpleNamespace(phase=np.ones((1024, 1024), np.float32), aberrations={"C10_nm": 0.0, "C12_nm": 0.0, "phi12_deg": 0.0},
                                          scan_detector_rotation_deg=0.0, loss=None, elapsed_s=None, sample_tilt_mrad=None)
 
@@ -1084,7 +1084,7 @@ def test_compute_ssb_reads_the_optics_the_dataset_records(monkeypatch, tmp_path)
         def __exit__(self, *exc):
             return False
 
-        def run(self):
+        def reconstruct(self):
             # a fit on the reversed branch: quantem.gpu reports the physical angle, here above 180
             return types.SimpleNamespace(phase=np.ones((128, 128), np.float32), aberrations={"C10_nm": 12.0, "C12_nm": 3.0, "phi12_deg": 30.0},
                                          scan_detector_rotation_deg=345.5, loss=0.25, elapsed_s=1.5, sample_tilt_mrad=None)
@@ -1288,7 +1288,7 @@ def test_compute_ssb_converts_a_detector_step_in_reciprocal_angstrom(monkeypatch
         def __exit__(self, *exc):
             return False
 
-        def run(self):
+        def reconstruct(self):
             return types.SimpleNamespace(phase=np.ones((128, 128), np.float32), aberrations={"C10_nm": 0.0, "C12_nm": 0.0, "phi12_deg": 0.0},
                                          scan_detector_rotation_deg=0.0, loss=None, elapsed_s=None, sample_tilt_mrad=None)
 
@@ -1389,7 +1389,7 @@ def test_compute_ssb_names_its_refinement_as_quantem_gpu_does():
 def test_compute_ssb_fits_tilt_corrected_by_default_and_tilt_false_on_request(monkeypatch):
     """Compute SSB is quantem.gpu's default fit (model with sample tilt and depth spread); tilt=False fits at tilt 0.
 
-    It ran find_aberrations(tilt=False, refinement="nelder-mead") whatever the user asked, the one SSB entry point
+    It ran fit_aberrations(tilt=False, refinement="nelder-mead") whatever the user asked, the one SSB entry point
     that did not default to the tilt-corrected fit.
     """
     pytest.importorskip("quantem.gpu", reason="the SSB phase also takes quantem.gpu's centre of mass")
@@ -1423,13 +1423,13 @@ def test_compute_ssb_fits_tilt_corrected_by_default_and_tilt_false_on_request(mo
                 sample_tilt_mrad=(1.5, -2.0) if tilt else None, depth_spread_nm=6.0 if tilt else None,
                 tilt_fit_gain=0.1 if tilt else None)
 
-        def find_aberrations(self, **options):
+        def fit_aberrations(self, **options):
             calls.append(("fit", options))
             result = self._result(options["tilt"], "newton" if options["refinement"] == "auto" else options["refinement"])
             result.objective = options["objective"]
             return result
 
-        def run(self):
+        def reconstruct(self):
             calls.append(("reconstruct", {"aberrations": self.aberrations, "sample_tilt_mrad": self.sample_tilt_mrad,
                                           "depth_spread_nm": self.depth_spread_nm}))
             return self._result(self.sample_tilt_mrad is not None, None)

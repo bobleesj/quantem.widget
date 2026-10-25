@@ -55,7 +55,7 @@ if data.calibration.detector_sampling_mrad is None and data.calibration.detector
     data.calibration.fit_detector_sampling()
 ssb = SSB(data)
 started = time.perf_counter()
-fit = ssb.find_aberrations(num_trials=200, seed=42, refinement="newton", compare_standard=False)
+fit = ssb.fit_aberrations(num_trials=200, seed=42, refinement="newton", compare_standard=False)
 full_fit_s = time.perf_counter() - started
 assert fit.optimizer["host_numerical_search"] is False
 assert fit.optimizer["device"] == backend
@@ -203,7 +203,7 @@ save_dir = Path.cwd() / 'calibration'
 expected = json.loads((save_dir / 'release_expected.json').read_text())
 def unexpected_refit(*args, **kwargs):
     raise AssertionError('Saved calibration should restore without refitting')
-ssb.find_aberrations = unexpected_refit
+ssb.fit_aberrations = unexpected_refit
 viewer = ssb.show(local_tilt=True, save_dir=save_dir)
 assert viewer.region_fits == expected['fits']
 assert viewer.fitted_C10_nm == expected['C10_nm']

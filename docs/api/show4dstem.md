@@ -266,13 +266,13 @@ Python GPU allocation, so it does not expose a "free GPU memory" control.
 
 The default on CUDA and MPS uses 200 initial TPE trials, then jointly
 refines aberrations through fifth order with sample tilt and depth.
-`ptycho.find_aberrations(search="broad")` adds broader exploration.
+`ptycho.fit_aberrations(search="broad")` adds broader exploration.
 The initial result is provisional; final refinement can change its phase.
 
 
 With a live kernel on CUDA or MPS, the **Compute SSB** control, or
 `viewer.compute_ssb()`, runs quantem.gpu's default fit,
-`quantem.gpu.DirectPtycho(...).find_aberrations()`, on the current 4D frame: the SSB
+`quantem.gpu.DirectPtycho(...).fit_aberrations()`, on the current 4D frame: the SSB
 model fitted to the data together with the sample tilt and depth spread
 (tilt-corrected; the fitted C10 is the defocus at mid-depth). It attaches the SSB phase and the aligned DPC row/col maps as
 virtual-image sources and switches the virtual image to the phase. The
@@ -292,9 +292,9 @@ The three fits are quantem.gpu's:
 
 | Call | Method | Use it for |
 |---|---|---|
-| `find_aberrations()` | model-based, tilt-corrected | the default: every fit |
-| `find_aberrations(search="primary", tilt=False)` | model-based, tilt held at 0 | thin, untilted samples, or to see what tilt correction changes |
-| `find_aberrations(search="primary", tilt=False, objective="phase_variance")` | phase variance, the earlier SSB search | a backup: reproducing older results, cross-checking a fit |
+| `fit_aberrations()` | model-based, tilt-corrected | the default: every fit |
+| `fit_aberrations(search="primary", tilt=False)` | model-based, tilt held at 0 | thin, untilted samples, or to see what tilt correction changes |
+| `fit_aberrations(search="primary", tilt=False, objective="phase_variance")` | phase variance, the earlier SSB search | a backup: reproducing older results, cross-checking a fit |
 
 Phase variance chooses the aberrations that make the corrected phases of all bright-field pixels agree best: the
 least variance of the corrected phase across them. It stays as a backup, not an equal alternative: it cannot see

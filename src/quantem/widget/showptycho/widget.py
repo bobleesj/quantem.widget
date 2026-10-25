@@ -21,7 +21,7 @@ Usage::
     data.calibration.semiangle_mrad = 30
     data.calibration.scan_sampling_A = 0.264
     ptycho = DirectPtycho(data)
-    ptycho.run()
+    ptycho.reconstruct()
     ptycho.show(show_fft=True)                              # ShowPtycho(ptycho, show_fft=True)
 """
 
@@ -68,7 +68,7 @@ def session_note() -> str:
         return (
             "Aberration tuning (C10, C12, rotation, Save) needs an SSB session: "
             'data = quantem.gpu.io.load("scan_master.h5"), set data.calibration (voltage_kV, semiangle_mrad, scan_sampling_A), '
-            "then ptycho = quantem.gpu.DirectPtycho(data), ptycho.run(), ptycho.show()."
+            "then ptycho = quantem.gpu.DirectPtycho(data), ptycho.reconstruct(), ptycho.show()."
         )
     hint = gpu_path_hint()
     if hint:
@@ -134,7 +134,7 @@ class ShowPtycho(anywidget.AnyWidget):
         its phase (``angle``) and amplitude (``abs``). Tensors and CuPy arrays stay on their
         device until the 2D result is drawn. Arrays need no quantem.gpu; the aberration controls then stay
         hidden and one line says what they need. An SSB session, normally after
-        ``ptycho.find_aberrations()`` (quantem's default fit, model-based and tilt-corrected), is
+        ``ptycho.fit_aberrations()`` (quantem's default fit, model-based and tilt-corrected), is
         reused for its resident bright-field evidence and exclusively driven while the widget is
         open. Joint fit, Refit SSB and Fit Regions use the same default fifth-order fit on both
         CUDA and MPS. A supplied broad fit retains its higher-order correction.
@@ -152,7 +152,7 @@ class ShowPtycho(anywidget.AnyWidget):
     restore : bool, default True
         Restore the complete saved optics, tilt, depth and display settings
         when the acquisition and launch calibration match, also over a
-        session that is already fitted (``ptycho.run()`` before
+        session that is already fitted (``ptycho.reconstruct()`` before
         ``ptycho.show()``); one line says what was restored and what it replaced.
         False keeps the supplied session even when a saved correction exists.
     compute_loss : bool, default False
@@ -569,7 +569,7 @@ class ShowPtycho(anywidget.AnyWidget):
         num_trials : int, optional
             Compatibility alias for ``trials``. Supply only one of them.
         refinement : {"newton", "nelder-mead", "auto", None}, default "newton"
-            Local refinement after each search (``quantem.gpu.DirectPtycho.find_aberrations``).
+            Local refinement after each search (``quantem.gpu.DirectPtycho.fit_aberrations``).
             The widget's Fit Regions button uses the values of the last call.
 
         Returns
@@ -1380,7 +1380,7 @@ class ShowPtycho(anywidget.AnyWidget):
             self._adopt_session(initial=False, compute_loss=False, restore_tilt=True)
             self.sample_fit_status = "Initial phase ready · refining through fifth order..."
         try:
-            result = self._ssb.find_aberrations(
+            result = self._ssb.fit_aberrations(
                 search="standard",
                 tilt=True, check_rotation=False, compare_standard=False, verbose=False,
                 on_initial_fit=show_initial)
@@ -1448,7 +1448,7 @@ class ShowPtycho(anywidget.AnyWidget):
                 (row_start, row_stop, col_start, col_stop), aberrations=self._current(),
                 scan_detector_rotation_deg=self.scan_detector_rotation_deg)
             try:
-                rebuilt.find_aberrations(search="standard",
+                rebuilt.fit_aberrations(search="standard",
                                          tilt=True, check_rotation=False, num_trials=num_trials, verbose=False)
             except BaseException:
                 rebuilt.ssb.close()
@@ -1616,7 +1616,7 @@ class ShowPtycho(anywidget.AnyWidget):
         rotation, the output sampling, the display settings and the
         acquisition identity a later session restores from. The session's
         aberrations are set to the saved ones, as known values, so
-        ``ptycho.run()`` applies them. Display state (``state_dict``) is
+        ``ptycho.reconstruct()`` applies them. Display state (``state_dict``) is
         not written here.
 
         Returns

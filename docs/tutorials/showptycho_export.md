@@ -9,7 +9,7 @@ detector columns automatically.
 
 If you just want the interactive widget inside a notebook, see
 [ShowPtycho in Jupyter](showptycho.md) instead. This page assumes you already
-have a **fitted** `ssb` (solved with `ptycho.find_aberrations()`, the
+have a **fitted** `ssb` (solved with `ptycho.fit_aberrations()`, the
 model-based, tilt-corrected default with 200 trials; an unfitted export uses
 only the supplied starting aberrations). The
 [SSB fit methods](../api/showptycho.md#ssb-fit-methods) table lists the other two.
@@ -19,7 +19,7 @@ only the supplied starting aberrations). The
 ```python
 from quantem.widget import ShowPtycho
 
-# ssb is already fitted: result = ptycho.find_aberrations()  # tilt-corrected, 200 trials
+# ssb is already fitted: result = ptycho.fit_aberrations()  # tilt-corrected, 200 trials
 w = ShowPtycho(ptycho, save_dir="out/")   # opened with DirectPtycho.open("scan_master.h5", ...), the session names its file
 w.export("out/", title="my sample SSB")
 ```
@@ -115,7 +115,7 @@ launch the browser with GPU blocklisting ignored.
 
 ## Checklist
 
-1. The `ssb` was fitted with `find_aberrations()` (tilt-corrected, 200 trials) before export.
+1. The `ssb` was fitted with `fit_aberrations()` (tilt-corrected, 200 trials) before export.
 2. Native detector size: the browser cannot bin.
 3. Export writes a clean root: `index.html`, `ShowPtycho.command`, `source/`,
    and `snapshots/`.
@@ -129,4 +129,4 @@ name or local path is written under `snapshots/` or into the viewer state. The
 reused QEM file retains its original metadata and detector measurements. Review
 that source before sharing; it must be yours to share.
 
-Standalone reconstruction currently supports `method="ssb"`. Regularized phase and complex reconstruction require a live CUDA notebook. Save their model with `save_calibration()` and their scientific arrays with `ptycho.run(..., save_dir="direct-result")`; the export refuses unsupported methods rather than changing the calculation.
+Standalone reconstruction currently supports `method="ssb"`. Regularized phase and complex reconstruction require a live CUDA notebook. Save their model with `save_calibration()` and their scientific arrays with `ptycho.reconstruct(..., save_dir="direct-result")`; the export refuses unsupported methods rather than changing the calculation.

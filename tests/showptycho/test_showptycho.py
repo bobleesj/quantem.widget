@@ -208,7 +208,7 @@ def test_small_scan_calibration_and_region_bounds_exclude_fft_padding(tmp_path, 
 
     def no_refit(*args, **kwargs):
         raise AssertionError("Saved regions should reconstruct without another search.")
-    monkeypatch.setattr(gpu.SSB, "find_aberrations", no_refit)
+    monkeypatch.setattr(gpu.SSB, "fit_aberrations", no_refit)
     with gpu.SSB.open(str(source), **options) as reopened:
         viewer = ShowPtycho(reopened, save_dir=tmp_path, local_tilt=True)
         np.testing.assert_array_equal(viewer.region_images["Region 1 · SSB"], expected)
@@ -357,7 +357,7 @@ def test_native_regions_fit_joint_models_without_replacing_the_overview(tmp_path
         viewer.close()
     def no_refit(*args, **kwargs):
         raise AssertionError("Saved regions should reconstruct without another search.")
-    monkeypatch.setattr(gpu.SSB, "find_aberrations", no_refit)
+    monkeypatch.setattr(gpu.SSB, "fit_aberrations", no_refit)
     with gpu.SSB.open(str(source), voltage_kV=300, semiangle_mrad=20,
                       scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5, 5)) as reopened:
         viewer = ShowPtycho(reopened, local_tilt=True, save_dir=tmp_path)
@@ -931,13 +931,13 @@ def test_crop_and_refit_keeps_the_acquisition_and_reopens_as_a_scan_region_sessi
     def no_search(*args, **kwargs):
         raise AssertionError("Restoring a saved model must not run optimization.")
 
-    monkeypatch.setattr(gpu.SSB, "find_aberrations", no_search)
+    monkeypatch.setattr(gpu.SSB, "fit_aberrations", no_search)
     with gpu.io.load(str(source)) as data:
         with gpu.SSB(data, scan_region=region, **calibration) as reopened:
             restored = ShowPtycho(reopened, save_dir=tmp_path)
             assert restored.calibration_status == "Restored saved fit of scan region [16, 112, 8, 104]"
             np.testing.assert_array_equal(_shown(restored), expected)
-            result = reopened.reconstruct()  # no refit: find_aberrations would raise
+            result = reopened.reconstruct()  # no refit: fit_aberrations would raise
             assert result.aberrations == crop_aberrations and result.sample_tilt_mrad == crop_tilt
             assert "C50_nm" in result.aberrations
             restored.close()
@@ -1342,7 +1342,7 @@ def test_restart_restores_the_complete_saved_full_field_without_refitting(tmp_pa
     def no_search(*args, **kwargs):
         raise AssertionError("Restoring a saved model must not run optimization.")
 
-    monkeypatch.setattr(gpu.SSB, "find_aberrations", no_search)
+    monkeypatch.setattr(gpu.SSB, "fit_aberrations", no_search)
     with gpu.SSB.open(str(source), **calibration) as reopened:
         factors = []
         preview = reopened.preview
@@ -1483,7 +1483,7 @@ def test_a_flipped_session_records_its_flip_in_every_file_and_restores(tmp_path,
     def no_search(*args, **kwargs):
         raise AssertionError("Restoring a saved model must not run optimization.")
 
-    monkeypatch.setattr(gpu.SSB, "find_aberrations", no_search)
+    monkeypatch.setattr(gpu.SSB, "fit_aberrations", no_search)
     with gpu.SSB.open(str(source), **calibration) as reopened:
         restored = ShowPtycho(reopened, save_dir=tmp_path)
         assert restored.calibration_status == "Restored saved full-field fit"
@@ -1515,7 +1515,7 @@ def test_a_save_made_after_a_180_degree_move_reopens_at_the_launch_rotation(tmp_
     with gpu.SSB.open(str(source), **calibration) as ssb:
         launch = ssb.scan_detector_rotation_deg  # estimated from the centre-of-mass curl
         moved = opposite_rotation_deg(launch)
-        ssb.set_rotation(moved)  # where find_aberrations' 180-degree check leaves it
+        ssb.set_rotation(moved)  # where fit_aberrations' 180-degree check leaves it
         viewer = ShowPtycho(ssb, save_dir=tmp_path)
         viewer.upsampling = 1
         viewer.request_json = json.dumps({"id": 1, **START, "committed": True})
@@ -1526,14 +1526,14 @@ def test_a_save_made_after_a_180_degree_move_reopens_at_the_launch_rotation(tmp_
     def no_search(*args, **kwargs):
         raise AssertionError("Restoring a saved model must not run optimization.")
 
-    monkeypatch.setattr(gpu.SSB, "find_aberrations", no_search)
+    monkeypatch.setattr(gpu.SSB, "fit_aberrations", no_search)
     with gpu.SSB.open(str(source), **calibration) as reopened:
         assert reopened.scan_detector_rotation_deg == launch
         restored = ShowPtycho(reopened, save_dir=tmp_path)
         assert restored.calibration_status == "Restored saved full-field fit"
         assert restored.scan_detector_rotation_deg == reopened.scan_detector_rotation_deg == pytest.approx(moved)
         np.testing.assert_array_equal(_shown(restored), expected)
-        # reconstruct() applies the restored model (find_aberrations would raise here)
+        # reconstruct() applies the restored model (fit_aberrations would raise here)
         result = reopened.reconstruct()
         assert result.aberrations == START and result.scan_detector_rotation_deg == pytest.approx(moved)
         restored.close()
@@ -1569,14 +1569,14 @@ def test_a_scan_region_session_saves_a_calibration_it_reopens(tmp_path, monkeypa
     def no_search(*args, **kwargs):
         raise AssertionError("Restoring a saved model must not run optimization.")
 
-    monkeypatch.setattr(gpu.SSB, "find_aberrations", no_search)
+    monkeypatch.setattr(gpu.SSB, "fit_aberrations", no_search)
     with gpu.io.load(str(source)) as data:
         with gpu.SSB(data, scan_region=region, **calibration) as reopened:
             restored = ShowPtycho(reopened, save_dir=tmp_path)
             assert restored.calibration_status == "Restored saved fit of scan region [16, 112, 8, 104]"
             assert reopened.aberrations == START
             np.testing.assert_array_equal(_shown(restored), expected)
-            assert reopened.reconstruct().aberrations == START  # no refit: find_aberrations would raise
+            assert reopened.reconstruct().aberrations == START  # no refit: fit_aberrations would raise
             restored.close()
         # the whole scan, or another region, is another session
         with gpu.SSB(data, **calibration) as whole:
@@ -1666,7 +1666,7 @@ def test_the_tutorial_order_reopens_the_save_and_reconstruct_keeps_it(tmp_path, 
     with gpu.io.load(str(source)) as data, gpu.SSB(data, **calibration) as ssb:
         assert dict(ssb.reconstruct(verbose=False).aberrations) == fitted  # the restart fits again
         searches = []
-        monkeypatch.setattr(gpu.SSB, "find_aberrations", lambda *args, **kwargs: searches.append(1))
+        monkeypatch.setattr(gpu.SSB, "fit_aberrations", lambda *args, **kwargs: searches.append(1))
         capsys.readouterr()
         viewer = ssb.show(save_dir=tmp_path)
         assert viewer.calibration_status == "Restored saved full-field fit"
@@ -2150,7 +2150,7 @@ def test_direct_result_calibration_reopens_same_reconstruction(tmp_path, method)
     if method == "complex":
         recipe["amplitude_damping"] = 0.15
     with gpu.DirectPtycho.open(source, **options) as ptycho:
-        result = ptycho.run(aberrations=START, **recipe)
+        result = ptycho.reconstruct(aberrations=START, **recipe)
         expected = result.phase.get()
         result.save_calibration(tmp_path / "calibration.json")
     with gpu.DirectPtycho.open(source, **options) as reopened:

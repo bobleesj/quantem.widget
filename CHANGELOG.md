@@ -205,8 +205,8 @@ Changed:
   `[mps]` pins still name rc17, which predates it, until that release;
   `gpu-ref.txt` names the quantem.gpu main commit the bundles build against.
   `SsbSession.open(source, **parameters)` and
-  `SsbSession.find_aberrations(**options)` take quantem.gpu's keywords;
-  `find_aberrations` keywords `refine` to `refinement` (`"nelder-mead"` or
+  `SsbSession.fit_aberrations(**options)` take quantem.gpu's keywords;
+  `fit_aberrations` keywords `refine` to `refinement` (`"nelder-mead"` or
   None), `locked` to `refine_lock`, `sample_tilt` to `tilt`.
   `SsbSession.engine_aberrations`, `SsbSession.vocabulary_aberrations` and
   `adapters.gpu.HIGHER_ORDER_LAYOUT` are removed. In TypeScript,

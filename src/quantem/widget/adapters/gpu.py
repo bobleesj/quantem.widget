@@ -443,7 +443,7 @@ class DirectSession:
         """Adopt a validated complete correction without running a new search.
 
         Assigning ``ssb.aberrations`` states them as known (quantem.gpu), so a
-        later ``ptycho.run()`` applies them instead of fitting.
+        later ``ptycho.reconstruct()`` applies them instead of fitting.
         """
         from quantem.gpu.ssb.units import validate_aberrations
 
@@ -582,15 +582,15 @@ class DirectSession:
 
     def run(self, **options) -> dict:
         """Run direct reconstruction at the reviewed optics; see ``result`` for the keys."""
-        return self.result(self.ssb.run(**options))
+        return self.result(self.ssb.reconstruct(**options))
 
     reconstruct = run  # Existing widget integrations share the canonical implementation.
 
-    def find_aberrations(self, **options) -> dict:
-        """Fit the aberrations (``quantem.gpu.DirectPtycho.find_aberrations(**options)``); see ``result`` for the keys."""
+    def fit_aberrations(self, **options) -> dict:
+        """Fit the aberrations (``quantem.gpu.DirectPtycho.fit_aberrations(**options)``); see ``result`` for the keys."""
         options.setdefault("search", "standard")
         options.setdefault("show", False)
-        return self.result(self.ssb.find_aberrations(**options))
+        return self.result(self.ssb.fit_aberrations(**options))
 
     def fit_regions(self, regions: list[dict], parameters: dict, *,
                     upsampling: int, phase_estimator: str,
@@ -602,7 +602,7 @@ class DirectSession:
         Independent regional sessions leave the overview calibration intact.
         Detector geometry and rotation are common; aberrations, both tilt
         components and depth spread are optimized together for each region,
-        ``quantem.gpu.DirectPtycho.find_aberrations(tilt=True, num_trials=, refinement=)``
+        ``quantem.gpu.DirectPtycho.fit_aberrations(tilt=True, num_trials=, refinement=)``
         once with ``REGION_FIT_SEED``.
         The separate phase-variance diagnostic is not needed for this fit,
         so ``compute_loss=False`` omits it without changing any fitted value.
@@ -648,7 +648,7 @@ class DirectSession:
                 scan_detector_rotation_deg=parameters["scan_detector_rotation_deg"],
             ) as regional:
                 report("joint_fit", 1)
-                fitted = regional.find_aberrations(
+                fitted = regional.fit_aberrations(
                     search="standard",
                     tilt=True, num_trials=int(num_trials), refinement=refinement,
                     tilt_limit_mrad=REGION_TILT_LIMIT_MRAD,
