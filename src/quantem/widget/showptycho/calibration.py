@@ -6,6 +6,10 @@ from pathlib import Path
 
 from quantem.widget.adapters.gpu import DirectSession
 
+# quantem.gpu retired these SSB phase estimators for the phase of the mean wave, "phase_of_mean". A saved fit that
+# names one still restores its optics; the widget reconstructs them with phase_of_mean and says so once.
+RETIRED_PHASE_ESTIMATORS = ("mean_phase", "complex_wave")
+
 
 def read_calibration(path: Path, identity: dict | None, scan_region: tuple[int, int, int, int],
                      phase_estimator: str | None, schema: str) -> dict:
@@ -31,9 +35,9 @@ def read_calibration(path: Path, identity: dict | None, scan_region: tuple[int, 
         raise ValueError(f"the saved fit covers scan region {saved.get('scan_region')}, "
                          f"not this session's {[int(value) for value in scan_region]}")
     estimator = saved["phase_estimator"]
-    if estimator not in ("phase_of_mean", "mean_phase"):
+    if estimator not in ("phase_of_mean", *RETIRED_PHASE_ESTIMATORS):
         raise ValueError("the saved phase estimator is not supported")
-    if phase_estimator is not None and phase_estimator != estimator:
+    if phase_estimator is not None and estimator not in RETIRED_PHASE_ESTIMATORS and phase_estimator != estimator:
         raise ValueError("the requested phase estimator differs from the saved fit")
     reconstruction = dict(saved.get("reconstruction") or saved.get("reconstruction_options") or {})
     method = reconstruction.setdefault("method", saved.get("reconstruction_method", "ssb"))

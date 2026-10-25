@@ -1134,9 +1134,9 @@ def test_auto_sampling_matches_core_and_save_keeps_resolved_factor(widget, ssb, 
     assert saved["upsampling_factor"] == 1 and saved["upsampling_mode"] == "explicit"
 
 
-@pytest.mark.parametrize("estimator", ["mean_phase", "phase_of_mean"])
-def test_explicit_estimator_is_displayed_and_saved(ssb, tmp_path, estimator):
+def test_explicit_estimator_is_displayed_and_saved(ssb, tmp_path):
     """A saved initialization must describe the numerical phase reviewed on either GPU."""
+    estimator = "phase_of_mean"
     view = ShowPtycho(ssb, save_dir=tmp_path, phase_estimator=estimator)
     try:
         view.upsampling_factor = "auto"
@@ -1164,7 +1164,10 @@ def test_estimator_requires_a_supported_name_and_an_ssb_session():
     with pytest.raises(ValueError, match="phase_estimator must"):
         ShowPtycho(np.ones((8, 8)), phase_estimator="unknown")
     with pytest.raises(ValueError, match="needs an SSB session"):
-        ShowPtycho(np.ones((8, 8)), phase_estimator="mean_phase")
+        ShowPtycho(np.ones((8, 8)), phase_estimator="phase_of_mean")
+    for retired in ("mean_phase", "complex_wave"):
+        with pytest.raises(ValueError, match=f"phase_estimator='{retired}' was retired"):
+            ShowPtycho(np.ones((8, 8)), phase_estimator=retired)
 
 
 def test_local_ssb_results_follow_current_optics_without_replacing_the_session(ssb, tmp_path):
@@ -1720,6 +1723,40 @@ def test_a_matching_save_replaces_a_supplied_model_unless_restore_is_false(tmp_p
         viewer = ShowPtycho(ssb, save_dir=tmp_path, restore=False)
         assert viewer.fitted_C10_nm == 7 and viewer.calibration_status == ""
         viewer.close()
+
+
+@pytest.mark.parametrize("retired", ["mean_phase", "complex_wave"])
+def test_a_save_naming_a_retired_estimator_restores_its_optics_and_says_so(tmp_path, capsys, retired):
+    """quantem.gpu retired these estimators: such a save still opens, never asks for one, and keeps its file."""
+    gpu = pytest.importorskip("quantem.gpu")
+    source = tmp_path / "scan.npy"
+    np.save(source, _counts())
+    calibration = dict(voltage_kV=300, semiangle_mrad=20,
+                       scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5, 5))
+    with gpu.SSB.open(str(source), aberrations=START, **calibration) as ssb:
+        viewer = ShowPtycho(ssb, save_dir=tmp_path)
+        expected = _shown(viewer).copy()
+        viewer.save_trigger += 1
+        viewer.close()
+    path = tmp_path / "calibration.json"
+    path.write_text(json.dumps({**json.loads(path.read_text()), "phase_estimator": retired}))
+    for requested in (None, "phase_of_mean"):
+        with gpu.SSB.open(str(source), aberrations={**START, "C10_nm": 7}, **calibration) as ssb:
+            capsys.readouterr()
+            viewer = ShowPtycho(ssb, save_dir=tmp_path, phase_estimator=requested)
+            assert viewer.fitted_C10_nm == 3 and viewer.calibration_status == "Restored saved full-field fit"
+            np.testing.assert_array_equal(_shown(viewer), expected)            # the phase of the mean wave
+            printed = capsys.readouterr().out.strip().splitlines()
+            assert len(printed) == 2 and printed[0].startswith("ShowPtycho: restored calibration.json saved ")
+            assert printed[1] == (f"ShowPtycho: calibration.json was saved with the retired {retired} estimator "
+                                  "and loads as saved; previews and Save use phase_of_mean, the phase of the mean wave.")
+            assert json.loads(path.read_text())["phase_estimator"] == retired  # opening does not relabel the file
+            viewer.close()
+    with gpu.SSB.open(str(source), aberrations=START, **calibration) as ssb:
+        viewer = ShowPtycho(ssb, save_dir=tmp_path)
+        viewer.save_trigger += 1
+        viewer.close()
+    assert json.loads(path.read_text())["phase_estimator"] == "phase_of_mean"  # Save records what was shown
 
 
 @pytest.mark.parametrize("saved_kind", ["crop", "older save"])

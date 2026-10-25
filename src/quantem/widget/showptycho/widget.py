@@ -40,6 +40,7 @@ import traitlets
 from quantem.widget.adapters import core as core_adapter
 from quantem.widget.adapters import gpu as gpu_adapter
 from quantem.widget.device import gpu_path_hint, no_gpu_path
+from quantem.widget.showptycho.calibration import RETIRED_PHASE_ESTIMATORS
 from quantem.widget.showptycho.export import write_showptycho_folder
 from quantem.widget.units import axis_pair, image_axes, per_axis, stated, wrap_degrees
 from quantem.widget.utils.array import device_array
@@ -182,10 +183,13 @@ class ShowPtycho(anywidget.AnyWidget):
         Output multiplier along each scan axis. Auto stops at 4×; 8× is
         explicit only. Omitted, preserve a saved explicit choice or use Auto.
         An explicit value overrides saved sampling, retaining the joint fit.
-    phase_estimator : {"mean_phase", "phase_of_mean"}, optional
-        SSB phase estimator used for every preview and recorded on Save.
-        Omitted, use coherent phase of the mean for all aberrations on CUDA
-        and MPS. Output sampling is chosen from the acquisition calibration.
+    phase_estimator : {"phase_of_mean"}, optional
+        SSB phase estimator used for every preview and recorded on Save:
+        the coherent phase of the mean wave for all aberrations on CUDA and
+        MPS, also when omitted. The retired ``"mean_phase"`` and
+        ``"complex_wave"`` raise; a saved fit that names one restores its
+        optics, reconstructed with ``"phase_of_mean"``, and one printed line
+        says so. Output sampling is chosen from the acquisition calibration.
         An array already contains its reconstructed phase.
     local_tilt : bool or dict, optional
         True adds region selection to the existing viewer. Fit Regions jointly
@@ -734,8 +738,11 @@ class ShowPtycho(anywidget.AnyWidget):
             }
         elif local_tilt is False:
             local_tilt = None
-        if phase_estimator not in (None, "mean_phase", "phase_of_mean"):
-            raise ValueError("phase_estimator must be 'mean_phase' or 'phase_of_mean'.")
+        if phase_estimator in RETIRED_PHASE_ESTIMATORS:
+            raise ValueError(f"phase_estimator={phase_estimator!r} was retired; SSB reconstructs the phase of the "
+                             "mean wave, 'phase_of_mean'. Omit phase_estimator.")
+        if phase_estimator not in (None, "phase_of_mean"):
+            raise ValueError("phase_estimator must be 'phase_of_mean' or omitted.")
         if is_array and phase_estimator is not None:
             raise ValueError("phase_estimator needs an SSB session; an array is already reconstructed.")
         self._phase_estimator = phase_estimator
@@ -946,7 +953,11 @@ class ShowPtycho(anywidget.AnyWidget):
             self.calibration_status = f"Saved fit not restored: {exc}. Use Joint fit, then Save."
             return
         self.method = saved_method
-        self._phase_estimator = saved["phase_estimator"] if self.method == "ssb" else None
+        retired = saved["phase_estimator"] in RETIRED_PHASE_ESTIMATORS
+        if self.method != "ssb":
+            self._phase_estimator = None
+        elif not retired:
+            self._phase_estimator = saved["phase_estimator"]
         for name in ("phase_regularization", "amplitude_regularization", "smoothness_inv_A", "detector_weighting"):
             if name in reconstruction:
                 setattr(self, name, reconstruction[name])
@@ -968,6 +979,10 @@ class ShowPtycho(anywidget.AnyWidget):
         print(f"ShowPtycho: restored {self._calibration_path.name} saved {self.calibration_saved_at or 'earlier'} "
               f"({restored})" + (f", replacing the session's {before}" if supplied else "")
               + ". Pass restore=False to keep the session's values.")
+        if retired:
+            # the file keeps its label until the next Save, which records what the widget then shows
+            print(f"ShowPtycho: {self._calibration_path.name} was saved with the retired {saved['phase_estimator']} "
+                  "estimator and loads as saved; previews and Save use phase_of_mean, the phase of the mean wave.")
         return saved
 
     def _restore_regions(self, saved: dict) -> None:
