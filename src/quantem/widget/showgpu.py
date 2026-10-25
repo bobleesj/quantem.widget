@@ -28,24 +28,42 @@ def sample(*, users: bool = True) -> dict:
     else:
         snapshot = status(processes=users)
     if users and "processes" in snapshot:
-        owners = {}
+        identities = {}
         groups = {}
         for process in snapshot.pop("processes"):
             pid = process["pid"]
-            if pid not in owners:
+            if pid not in identities:
                 try:
-                    owners[pid] = psutil.Process(pid).username()
+                    identities[pid] = psutil.Process(pid).as_dict(
+                        attrs=["username", "name"], ad_value=None
+                    )
                 except (psutil.Error, OSError):
-                    owners[pid] = None
-            key = (process["gpu_uuid"], owners[pid])
+                    identities[pid] = {"username": None, "name": None}
+            identity = identities[pid]
+            key = (process["gpu_uuid"], identity["username"])
             group = groups.setdefault(
-                key, {"name": owners[pid], "used_bytes": 0, "processes": 0}
+                key,
+                {
+                    "name": identity["username"],
+                    "used_bytes": 0,
+                    "processes": 0,
+                    "process_details": [],
+                },
             )
             group["processes"] += 1
+            group["process_details"].append(
+                {
+                    "pid": pid,
+                    "name": identity["name"],
+                    "used_bytes": process["used_bytes"],
+                }
+            )
             if process["used_bytes"] is None or group["used_bytes"] is None:
                 group["used_bytes"] = None
             else:
                 group["used_bytes"] += process["used_bytes"]
+        for group in groups.values():
+            group["process_details"].sort(key=lambda process: process["pid"])
         for gpu in snapshot["gpus"]:
             gpu["users"] = sorted(
                 (group for (uuid, _), group in groups.items() if uuid == gpu["uuid"]),
@@ -91,6 +109,7 @@ class ShowGPU(anywidget.AnyWidget):
     ----------
     users : bool, default True
         Show compute users, their reported VRAM and process counts per GPU.
+        Expand a user to inspect process names, IDs and individual VRAM use.
         Disable to avoid querying process ownership. Graphics and driver
         allocations remain included in device totals, not this breakdown.
     size : {"small", "medium", "large", "xlarge"}, default "medium"

@@ -19,6 +19,9 @@ every process using that physical device. Driver indices are not CUDA logical
 indices; any `CUDA_VISIBLE_DEVICES` mask is shown separately.
 
 `users=True` adds each compute user's reported VRAM and process count.
+Click a user row or focus it and press Enter to expand the process list below
+it: process ID, executable name and reported VRAM. Expanded rows stay open as
+samples update. Only executable names are read, not command-line arguments.
 `users=False` hides that breakdown and skips the process query. User totals
 exclude graphics processes and driver allocations, so they need not sum to
 device usage. Inaccessible process ownership is labeled **Unknown user**;
@@ -56,6 +59,7 @@ at most 120 samples per device in the browser.
 | Pause / Resume | `running` | Sampling pauses or resumes |
 | Refresh | one sample | Sample counter and timestamp advance |
 | Users | `users` | Compute-user VRAM breakdown shows or hides |
+| User row | expand / collapse | Process IDs, names and VRAM appear underneath |
 | S / M / L / XL | `size` | Text, controls and card layout resize |
 
 ```{eval-rst}

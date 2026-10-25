@@ -134,18 +134,37 @@ def test_compute_users_are_grouped_per_gpu_and_missing_values_stay_missing(monke
         if pid == 3:
             raise psutil.NoSuchProcess(pid)
         return SimpleNamespace(
-            username=lambda: "example-user", memory_info=lambda: SimpleNamespace(rss=50)
+            as_dict=lambda **kwargs: {"username": "example-user", "name": "python"},
+            memory_info=lambda: SimpleNamespace(rss=50),
         )
 
     monkeypatch.setattr(telemetry, "status", status)
     monkeypatch.setattr(showgpu.psutil, "Process", process)
     snapshot = showgpu.sample(users=True)
     assert snapshot["gpus"][0]["users"] == [
-        {"name": "example-user", "used_bytes": 300, "processes": 2},
-        {"name": None, "used_bytes": 300, "processes": 1},
+        {
+            "name": "example-user",
+            "used_bytes": 300,
+            "processes": 2,
+            "process_details": [
+                {"pid": 1, "name": "python", "used_bytes": 100},
+                {"pid": 2, "name": "python", "used_bytes": 200},
+            ],
+        },
+        {
+            "name": None,
+            "used_bytes": 300,
+            "processes": 1,
+            "process_details": [{"pid": 3, "name": None, "used_bytes": 300}],
+        },
     ]
     assert snapshot["gpus"][1]["users"] == [
-        {"name": "example-user", "used_bytes": None, "processes": 1},
+        {
+            "name": "example-user",
+            "used_bytes": None,
+            "processes": 1,
+            "process_details": [{"pid": 1, "name": "python", "used_bytes": None}],
+        },
     ]
     assert "processes" not in snapshot
     snapshot = showgpu.sample(users=False)

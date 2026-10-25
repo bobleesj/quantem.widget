@@ -16,7 +16,12 @@ type GPUReading = {
   utilization: number | null;
   temperature: number | null;
   power: number | null;
-  users?: { name: string | null; used_bytes: number | null; processes: number }[];
+  users?: {
+    name: string | null;
+    used_bytes: number | null;
+    processes: number;
+    process_details?: { pid: number; name: string | null; used_bytes: number | null }[];
+  }[];
 };
 
 const TEXT_SIZES = { small: 11, medium: 13, large: 15, xlarge: 18 } as const;
@@ -45,6 +50,10 @@ export function gib(value: number | null | undefined): string {
 
 function reading(value: number | null, unit: string): string {
   return value == null ? "unavailable" : `${Math.round(value)}${unit}`;
+}
+
+function processMemory(value: number | null): string {
+  return value != null && value < 2 ** 30 ? `${(value / 2 ** 20).toFixed(0)} MiB` : gib(value);
 }
 
 function Sparkline({ values, total, color }: { values: number[]; total: number | null; color: string }) {
@@ -146,10 +155,27 @@ function ShowGPUView() {
         {users && !snapshot?.process_error && <div style={{ borderTop: `1px solid ${colors.border}`, marginTop: 8, paddingTop: 6 }}>
           <div style={{ color: colors.textMuted, fontSize: "0.92em" }}>Compute users</div>
           {gpu.users == null ? <div>Waiting for user sample</div> : gpu.users.length === 0 ? <div>No compute processes</div> :
-            gpu.users.map(user => <div key={user.name ?? "\u0000"} style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-              <span style={{ overflowWrap: "anywhere" }}>{user.name ?? "Unknown user"}</span>
-              <span>{gib(user.used_bytes)} <span style={{ color: colors.textMuted }}>· {user.processes} {user.processes === 1 ? "process" : "processes"}</span></span>
-            </div>)}
+            gpu.users.map(user => <details key={user.name ?? "\u0000"}>
+              <summary aria-label={`GPU ${gpu.index} processes for ${user.name ?? "unknown user"}`} style={{ cursor: "pointer", padding: "2px 0" }}>
+                <span style={{ display: "inline-flex", width: "calc(100% - 1.2em)", justifyContent: "space-between", gap: 8, flexWrap: "wrap", verticalAlign: "top" }}>
+                  <span style={{ overflowWrap: "anywhere" }}>{user.name ?? "Unknown user"}</span>
+                  <span>{gib(user.used_bytes)} <span style={{ color: colors.textMuted }}>· {user.processes} {user.processes === 1 ? "process" : "processes"}</span></span>
+                </span>
+              </summary>
+              {user.process_details == null ? <div style={{ color: colors.textMuted }}>Process details need a new sample from the updated monitor.</div> :
+                <table aria-label={`GPU ${gpu.index} processes for ${user.name ?? "unknown user"}`} style={{ width: "100%", tableLayout: "fixed", borderCollapse: "collapse", fontSize: "0.92em", marginTop: 4 }}>
+                  <thead style={{ color: colors.textMuted, textAlign: "left" }}><tr>
+                    <th scope="col" style={{ width: "5.5em", fontWeight: 400 }}>PID</th>
+                    <th scope="col" style={{ fontWeight: 400 }}>Process</th>
+                    <th scope="col" style={{ width: "6em", fontWeight: 400, textAlign: "right" }}>VRAM</th>
+                  </tr></thead>
+                  <tbody>{user.process_details.map(process => <tr key={process.pid}>
+                    <td style={{ verticalAlign: "top", padding: "3px 4px 3px 0" }}>{process.pid}</td>
+                    <td style={{ verticalAlign: "top", padding: "3px 4px 3px 0", overflowWrap: "anywhere" }}>{process.name ?? "Unavailable"}</td>
+                    <td style={{ verticalAlign: "top", padding: "3px 0", textAlign: "right" }}>{processMemory(process.used_bytes)}</td>
+                  </tr>)}</tbody>
+                </table>}
+            </details>)}
         </div>}
       </div>)}
       <div style={card} data-testid="system-memory">
