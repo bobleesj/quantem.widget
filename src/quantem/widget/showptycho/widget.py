@@ -1180,9 +1180,24 @@ class ShowPtycho(anywidget.AnyWidget):
         sample = self._sample() if self.sample_available else None
         if sample is not None and not self.tilt_correction:
             sample = {**sample, "sample_tilt_mrad": (0.0, 0.0)}
-        phase, loss = self._ssb.preview({**higher_order, **aberrations}, compute_loss=compute_loss and self.compute_loss,
-                                        upsampling_factor=self._output_factor,
-                                        **self._reconstruction_options(), **(sample or {}))
+        model = {**higher_order, **aberrations}
+        options = dict(upsampling_factor=self._output_factor, **self._reconstruction_options(), **(sample or {}))
+        # One slider moving (no loss asked, so not a release): its drag window, the same image to a few
+        # float32 ulps in 1-7 ms instead of 30-50. A drag frame that repeats the last values (the browser
+        # coalesces moves) stays on that window. Releases, other settings and first frames stay exact.
+        previous = getattr(self, "_drag_model", None)
+        options_key = json.dumps(options, sort_keys=True, default=str)
+        same_options = options_key == getattr(self, "_drag_options_key", None)
+        moved = [] if previous is None else [name for name in model if previous.get(name, model[name]) != model[name]]
+        if not moved and same_options and getattr(self, "_drag_control", None):
+            moved = [self._drag_control]
+        dragging = not compute_loss and same_options and len(moved) == 1 and getattr(self._ssb, "drag_windows", False)
+        if dragging:
+            phase, loss = self._ssb.drag(moved[0], model, **options), None
+        else:
+            phase, loss = self._ssb.preview(model, compute_loss=compute_loss and self.compute_loss, **options)
+        self._drag_model, self._drag_options_key = model, options_key
+        self._drag_control = moved[0] if dragging else None
         if request_id != self._inflight_id:
             return
         if self.display_negate_phase:
@@ -1199,6 +1214,29 @@ class ShowPtycho(anywidget.AnyWidget):
             self.phase_height, self.phase_width = phase.shape
             self.phase_bytes = phase.tobytes()
             self.result_json = json.dumps(self._last_result)
+        if dragging:
+            # one window node per frame, after the frame has left
+            self._ssb.advance()
+        elif (compute_loss or not same_options) and getattr(self._ssb, "drag_windows", False):
+            # a release, the first frame or other settings: windows along the slider just used and the three
+            # main ones build while the sliders rest, so the next grab starts on window frames
+            # (no work once they exist for these inputs)
+            controls = dict.fromkeys(moved + ["C10_nm", "C12_nm", "phi12_deg"])
+            self._ssb.prepare(controls, model, **options)
+            self._schedule_window_build()
+
+    def _schedule_window_build(self) -> None:
+        """Build drag windows one node per IOLoop tick while the sliders are idle; a request runs between ticks."""
+        from tornado.ioloop import IOLoop
+
+        def build():
+            self._window_build = not self._ssb.advance()
+            if self._window_build:
+                IOLoop.current().call_later(0.0, build)
+
+        if not getattr(self, "_window_build", False):
+            self._window_build = True
+            IOLoop.current().call_later(0.0, build)
 
     def _reconstruct_displayed(self, *, compute_loss: bool) -> None:
         """Reconstruct the displayed aberrations again, under a new request id, after a setting
