@@ -644,6 +644,7 @@ def test_pins_star_view_and_unpin(widget, tmp_path):
     widget.pin_json = json.dumps({"action": "pin", "id": "a", "C10_nm": 3.0, "C12_nm": 1.0, "phi12_deg": 11.0, "loss": 0.1})
     widget.request_json = json.dumps({"id": 2, "C10_nm": 0.0, "C12_nm": 0.0, "phi12_deg": 0.0, "committed": True})
     widget.pin_json = json.dumps({"action": "pin", "id": "b", "C10_nm": 0.0, "C12_nm": 0.0, "phi12_deg": 0.0, "loss": 0.2})
+    second = _shown(widget).copy()
     assert repr(widget).startswith("ShowPtycho(2 pinned")
     widget.pin_json = json.dumps({"action": "star", "id": "a"})
     stars = json.loads((tmp_path / "showptycho_stars.json").read_text())
@@ -657,6 +658,8 @@ def test_pins_star_view_and_unpin(widget, tmp_path):
     widget.pin_json = json.dumps({"action": "view", "id": "a"})
     np.testing.assert_array_equal(_shown(widget), first)
     assert json.loads(widget.result_json)["C10_nm"] == 3.0
+    widget.request_json = json.dumps({"id": 3, "C10_nm": 0.0, "C12_nm": 0.0, "phi12_deg": 0.0, "committed": True})
+    np.testing.assert_array_equal(_shown(widget), second)
     widget.pin_json = json.dumps({"action": "unpin", "id": "a"})
     assert json.loads((tmp_path / "showptycho_stars.json").read_text()) == {"schema": "quantem.ssb-stars/3", "stars": []}
     assert repr(widget).startswith("ShowPtycho(1 pinned")
@@ -1293,7 +1296,8 @@ def test_automatic_detector_sampling_is_retained_in_saved_calibration(tmp_path):
         assert tuple(saved["detector_sampling_mrad"]) == sampling
 
 
-def test_restart_restores_the_complete_saved_full_field_without_refitting(tmp_path, monkeypatch):
+@pytest.mark.parametrize("upsampling", [None, "auto", 1, 4])
+def test_restart_restores_the_complete_saved_full_field_without_refitting(tmp_path, monkeypatch, upsampling):
     """Save a reviewed correction, reopen the data, and recover identical pixels."""
     gpu = pytest.importorskip("quantem.gpu")
     source = tmp_path / "scan.npy"
@@ -1320,7 +1324,24 @@ def test_restart_restores_the_complete_saved_full_field_without_refitting(tmp_pa
 
     monkeypatch.setattr(gpu.SSB, "find_aberrations", no_search)
     with gpu.SSB.open(str(source), **calibration) as reopened:
-        restored = ShowPtycho(reopened, save_dir=tmp_path)
+        factors = []
+        preview = reopened.preview
+
+        def record_preview(*args, **kwargs):
+            factors.append(kwargs.get("upsampling_factor", 1))
+            return preview(*args, **kwargs)
+
+        monkeypatch.setattr(reopened, "preview", record_preview)
+        restored = reopened.show(save_dir=tmp_path, upsampling=upsampling)
+        factor = restored.auto_upsampling_factor if upsampling == "auto" else (upsampling or 2)
+        assert factors == [factor]
+        if upsampling is not None:
+            expected, _ = preview(
+                {**START, "C30_nm": 2}, upsampling_factor=factor,
+                sample_tilt_mrad=[3, -4], depth_spread_nm=12,
+                phase_estimator="phase_of_mean", compute_loss=True,
+            )
+            expected = -expected  # The saved display negation is restored too.
         np.testing.assert_array_equal(_shown(restored), expected)
         assert restored.calibration_status == "Restored saved full-field fit"
         assert reopened.aberrations == {**START, "C30_nm": 2}
@@ -1329,7 +1350,8 @@ def test_restart_restores_the_complete_saved_full_field_without_refitting(tmp_pa
         assert json.loads(restored.sample_json) == json.loads(restored.fitted_sample_json) == {
             "sample_tilt_mrad": [3, -4], "depth_spread_nm": 12,
         }
-        assert restored.upsampling_factor == 2 and restored.display_negate_phase
+        assert restored.upsampling_factor == (upsampling if upsampling is not None else 2)
+        assert restored.display_negate_phase
         assert restored.notes == "Reviewed full field"
         assert restored.local_tilt_max_columns == 2
         restored.save_trigger += 1
@@ -1339,6 +1361,17 @@ def test_restart_restores_the_complete_saved_full_field_without_refitting(tmp_pa
         restored = ShowPtycho(reopened, save_dir=tmp_path)
         np.testing.assert_array_equal(_shown(restored), expected)
         restored.close()
+
+
+@pytest.mark.parametrize("value", [True, False, 0, 5, 4.0, 4.67, "4", "automatic"])
+def test_upsampling_rejects_unsupported_launch_values(value):
+    with pytest.raises(ValueError, match="upsampling must"):
+        ShowPtycho(np.zeros((8, 8)), upsampling=value)
+
+
+def test_upsampling_requires_an_ssb_session():
+    with pytest.raises(ValueError, match="already reconstructed"):
+        ShowPtycho(np.zeros((8, 8)), upsampling=4)
 
 
 def _absolute_paths(value, found=None):
