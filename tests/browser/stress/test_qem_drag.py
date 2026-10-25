@@ -25,12 +25,16 @@ ADAPTER = """async () => {
     fallback: adapter.info.isFallbackAdapter ?? adapter.isFallbackAdapter ?? false};
 }"""
 REPORT = """
-import hashlib, json
+import hashlib, json, os
+import cupy as cp
 print(json.dumps({
+    "pid": os.getpid(),
+    "gpu_pci_bus_id": cp.cuda.Device().pci_bus_id,
     "scan": [viewer.shape_rows, viewer.shape_cols],
     "detector": list(loaded[0].shape[-2:]),
     "panels": list(viewer.compare_panel_indices),
     "center": list(viewer.roi_center),
+    "radii": [viewer.roi_radius, viewer.roi_radius_inner],
     "bytes": len(viewer.compare_virtual_image_bytes),
     "sha256": hashlib.sha256(viewer.compare_virtual_image_bytes).hexdigest(),
 }))
@@ -55,7 +59,10 @@ def _summary(evidence, count, started, ended):
         "seconds": (ended - started) / 1000,
         "new_complete_image_revisions": complete,
         "new_image_hz": complete * 1000 / (ended - started),
-        "raf_hz_during_drag": 1000 / statistics.median(gaps) if gaps else 0,
+        "raf_hz_during_drag": len(frames) * 1000 / (ended - started),
+        "median_frame_interval_ms": statistics.median(gaps) if gaps else None,
+        "p95_frame_interval_ms": (statistics.quantiles(gaps, n=100, method="inclusive")[94]
+                                  if len(gaps) > 1 else gaps[0] if gaps else None),
         "trusted_pointer_events": sum(item["trusted"] for item in evidence["inputs"]
                                       if started <= item["at"] <= ended),
         "delivered_input_hz": sum(started <= item["at"] <= ended and item["trusted"]
@@ -82,23 +89,34 @@ def test_kernel_cleanup_closes_every_loaded_acquisition():
 @pytest.mark.skipif(not os.getenv("QUANTEM_WIDGET_STRESS_QEM_DIR"),
                     reason="set QUANTEM_WIDGET_STRESS_QEM_DIR to real .qem recordings")
 @pytest.mark.parametrize("count", [7, 10])
-def test_native_qem_detector_drag(count, chrome, jupyter, open_page, hardware_adapter, browser_out):
+@pytest.mark.parametrize("preset,gesture", [("bf", "move"), ("df", "move"), ("adf", "move"), ("adf", "resize"), ("large-adf", "move")])
+def test_native_qem_detector_drag(count, preset, gesture, chrome, jupyter, open_page, hardware_adapter, browser_out):
     root = Path(os.environ["QUANTEM_WIDGET_STRESS_QEM_DIR"]).expanduser()
     paths = sorted({path.resolve() for path in root.glob("*.qem")})[:count]
     assert len(paths) == count, f"Provide {count} independent .qem recordings in the fixture directory"
     target = float(os.getenv("QUANTEM_WIDGET_STRESS_TARGET_HZ", "120"))
     assert math.isfinite(target) and target > 0
     device = int(os.getenv("QUANTEM_WIDGET_STRESS_GPU", "0"))
-    notebook = f"stress_qem_{count}.ipynb"
+    name = f"qem_{count}_{preset}_{gesture}"
+    notebook = f"stress_{name}.ipynb"
     jupyter.write_notebook(notebook, f"""
 get_ipython().run_line_magic("load_ext", "autoreload")
 get_ipython().run_line_magic("autoreload", "0")
 from quantem.gpu import io
 from quantem.widget import Show4DSTEM
+import time
 loaded = io.load({[str(path) for path in paths]!r}, backend="cuda", device={device}, verbose=False)
 viewer = Show4DSTEM(loaded, view_mode="multiple", compare_group_mode="all",
     compare_max_panels={count}, compare_cols=5, compare_grid_width_px=1200,
     panel_width_px=320, sync_resize=False, show_fft=False)
+query_times = []
+query = viewer._compare_images
+def timed_query(*args, **kwargs):
+    started = time.perf_counter()
+    result = query(*args, **kwargs)
+    query_times.append(time.perf_counter() - started)
+    return result
+viewer._compare_images = timed_query
 viewer
 """)
     instrument = Path(__file__).with_name("image_updates.js").read_text()
@@ -111,16 +129,22 @@ viewer
         return page
 
     try:
-        page = jupyter.open(instrumented_page, notebook, f"stress_{count}", webgpu=True,
+        page = jupyter.open(instrumented_page, notebook, f"stress_{count}_{preset}_{gesture}", webgpu=True,
                             ready=VI, out=browser_out)
         adapter = page.evaluate(ADAPTER)
         hardware_adapter(adapter)
         assert not adapter["fallback"], f"Hardware adapter required: {adapter}"
+        page.get_by_text({"large-adf": "ADF", "df": "BF"}.get(preset, preset.upper()), exact=True).click()
+        if preset == "df":
+            jupyter.run_in_kernel(notebook, "viewer.roi_center = [viewer.roi_center_row, min(180.0, viewer.roi_center_col + 40.0)]")
+        if preset == "large-adf":
+            jupyter.run_in_kernel(notebook, "with viewer.hold_sync(), viewer.hold_trait_notifications():\n    viewer.roi_radius = 88.0\n    viewer.roi_radius_inner = 48.0")
+        page.wait_for_timeout(500)
         before = _report(jupyter, notebook)
         assert before["scan"] == [512, 512] and before["detector"] == [192, 192]
         assert before["panels"] == list(range(count))
         assert before["bytes"] == count * 512 * 512 * 4
-        before_png = page.locator(VI).first.screenshot(path=str(browser_out / f"qem_{count}_before.png"))
+        before_png = page.locator(VI).first.screenshot(path=str(browser_out / f"{name}_before.png"))
         page.locator(".jp-OutputArea").first.scroll_into_view_if_needed()
         box = page.locator(DP).first.bounding_box()
         panels_visible = page.locator('[data-quantem-scientific-output^="show4dstem-compare-"]').evaluate_all(
@@ -139,7 +163,11 @@ viewer
         })""", {"bytes": before["bytes"], "count": count})
         connection = page.context.new_cdp_session(page)
         target_id = connection.send("Target.getTargetInfo")["targetInfo"]["targetId"]
-        connection.detach()
+        profile = os.getenv("QUANTEM_WIDGET_STRESS_PROFILE") == "1"
+        if profile:
+            connection.send("Profiler.enable")
+            connection.send("Profiler.start")
+            jupyter.run_in_kernel(notebook, "import cProfile; kernel_profile = cProfile.Profile(); kernel_profile.enable()")
         held = {}
         held_png = None
         held_upload = None
@@ -150,7 +178,7 @@ viewer
             # requested input interval and its fresh scientific-image count.
             page.wait_for_timeout(800)
             held_png = page.locator(VI).first.screenshot(
-                path=str(browser_out / f"qem_{count}_held.png"))
+                path=str(browser_out / f"{name}_held.png"))
             for _ in range(30):
                 held = _report(jupyter, notebook)
                 held_upload = page.evaluate("scientificStressUploadHash()")
@@ -158,11 +186,32 @@ viewer
                     break
                 page.wait_for_timeout(100)
             else:
+                (browser_out / f"{name}_held_failure.json").write_text(json.dumps({
+                    "held": held, "uploaded": held_upload, "errors": page.errors, "console": page.console,
+                    "evidence": page.evaluate("structuredClone(scientificStress)"),
+                }))
                 raise AssertionError("The held detector's full native image bytes did not reach every panel")
 
+        start = ((before["center"][1] + 0.5) / 192, (before["center"][0] + 0.5) / 192)
+        trajectory = None
+        if gesture == "resize":
+            # Grab the outer ring, not a center or an inner boundary.
+            radius = before["radii"][0]
+            direction = -1 if before["center"][1] + radius >= 191 else 1
+            center = start
+            start = (center[0] + direction * radius / 192, center[1])
+            def trajectory(elapsed):
+                moving = max(before["radii"][1] + 1, radius + 15 * math.sin(8 * elapsed))
+                return center[0] + direction * moving / 192, center[1]
         pointer = drag(target_id, box, endpoint=chrome.stress_cdp_endpoint,
                        duration_s=5, rate_hz=target, max_inflight=4,
+                       start=start, trajectory=trajectory,
                        before_release=while_pressed)
+        if profile:
+            (browser_out / f"{name}.cpuprofile").write_text(json.dumps(connection.send("Profiler.stop")["profile"]))
+            profile_text = jupyter.run_in_kernel(notebook, "kernel_profile.disable(); import pstats; pstats.Stats(kernel_profile).sort_stats('cumulative').print_stats(35)")
+            (browser_out / f"{name}_kernel_profile.txt").write_text(profile_text)
+        connection.detach()
         # Browser and input driver are on this same host; use its recorded
         # performance origin, excluding input-ACK drain and held screenshots.
         started = pointer["host_wall_start_s"] * 1000 - pointer["browser_clock"]["timeOrigin"]
@@ -171,19 +220,22 @@ viewer
         page.wait_for_timeout(500)
         evidence = page.evaluate("structuredClone(scientificStress)")
         summary = _summary(evidence, count, started, ended)
-        summary.update(target_hz=target, measured_display_raf_hz=1000 / statistics.median(refresh),
+        query_times = json.loads(jupyter.run_in_kernel(notebook, "import json; print(json.dumps(query_times))").splitlines()[-1])
+        summary["query_ms_median"] = statistics.median(query_times) * 1000
+        summary["query_ms_max"] = max(query_times) * 1000
+        summary.update(preset=preset, gesture=gesture, target_hz=target, measured_display_raf_hz=1000 / statistics.median(refresh),
                        requested_input_hz=target, native_pointer=pointer, adapter_before=adapter,
                        adapter_after=page.evaluate(ADAPTER), before=before, held=held,
                        uploaded=held_upload, errors=page.errors, gpu_errors=evidence["errors"])
         summary["target_met"] = summary["new_image_hz"] >= target
-        (browser_out / f"qem_{count}_metrics.json").write_text(json.dumps(summary, indent=2))
-        (browser_out / f"qem_{count}_events.json").write_text(json.dumps(evidence))
+        (browser_out / f"{name}_metrics.json").write_text(json.dumps(summary, indent=2))
+        (browser_out / f"{name}_events.json").write_text(json.dumps(evidence))
         assert pointer["status"] == "complete" and pointer["released"], pointer
         assert summary["adapter_after"] == adapter and not evidence["errors"]
         assert [error for error in page.errors if "debugger session" not in error] == []
         assert held_upload == {key: held[key] for key in ("bytes", "sha256")}
         assert held["sha256"] != before["sha256"] and held_png != before_png
-        assert held["center"] != before["center"]
+        assert held["center" if gesture == "move" else "radii"] != before["center" if gesture == "move" else "radii"]
         assert summary["new_complete_image_revisions"] > 0
         assert summary["target_met"], (
             f"Target missed: {summary['new_image_hz']:.2f} new complete images/s; "

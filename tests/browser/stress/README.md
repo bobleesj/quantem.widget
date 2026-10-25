@@ -4,6 +4,7 @@ Use a conda environment with the current `quantem.gpu`, this widget checkout,
 CUDA, headed Chrome, and at least ten independent **512 × 512 × 192 × 192**
 QEM recordings. The test loads seven, then ten, with no binning or conversion.
 It reuses the existing page/Jupyter fixtures and closes its acquisitions. A stress-local headed Chrome fixture exposes a loopback-only native CDP socket; it never controls an existing browser.
+The held gestures cover BF, off-axis circular DF, ADF center movement, ADF outer-ring resizing, and a large annulus (48–88 detector pixels).
 
 ```bash
 npm run build
@@ -16,12 +17,15 @@ QUANTEM_WIDGET_BROWSER=1 PYTHONPATH=src python -m pytest \
 Choose the CUDA device with `QUANTEM_WIDGET_STRESS_GPU` (default `0`). Set
 `DISPLAY` for the local headed desktop when the shell does not inherit it.
 Without the opt-in data directory and browser flag, the test skips.
+For seven recordings only, select `-k 'not 10'`. Set
+`QUANTEM_WIDGET_STRESS_PROFILE=1` to retain Chrome and kernel CPU profiles for each gesture.
 
 The default target is **120 new complete scientific images/s**. A miss fails
 and saves the measured result; it is never silently reduced to the monitor's
 refresh rate. `QUANTEM_WIDGET_STRESS_TARGET_HZ` permits an explicit different
 target for another display. Idle display rAF and rAF during dragging are
-reported separately and are not counted as new scientific images.
+reported separately and are not counted as new scientific images. Drag rAF uses
+the total callback count per second; median and p95 frame intervals expose stalls.
 
 The observer counts a native image-buffer revision once, after every comparison
 canvas submits that revision and its GPU work finishes by a following rAF.

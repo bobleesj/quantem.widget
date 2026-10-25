@@ -2262,8 +2262,12 @@ function Show4DSTEM() {
   const [ssbComputeCalibrationFilename] = useModelState<string>("ssb_compute_calibration_filename");
 
   // ROI state
-  const [roiRadius, setRoiRadius] = useModelState<number>("roi_radius");
-  const [roiRadiusInner, setRoiRadiusInner] = useModelState<number>("roi_radius_inner");
+  const [storedRoiRadius, setRoiRadius] = useModelState<number>("roi_radius");
+  const [storedRoiRadiusInner, setRoiRadiusInner] = useModelState<number>("roi_radius_inner");
+  const [localRadii, setLocalRadii] = React.useState<[number, number] | null>(null);
+  const localRadiiRef = React.useRef<[number, number] | null>(null);
+  const roiRadius = localRadii?.[0] ?? storedRoiRadius;
+  const roiRadiusInner = localRadii?.[1] ?? storedRoiRadiusInner;
   const [roiMode, setRoiMode] = useModelState<string>("roi_mode");
   const [roiWidth, setRoiWidth] = useModelState<number>("roi_width");
   const [roiHeight, setRoiHeight] = useModelState<number>("roi_height");
@@ -2442,6 +2446,42 @@ function Show4DSTEM() {
   const roiRadiusPendingRef = React.useRef<number | null>(null);
   const roiRadiusInnerPendingRef = React.useRef<number | null>(null);
   const roiRadiusRafRef = React.useRef<number | null>(null);
+  const radiusContext = "frame_idx vi_source view_mode compare_page_idx roi_mode roi_center_row roi_center_col";
+  const clearLocalRadii = React.useCallback(() => {
+    localRadiiRef.current = null;
+    setLocalRadii(null);
+  }, []);
+  const radiusRequests = React.useMemo(() => detectorChannel(detectorViewId(), request => {
+    const {center, ...identity} = request;
+    const radii = [center[0], model.get("roi_mode") === "annular" ? center[1] : 0];
+    model.send({type: "show4dstem_detector_radius", version: 1, ...identity, radii,
+      context: radiusContext.split(" ").map(name => model.get(name))});
+  }, () => {
+    if (!dpRoiInteractiveRef.current && !roiRadiusPendingRef.current
+        && roiRadiusInnerPendingRef.current === null) clearLocalRadii();
+  }, "show4dstem_detector_radius_receipt", 2), [model, clearLocalRadii]);
+  React.useEffect(() => {
+    const clear = () => {
+      radiusRequests.clear();
+      if (roiRadiusRafRef.current !== null) cancelAnimationFrame(roiRadiusRafRef.current);
+      roiRadiusRafRef.current = null;
+      roiRadiusPendingRef.current = null;
+      roiRadiusInnerPendingRef.current = null;
+      clearLocalRadii();
+    };
+    const stop = () => { clear(); radiusRequests.stop(); };
+    const changes = `${radiusContext} _preset_request offline`.split(" ").map(name => `change:${name}`).join(" ");
+    model.on("msg:custom", radiusRequests.receive);
+    model.on(changes, clear);
+    model.on("comm_live_update comm:close destroy", stop);
+    return () => {
+      // React may replay effect setup, so cleanup must leave the channel reusable.
+      clear();
+      model.off("msg:custom", radiusRequests.receive);
+      model.off(changes, clear);
+      model.off("comm_live_update comm:close destroy", stop);
+    };
+  }, [model, radiusRequests, clearLocalRadii]);
   const flushRoiRadius = React.useCallback((paint = true) => {
     if (paint && roiRadiusRafRef.current !== null) cancelAnimationFrame(roiRadiusRafRef.current);
     const updates: Record<string, number> = {};
@@ -2450,11 +2490,20 @@ function Show4DSTEM() {
     roiRadiusPendingRef.current = null;
     roiRadiusInnerPendingRef.current = null;
     if (Object.keys(updates).length) {
-      for (const [name, radius] of Object.entries(updates)) model.set(name, radius);
-      model.save_changes();
+      const outer = updates.roi_radius ?? localRadiiRef.current?.[0] ?? Number(model.get("roi_radius"));
+      const inner = updates.roi_radius_inner ?? localRadiiRef.current?.[1] ?? Number(model.get("roi_radius_inner"));
+      if (!model.get("offline") && folderWatchLive && model.get("vi_source") === "roi"
+          && radiusRequests.request(outer, inner)) {
+        localRadiiRef.current = [outer, inner];
+        setLocalRadii([outer, inner]);
+      } else {
+        for (const [name, radius] of Object.entries(updates)) model.set(name, radius);
+        model.save_changes();
+      }
     }
+    if (!dpRoiInteractiveRef.current && !radiusRequests.isPending()) clearLocalRadii();
     if (paint) roiRadiusRafRef.current = null;
-  }, [model]);
+  }, [model, folderWatchLive, radiusRequests, clearLocalRadii]);
   const sendRoiRadius = React.useCallback((radius: number, boundary: "inner" | "outer" = "outer") => {
     if (boundary === "inner") roiRadiusInnerPendingRef.current = radius;
     else roiRadiusPendingRef.current = radius;
@@ -5319,6 +5368,9 @@ function Show4DSTEM() {
           updateHostStats();
         }
         setViHistogramData(null);
+        // Present the uploaded slots without waiting for another React commit.
+        // The version still handles initialization and changes to the layout.
+        compareGpuRenderNowRef.current?.();
         setCompareGpuVersion(version => version + 1);
       }).catch(error => {
         if (!cancelled) console.warn("Comparison image GPU upload failed", error);
@@ -6352,8 +6404,8 @@ function Show4DSTEM() {
     const pressed = {
       pointerRow: maskRow,
       pointerCol: maskCol,
-      radius: roiRadiusPendingRef.current ?? Number(model.get("roi_radius")),
-      radiusInner: roiRadiusInnerPendingRef.current ?? Number(model.get("roi_radius_inner") || 0),
+      radius: roiRadiusPendingRef.current ?? roiRadius,
+      radiusInner: roiRadiusInnerPendingRef.current ?? roiRadiusInner,
       width: Number(roiWidth) || 0,
       height: Number(roiHeight) || 0,
     };

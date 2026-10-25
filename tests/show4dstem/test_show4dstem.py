@@ -197,6 +197,7 @@ def test_stream_retires_old_scans_without_resetting_detector_or_cursor(accelerat
     try:
         arrive(0)
         widget = Show4DSTEM.stream(recording, refresh_s=0.01, verbose=False)
+        assert widget.frame_labels == ["0"]
         widget.apply_preset("adf")
         widget.pos_row, widget.pos_col = 2, 3
         detector = (widget.roi_radius_inner, widget.roi_radius)
@@ -209,6 +210,7 @@ def test_stream_retires_old_scans_without_resetting_detector_or_cursor(accelerat
             while widget.frame_labels[-1] != str(index) or widget.n_frames != min(index + 1, 2):
                 assert time.monotonic() < deadline and widget.stream_error is None
                 time.sleep(0.01)
+            assert widget.frame_labels == [str(number) for number in range(max(0, index - 1), index + 1)]
         assert oldest.source.is_released
         assert len(recording.datasets) == len(recording.acquisitions) == 2
         assert (widget.roi_radius_inner, widget.roi_radius) == detector

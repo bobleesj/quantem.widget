@@ -718,6 +718,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             self._precompute_presets()
         self.on_msg(self._handle_frontend_ready_msg)
         self.on_msg(self._handle_detector_request)
+        self.on_msg(self._handle_detector_radius_request)
         self.on_msg(self._handle_position_request)
         self.observe(self._on_scan_position_change, names=["pos_row", "pos_col"])
         self.observe(self._on_roi_change, names=["roi_center_col", "roi_center_row", "roi_radius", "roi_radius_inner",
@@ -1478,7 +1479,14 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             with lock:
                 sources = snapshot()
                 if sources and (not partial or sources[0].received):
-                    viewer = cls([sources[0]], frame_labels=[labels[0]] if labels else None, **viewer_kwargs)
+                    if labels:
+                        first_label = labels[0]
+                    elif partial:
+                        first_label = (sources[0].metadata.get("name")
+                                       or sources[0].metadata.get("series") or "acquisition 0")
+                    else:
+                        first_label = dataset_name(sources[0]) or "acquisition 0"
+                    viewer = cls([sources[0]], frame_labels=[str(first_label)], **viewer_kwargs)
                     break
             if recording.error is not None:
                 raise recording.error
@@ -2329,6 +2337,40 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             if self._multiple_view_active() and not self.compare_virtual_image_bytes:
                 raise RuntimeError(self.compare_status)
         except (KeyError, TypeError, ValueError, RuntimeError, MemoryError) as error:
+            self._roi_seen = None
+            self.send(dict(receipt, status="rejected", error=str(error)))
+        else:
+            self.send(dict(receipt, status="complete"))
+
+    def _handle_detector_radius_request(self, _widget, content, _buffers) -> None:
+        """Acknowledge a detector resize before computing its complete image."""
+        if not isinstance(content, dict) or content.get("type") != "show4dstem_detector_radius":
+            return
+        receipt = {key: content.get(key) for key in ("view", "epoch", "seq")}
+        receipt["type"] = "show4dstem_detector_radius_receipt"
+        try:
+            context = (
+                "frame_idx vi_source view_mode compare_page_idx roi_mode "
+                "roi_center_row roi_center_col"
+            )
+            if content.get("version") != 1 or self._data is None or self.comm is None:
+                raise ValueError("The radius request is stale; reopen the viewer.")
+            if content.get("context") != [getattr(self, key) for key in context.split()]:
+                raise ValueError("Detector settings changed before this radius request was accepted.")
+            outer, inner = map(float, content["radii"])
+            if not (math.isfinite(outer) and math.isfinite(inner) and 0 <= inner < outer):
+                raise ValueError(
+                    f"Use finite detector radii with 0 <= inner < outer; got {inner}, {outer}."
+                )
+            self.send(dict(receipt, status="accepted"))
+            self._last_interaction_at = time.monotonic()
+            with self.hold_sync(), self.hold_trait_notifications():
+                self.roi_radius, self.roi_radius_inner = outer, inner
+                self.roi_active = True
+            self._on_roi_change()
+            if self._multiple_view_active() and not self.compare_virtual_image_bytes:
+                raise RuntimeError(self.compare_status)
+        except (KeyError, TypeError, ValueError, OverflowError, RuntimeError, MemoryError) as error:
             self._roi_seen = None
             self.send(dict(receipt, status="rejected", error=str(error)))
         else:
