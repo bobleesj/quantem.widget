@@ -3,6 +3,15 @@
 This repository is public. Everything committed here, and everything in its
 history, can be read by anyone. These rules apply to coding agents and humans.
 
+## WebGPU: always, and say so loudly when it is missing (Bob, 2026-10-25)
+
+- Viewers (Show4DSTEM, ShowPtycho, Show2D, ...) always render with WebGPU on the real GPU. Before trusting or
+  reporting anything a viewer shows, check the adapter in the page: `navigator.gpu.requestAdapter()` must give
+  real hardware (e.g. `nvidia blackwell`, subgroup size 32), in a secure context (`localhost` or https).
+- If WebGPU cannot be used (no adapter, insecure context, `swiftshader` CPU fallback), state it explicitly and
+  prominently to Bob, first thing, with the reason. Never silently fall back, and never report timings or
+  results from a fallback renderer as if they came from the GPU.
+
 ## Never commit
 
 - Raw experiment or benchmark logs, manifests, JSONL, profiler dumps, browser
