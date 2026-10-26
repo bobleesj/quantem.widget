@@ -1960,7 +1960,10 @@ function Explore() {
   const fftAutoContrastRef = React.useRef(fftAutoContrast); fftAutoContrastRef.current = fftAutoContrast;
   const showFFTRef = React.useRef(showFFT); showFFTRef.current = showFFT;
   const extraRealViewsRef = React.useRef(extraRealViews); extraRealViewsRef.current = extraRealViews;
-  const rotationDegRef = React.useRef(rotationDeg ?? 0); rotationDegRef.current = rotationDeg ?? 0;
+  // A dragged rotation is held here until release: drags travel on the preview channel, not as a
+  // trait sync per frame, so the widget does not re-render (or wait for kernel idle) per move.
+  const rotationHeldRef = React.useRef<number | null>(null);
+  const rotationDegRef = React.useRef(rotationDeg ?? 0); rotationDegRef.current = rotationHeldRef.current ?? rotationDeg ?? 0;
   const negatePhaseRef = React.useRef(displayNegatePhase);
   negatePhaseRef.current = !!displayNegatePhase;
   const ampDataRef = React.useRef<{ data: Float32Array; w: number; h: number } | null>(null);
@@ -2292,7 +2295,7 @@ function Explore() {
   /** Everything a preview request reconstructs from, so an identical one can be recognised. */
   const requestKey = (c10Val: number, c12Val: number, phi12Val: number) => JSON.stringify([
     c10Val, c12Val, phi12Val, regionContextRef.current?.id ?? null, sampleRef.current, higherOrderRef.current,
-    reconstructionRef.current, model.get("tilt_correction"), model.get("scan_detector_rotation_deg"),
+    reconstructionRef.current, model.get("tilt_correction"), rotationDegRef.current,
   ]);
 
   // The busy mark shows at once and clears only after a short quiet spell: a drag answered faster
@@ -2327,7 +2330,7 @@ function Explore() {
       higher_order: higherOrderRef.current,
       ...reconstructionRef.current,
       tilt_correction: model.get("tilt_correction") !== false,
-      scan_detector_rotation_deg: model.get("scan_detector_rotation_deg"),
+      scan_detector_rotation_deg: rotationDegRef.current,
     }});
   }, [model, showBusy]);
 
@@ -4467,11 +4470,15 @@ function Explore() {
               tipFull: "Scan-detector rotation: angle between scan axes and detector axes.  Sweep to find the sharpest reconstruction.",
               min: rotationUiMin, max: rotationUiMax, step: 0.1,
               setValue: (value: number) => {
-                setRotationDeg(value);
-                if (webgpuSsbRef.current) sendDrag(sliderVals.current.c10, sliderVals.current.c12, sliderVals.current.phi12, value);
+                rotationHeldRef.current = value; rotationDegRef.current = value;
+                sendDrag(sliderVals.current.c10, sliderVals.current.c12, sliderVals.current.phi12, value);
               },
               commitValue: (value: number) => {
+                rotationHeldRef.current = value; rotationDegRef.current = value;
                 if (shouldCommitOnReleaseRef.current) sendCommit(sliderVals.current.c10, sliderVals.current.c12, sliderVals.current.phi12, value);
+                // after the request: Python already holds this value, so the sync changes nothing there
+                rotationHeldRef.current = null;
+                setRotationDeg(value);
               },
             },
           ] as const).filter(aberration => !regionalMode || aberration.key !== 'rot').map(aberration => {

@@ -1263,7 +1263,11 @@ class ShowPtycho(anywidget.AnyWidget):
         # A dragged strength came from the browser, which already shows it: it is not echoed back,
         # so a drag sends one message per frame (the phase) and no extra widget render.
         previous_lock = self._property_lock
-        self._property_lock = {**previous_lock, **{name: request[name] for name in _BROWSER_STRENGTHS if name in request}}
+        echo = {name: request[name] for name in _BROWSER_STRENGTHS if name in request}
+        # A dragged rotation came from the browser too; it adopts the value itself on release.
+        if request.get("scan_detector_rotation_deg") is not None:
+            echo["scan_detector_rotation_deg"] = float(request["scan_detector_rotation_deg"])
+        self._property_lock = {**previous_lock, **echo}
         self._adopting = True
         try:
             with self.hold_sync():
