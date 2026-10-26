@@ -15,6 +15,12 @@ from importlib.metadata import PackageNotFoundError, version
 os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
 warnings.filterwarnings("ignore", message=r"(?s).*multiple CuPy packages.*")
 warnings.filterwarnings("ignore", message=r"(?s).*HF_TOKEN.*")
+# anywidget hot reload (HMR) is a development opt-in: it runs only with
+# ANYWIDGET_HMR=1 and the optional watchfiles package. A kernel that sets
+# ANYWIDGET_HMR=1 globally (an IPython startup file, say) without watchfiles
+# printed "Live-reloading feature is disabled" under every widget cell; the
+# widgets still work, so the nag is silenced. Install watchfiles to get HMR.
+warnings.filterwarnings("ignore", message=r"anywidget: Live-reloading feature is disabled")
 
 _LAZY_EXPORTS: dict[str, tuple[str, str | None]] = {
     "ChooseLattice": ("quantem.widget.choose_lattice", "ChooseLattice"),
