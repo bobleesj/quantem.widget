@@ -142,7 +142,7 @@ def rewrite(earlier, path: pathlib.Path | None = None, data: pathlib.Path | None
 
 def portable(record: dict, path: pathlib.Path, data: pathlib.Path | None) -> dict:
     """Calibration /5 or stars /2 as /6 or /3: ``source`` for ``source_path``, a portable session identity."""
-    from quantem.gpu.ssb.persistence import portable_source
+    from quantem.gpu.direct_ptycho.persistence import portable_source
 
     folder = path.resolve().parent
 
@@ -179,7 +179,7 @@ def session_identity(earlier: dict, data: pathlib.Path, scan_shape) -> dict:
     """A /5 session identity (paths, inodes, times) as the portable one ShowPtycho now compares."""
     import numpy as np
     from quantem.gpu.resident.hot_pixels import median_plan
-    from quantem.gpu.ssb.persistence import acquisition_identity, json_value, source_identity
+    from quantem.gpu.direct_ptycho.persistence import acquisition_identity, json_value, source_identity
 
     signature = earlier.get("source") or {}
     companions = {}

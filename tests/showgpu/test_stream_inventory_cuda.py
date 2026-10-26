@@ -6,17 +6,12 @@ import pytest
 from quantem.widget import Show4DSTEM, ShowGPU
 
 
-def test_monitor_selects_and_unloads_completed_scans_from_live_viewer():
+def test_monitor_selects_and_unloads_completed_scans_from_live_viewer(live_recording):
     cp = pytest.importorskip("cupy")
-    from quantem.gpu.io.live import LiveAcquisition, Recording
-
-    recording = Recording()
+    recording = live_recording(receiving=False)
     raw = cp.arange(256 * 16 * 16, dtype=cp.uint16).reshape(256, 16, 16)
     for index in range(2):
-        acquisition = LiveAcquisition((16, 16), (16, 16), metadata={"series": str(index)})
-        acquisition.add(0, raw + index)
-        recording.acquisitions.append(acquisition)
-        recording.datasets.append(acquisition.finish())
+        recording.add(raw + index, (16, 16), str(index))
     viewer = Show4DSTEM.stream(recording, view_mode="multiple")
     monitor = ShowGPU(running=False, users=False)
     try:

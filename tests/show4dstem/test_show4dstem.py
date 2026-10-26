@@ -10,6 +10,7 @@ where the two paths must agree exactly.
 import gzip
 import json
 import re
+import threading
 import time
 from pathlib import Path
 
@@ -175,24 +176,16 @@ def test_stream_opens_on_the_first_acquisition_and_appends_the_rest_as_they_comp
             acquisition.close()
 
 
-def test_stream_retires_old_scans_without_resetting_detector_or_cursor(accelerator):
+def test_stream_retires_old_scans_without_resetting_detector_or_cursor(accelerator, live_recording):
     if not torch.cuda.is_available():
         pytest.skip("Live ANS acquisition is CUDA only")
     import cupy as cp
-    from quantem.gpu.io.live import BatchFeed, record
 
-    feed = BatchFeed(max_batches=4)
-    recording = record(feed, SCAN, verbose=False)
+    recording = live_recording()
     widget = None
 
     def arrive(index):
-        feed.start_series({"series_id": index, "image_size_y": DET[0], "image_size_x": DET[1]})
-        feed.put(0, cp.asarray(_counts(index)).reshape(-1, *DET))
-        feed.end_series()
-        deadline = time.monotonic() + 5
-        while not recording.datasets or recording.datasets[-1].metadata["series"] != str(index):
-            assert time.monotonic() < deadline and recording.error is None
-            time.sleep(0.01)
+        recording.add(cp.asarray(_counts(index)).reshape(-1, *DET), SCAN, str(index))
 
     try:
         arrive(0)
@@ -218,8 +211,6 @@ def test_stream_retires_old_scans_without_resetting_detector_or_cursor(accelerat
         widget.frame_idx = 1
         np.testing.assert_array_equal(widget.pattern(2, 3), _counts(4)[2, 3])
     finally:
-        feed.close()
-        recording.wait(5)
         if widget is not None:
             widget.close()
         recording.release()
