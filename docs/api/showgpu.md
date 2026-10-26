@@ -19,6 +19,57 @@ monitor
 
 All arguments are optional: `ShowGPU()` uses these defaults.
 
+### Scan inventory during acquisition
+
+Attach the existing monitor to a started recording or acquisition controller.
+This starts no detector or receiver and does not copy diffraction data:
+
+```python
+from quantem.widget import Show4DSTEM
+
+monitor.watch(recording)  # Live DPs, scan shape, encoded bytes and staging bytes.
+viewer = Show4DSTEM.stream(recording)
+monitor.watch(recording, viewer=viewer)  # Click a scan name to inspect its DP/VI.
+```
+
+For a controller with processing and saving queues, watch that controller
+instead of its underlying recording. Its status distinguishes receiving,
+queued, processing, saving and ready scans. Supply the trigger's stop callback
+when available:
+
+```python
+monitor.watch(run, viewer=viewer, stop=replay.close)
+```
+
+**Unload** discards the selected scan's unsaved counts after confirmation.
+Busy scans cannot be unloaded. Saved files remain intact, and the linked
+streaming viewer updates to the remaining scans. Finish other analyses that
+borrow the scan before unloading it. Live reconstruction series require the
+run and pending saves to stop before retained inputs can be unloaded.
+**Stop Acquisition** stops the supplied trigger first, then closes the recording;
+retained scans stay available. `monitor.watch(None)` detaches without stopping
+or releasing the acquisition.
+
+The scan chart shows the last 120 samples of tracked buffers. Encoded bytes
+include interaction indexes; staging is listed separately. Shared codec tables,
+receiver queues, allocator reserves and separate analysis sessions are excluded
+from that sum, but remain included in the driver VRAM totals above. Consequently,
+unloading a scan may not immediately lower driver VRAM by its buffer size.
+
+The driver can identify processes on the notebook server, but cannot enumerate
+the scientific datasets inside an arbitrary process. The scan inventory covers
+the owner explicitly attached in this notebook.
+
+### Process controls
+
+**Terminate** requests SIGTERM after confirming the displayed PID and name.
+It ends all work in that process and may discard unsaved data. Only processes
+owned by the notebook's operating-system user are eligible; the notebook kernel
+and its ancestors are protected. The PID's creation time is rechecked before
+signalling to reject a stale selection. No process is stopped by sampling.
+
+### Python controls
+
 Change the existing monitor without creating another sampler:
 
 ```python
@@ -83,8 +134,12 @@ at most 120 samples per device in the browser.
 | Users | `users` | Compute-user VRAM breakdown shows or hides |
 | User row | expand / collapse | Process IDs, names and VRAM appear underneath |
 | S / M / L / XL | `size` | Text, controls and card layout resize |
+| Scan name | select linked viewer | DP/VI switch to that retained scan |
+| Unload | discard ready scan after confirmation | Scan disappears; linked viewer updates |
+| Stop Acquisition | stop trigger, then recording | Retained scans remain available |
+| Terminate | request SIGTERM for an eligible PID | Process exits if it accepts the signal |
 
 ```{eval-rst}
 .. autoclass:: quantem.widget.showgpu.ShowGPU
-   :members: refresh, close
+   :members: watch, refresh, close
 ```

@@ -1,4 +1,4 @@
-"""Live, read-only notebook resource monitoring."""
+"""Live notebook resource monitoring and explicit scan lifecycle controls."""
 
 import math
 import os
@@ -28,6 +28,9 @@ def sample(*, users: bool = True) -> dict:
     else:
         snapshot = status(processes=users)
     if users and "processes" in snapshot:
+        kernel = psutil.Process()
+        protected = {os.getpid(), *(parent.pid for parent in kernel.parents())}
+        username = kernel.username()
         identities = {}
         groups = {}
         for process in snapshot.pop("processes"):
@@ -35,7 +38,7 @@ def sample(*, users: bool = True) -> dict:
             if pid not in identities:
                 try:
                     identities[pid] = psutil.Process(pid).as_dict(
-                        attrs=["username", "name"], ad_value=None
+                        attrs=["username", "name", "create_time"], ad_value=None
                     )
                 except (psutil.Error, OSError):
                     identities[pid] = {"username": None, "name": None}
@@ -56,6 +59,10 @@ def sample(*, users: bool = True) -> dict:
                     "pid": pid,
                     "name": identity["name"],
                     "used_bytes": process["used_bytes"],
+                    "created_at": identity.get("create_time"),
+                    "can_terminate": (pid not in protected and pid > 1 and
+                                      identity.get("create_time") is not None and
+                                      identity["username"] == username),
                 }
             )
             if process["used_bytes"] is None or group["used_bytes"] is None:
@@ -101,8 +108,9 @@ class ShowGPU(anywidget.AnyWidget):
     """Monitor live GPU and system memory on the notebook's server.
 
     Readings continue from a background thread while notebook code runs.
-    This monitor never allocates GPU memory, synchronizes compute, releases
+    Sampling never allocates GPU memory, synchronizes compute, releases
     caches or changes device selection. Driver rows include other processes.
+    Explicit controls can unload watched scans or terminate an owned process.
     A timestamp and stale indicator distinguish live readings from saved output.
 
     Parameters
@@ -145,6 +153,7 @@ class ShowGPU(anywidget.AnyWidget):
 
     _esm = Path(__file__).parent / "static" / "showgpu.js"
     snapshot = traitlets.Dict().tag(sync=True)
+    action_status = traitlets.Dict().tag(sync=True)
     interval = traitlets.Float(1.0).tag(sync=True)
     running = traitlets.Bool(True).tag(sync=True)
     users = traitlets.Bool(True).tag(sync=True)
@@ -166,6 +175,11 @@ class ShowGPU(anywidget.AnyWidget):
         self._sample_lock = threading.Lock()
         self._sequence = 0
         self._worker = None
+        self._recording = self._viewer = None
+        self._stop_acquisition = None
+        self._watch_id = 0
+        self._action_thread = None
+        self._watch_lock = threading.RLock()
         super().__init__(
             users=users, expand=expand, size=size, interval=interval, running=running
         )
@@ -179,6 +193,35 @@ class ShowGPU(anywidget.AnyWidget):
         )
         weakref.finalize(self, self._stop.set)
         self._worker.start()
+
+    def watch(self, recording, *, viewer=None, stop=None) -> None:
+        """Show the scan inventory of an acquisition already started by the user.
+
+        Parameters
+        ----------
+        recording : object or None
+            Recording or acquisition controller exposing ``memory_snapshot()``
+            and ``unload(scan_id)``. None detaches it without releasing data.
+        viewer : Show4DSTEM, optional
+            Its streaming view updates after a scan is unloaded.
+        stop : callable, optional
+            Stop the acquisition trigger before closing the recording, for
+            example ``replay.close``. Runs only after an explicit Stop action.
+
+        Examples
+        --------
+        >>> monitor.watch(run, viewer=viewer, stop=replay.close)
+        """
+        if recording is not None and not (callable(getattr(recording, "memory_snapshot", None))
+                                          and callable(getattr(recording, "unload", None))):
+            raise TypeError("Watch a live Recording or acquisition controller with memory_snapshot() and unload().")
+        with self._watch_lock:
+            self._watch_id += 1
+            self._recording = None if recording is None else weakref.ref(recording)
+            self._viewer = None if viewer is None else weakref.ref(viewer)
+            self._stop_acquisition = stop
+        self.action_status = {}
+        self.refresh()
 
     @traitlets.validate("interval")
     def validate_interval(self, proposal):
@@ -225,6 +268,17 @@ class ShowGPU(anywidget.AnyWidget):
                 }
             self._sequence += 1
             snapshot["sequence"] = self._sequence
+            with self._watch_lock:
+                recording = None if self._recording is None else self._recording()
+                watch_id = self._watch_id
+                viewer = None if self._viewer is None else self._viewer()
+            if recording is not None:
+                try:
+                    snapshot["recording"] = recording.memory_snapshot()
+                except Exception as exc:  # noqa: BLE001 - expose provider failures without losing driver readings
+                    snapshot["recording"] = {"scans": [], "error": str(exc)}
+                snapshot["recording"]["watch_id"] = watch_id
+                snapshot["recording"]["can_select"] = viewer is not None
             if not self._stop.is_set():
                 self.snapshot = snapshot
             return self.snapshot
@@ -232,9 +286,76 @@ class ShowGPU(anywidget.AnyWidget):
             self._sample_lock.release()
 
     def handle_message(self, widget, content: dict, buffers) -> None:
-        """Handle an explicit browser refresh."""
-        if content.get("action") == "refresh":
+        """Apply explicit, identified actions to the current watched resources."""
+        if self._stop.is_set():
+            return
+        action = content.get("action")
+        if action == "refresh":
             self.refresh()
+            return
+        if self._action_thread is not None and self._action_thread.is_alive():
+            return
+        try:
+            if action == "terminate":
+                self.terminate_process(content.get("pid"), content.get("created_at"))
+                self.action_status = {"message": f"Termination requested for PID {content['pid']}."}
+            elif action in {"unload", "stop_acquisition", "select_scan"}:
+                recording = None if self._recording is None else self._recording()
+                if recording is None or content.get("watch_id") != self._watch_id:
+                    raise ValueError("The watched acquisition changed; refresh and select it again.")
+                if action == "select_scan":
+                    viewer = None if self._viewer is None else self._viewer()
+                    if viewer is not None:
+                        viewer.refresh_stream(content.get("scan_id"))
+                elif action == "unload":
+                    recording.unload(content.get("scan_id"))
+                    viewer = None if self._viewer is None else self._viewer()
+                    if viewer is not None:
+                        viewer.refresh_stream()
+                    self.action_status = {"message": "Scan unloaded. Driver VRAM may include allocator reserves or other consumers."}
+                else:
+                    self.action_status = {"message": "Stopping acquisition and draining pending work…", "busy": True}
+                    stop, watch_id = self._stop_acquisition, self._watch_id
+
+                    def finish():
+                        try:
+                            if stop is not None:
+                                stop()
+                            recording.close()
+                            status = {"message": "Stop requested; retained scans remain available."}
+                        except Exception as exc:  # noqa: BLE001 - report user-controller errors in the widget
+                            status = {"message": str(exc), "error": True}
+                        if self._watch_id == watch_id:
+                            self.action_status = status
+                            self.refresh()
+
+                    self._action_thread = threading.Thread(target=finish, name="ShowGPU stop acquisition", daemon=True)
+                    self._action_thread.start()
+        except Exception as exc:  # noqa: BLE001 - report explicit action failures to their requester
+            self.action_status = {"message": str(exc), "error": True}
+        self.refresh()
+
+    def terminate_process(self, pid: int, created_at: float) -> None:
+        """Request SIGTERM for a displayed process owned by this operating-system user.
+
+        The notebook kernel and its ancestors are protected. Creation time is
+        checked immediately before signalling so a reused PID is not targeted.
+
+        Examples
+        --------
+        >>> monitor.terminate_process(process["pid"], process["created_at"])
+        """
+        shown = [process for gpu in self.snapshot.get("gpus", [])
+                 for user in gpu.get("users", []) for process in user.get("process_details", [])]
+        if not any(item["pid"] == pid and item.get("created_at") == created_at
+                   and item.get("can_terminate") for item in shown):
+            raise ValueError("Select an owned process from the current live sample; this process cannot be terminated here.")
+        process = psutil.Process(pid)
+        protected = {os.getpid(), *(parent.pid for parent in psutil.Process().parents())}
+        if (pid in protected or pid <= 1 or process.username() != psutil.Process().username()
+                or process.create_time() != created_at):
+            raise ValueError("The process identity or ownership changed; refresh before trying again.")
+        process.terminate()
 
     def close(self) -> None:
         """Stop automatic sampling and close the notebook display.
@@ -248,4 +369,8 @@ class ShowGPU(anywidget.AnyWidget):
         worker = getattr(self, "_worker", None)
         if worker is not None and worker is not threading.current_thread():
             worker.join(timeout=4.5)
+        if hasattr(self, "_watch_lock"):
+            with self._watch_lock:
+                self._watch_id += 1
+                self._recording = self._viewer = self._stop_acquisition = None
         super().close()

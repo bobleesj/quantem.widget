@@ -20,7 +20,8 @@ type GPUReading = {
     name: string | null;
     used_bytes: number | null;
     processes: number;
-    process_details?: { pid: number; name: string | null; used_bytes: number | null }[];
+    process_details?: { pid: number; name: string | null; used_bytes: number | null;
+      created_at?: number; can_terminate?: boolean }[];
   }[];
 };
 
@@ -41,6 +42,17 @@ type Snapshot = {
     used_bytes?: number;
     available_bytes?: number;
     kernel_rss_bytes?: number;
+  };
+  recording?: {
+    watch_id: number;
+    receiving?: boolean;
+    error?: string | null;
+    can_select?: boolean;
+    scans: {
+      id: string; name: string; device: string; shape: number[];
+      received: number; total: number; resident_bytes: number; index_bytes: number;
+      staging_bytes: number; state: string; saved?: boolean; can_unload: boolean; unload_reason: string;
+    }[];
   };
 };
 
@@ -82,11 +94,20 @@ function ShowGPUView() {
   const [users, setUsers] = useModelState<boolean>("users");
   const [expand] = useModelState<boolean>("expand");
   const [size, setSize] = useModelState<DisplaySize>("size");
+  const [actionStatus] = useModelState<{ message?: string; error?: boolean; busy?: boolean }>("action_status");
+  const [confirmation, setConfirmation] = React.useState<{ message: string; command: Record<string, unknown> } | null>(null);
+  const confirmationPanel = React.useRef<HTMLDivElement>(null);
   const { colors } = useTheme();
   const [now, setNow] = React.useState(Date.now());
   const [receivedAt, setReceivedAt] = React.useState<number | null>(null);
   const initialSequence = React.useRef(snapshot?.sequence);
   const [history, setHistory] = React.useState<Record<string, number[]>>({});
+  const [scanHistory, setScanHistory] = React.useState<number[]>([]);
+  const watched = React.useRef(snapshot?.recording?.watch_id);
+
+  React.useEffect(() => {
+    confirmationPanel.current?.scrollIntoView({ block: "nearest" });
+  }, [confirmation]);
 
   React.useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -103,6 +124,13 @@ function ShowGPUView() {
       }
       return next;
     });
+    const current = snapshot?.recording;
+    if (current) {
+      const bytes = current.scans.reduce((sum, scan) => sum + scan.resident_bytes + scan.staging_bytes, 0);
+      const changed = watched.current !== current.watch_id;
+      setScanHistory(previous => [...(changed ? [] : previous), bytes].slice(-120));
+    } else setScanHistory([]);
+    watched.current = current?.watch_id;
   }, [snapshot?.sequence]);
 
   const stale = receivedAt != null && now - receivedAt > Math.max(5000, interval * 3000);
@@ -113,6 +141,8 @@ function ShowGPUView() {
   const mask = snapshot?.cuda_visible_devices;
   const fontSize = TEXT_SIZES[size] ?? TEXT_SIZES.medium;
   const button = { ...compactButton, fontSize: "0.92em", lineHeight: 1.5 };
+  const recording = snapshot?.recording;
+  const scanBytes = recording?.scans.reduce((sum, scan) => sum + scan.resident_bytes + scan.staging_bytes, 0) ?? 0;
 
   return <Box data-testid="showgpu" data-size={size} sx={{ fontFamily: WIDGET_UI_FONT, fontSize, lineHeight: 1.5, color: colors.text,
     bgcolor: colors.bg, border: `1px solid ${colors.border}`, borderRadius: 1, p: 1,
@@ -135,6 +165,14 @@ function ShowGPUView() {
       <Button size="small" sx={button} onClick={() => setRunning(!running)}>{running ? "Pause" : "Resume"}</Button>
       <Button size="small" sx={button} onClick={() => model.send({ action: "refresh" })}>Refresh</Button>
     </Box>
+    {confirmation && <Box ref={confirmationPanel} role="alert" sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap", mb: 1, p: 1, bgcolor: colors.bgAlt }}>
+      <span style={{ flex: 1 }}>{confirmation.message}</span>
+      <Button size="small" sx={button} disabled={!!actionStatus?.busy} onClick={() => {
+        model.send(confirmation.command); setConfirmation(null);
+      }}>Confirm</Button>
+      <Button size="small" sx={button} onClick={() => setConfirmation(null)}>Cancel</Button>
+    </Box>}
+    {actionStatus?.message && <div role="status" style={{ marginBottom: 8, color: actionStatus.error ? "#d32f2f" : colors.textMuted }}>{actionStatus.message}</div>}
     {snapshot?.error && <div role="status" style={{ marginBottom: 8 }}>{snapshot.error}</div>}
     {users && snapshot?.process_error && <div role="status" style={{ marginBottom: 8 }}>{snapshot.process_error}</div>}
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 20em), 1fr))", gap: 8 }}>
@@ -169,11 +207,19 @@ function ShowGPUView() {
                     <th scope="col" style={{ width: "5.5em", fontWeight: 400 }}>PID</th>
                     <th scope="col" style={{ fontWeight: 400 }}>Process</th>
                     <th scope="col" style={{ width: "6em", fontWeight: 400, textAlign: "right" }}>VRAM</th>
+                    <th scope="col" style={{ width: "6em", fontWeight: 400 }} aria-label="Process actions" />
                   </tr></thead>
                   <tbody>{user.process_details.map(process => <tr key={process.pid}>
                     <td style={{ verticalAlign: "top", padding: "3px 4px 3px 0" }}>{process.pid}</td>
                     <td style={{ verticalAlign: "top", padding: "3px 4px 3px 0", overflowWrap: "anywhere" }}>{process.name ?? "Unavailable"}</td>
                     <td style={{ verticalAlign: "top", padding: "3px 0", textAlign: "right" }}>{processMemory(process.used_bytes)}</td>
+                    <td style={{ textAlign: "right", verticalAlign: "top" }}>
+                      {process.can_terminate && <Button size="small" sx={button} aria-label={`Terminate PID ${process.pid}`} disabled={!!actionStatus?.busy}
+                        onClick={() => setConfirmation({
+                          message: `Terminate PID ${process.pid} (${process.name ?? "process"})? This stops all its GPU work and discards unsaved data.`,
+                          command: { action: "terminate", pid: process.pid, created_at: process.created_at },
+                        })}>Terminate</Button>}
+                    </td>
                   </tr>)}</tbody>
                 </table>}
             </details>)}
@@ -191,6 +237,44 @@ function ShowGPUView() {
         <div style={{ color: colors.textMuted, marginTop: 4 }}>Includes reclaimable RAM in available.</div>
       </div>
     </div>
+    {recording && <section aria-label="Resident scans" style={{ marginTop: 12, borderTop: `1px solid ${colors.border}`, paddingTop: 8 }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <strong>Scans {recording.scans.length}</strong>
+        <span style={{ color: colors.accent }}>{recording.receiving ? "Acquiring / processing" : "Stopped"}</span>
+        <span>{processMemory(scanBytes)} in tracked buffers</span>
+        <span style={{ color: colors.textMuted }}>Peak {processMemory(Math.max(0, ...scanHistory))} · last {scanHistory.length} samples</span>
+        {recording.receiving && <Button size="small" sx={button} disabled={!!actionStatus?.busy} onClick={() => setConfirmation({
+          message: "Stop this acquisition and drain pending work? Retained scans stay in memory.",
+          command: { action: "stop_acquisition", watch_id: recording.watch_id },
+        })}>Stop Acquisition</Button>}
+      </div>
+      <Sparkline values={scanHistory} total={Math.max(1, ...scanHistory)} color={colors.accent} />
+      {recording.error && <div role="status" style={{ color: "#d32f2f" }}>{recording.error}</div>}
+      {!recording.scans.length && <div style={{ color: colors.textMuted }}>No retained raw scans.</div>}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 24em), 1fr))", gap: 8 }}>
+        {recording.scans.map(scan => <div key={scan.id} style={card} data-testid={`scan-${scan.id}`}>
+          <div style={{ display: "flex", gap: 8, alignItems: "baseline", justifyContent: "space-between" }}>
+            {recording.can_select && scan.received > 0 ? <Button size="small" sx={{ ...button, textTransform: "none", maxWidth: "70%", overflowWrap: "anywhere" }}
+              aria-label={`View scan ${scan.name}`} onClick={() => model.send({ action: "select_scan", scan_id: scan.id, watch_id: recording.watch_id })}>{scan.name}</Button> :
+              <strong style={{ overflowWrap: "anywhere" }}>{scan.name}</strong>}
+            <span>{scan.state}</span>
+          </div>
+          <div>{scan.received.toLocaleString()} / {scan.total.toLocaleString()} DPs</div>
+          <Meter used={scan.received} total={scan.total} color={colors.accent} background={colors.border} label={`${scan.name} received patterns`} />
+          <div style={{ color: colors.textMuted }}>{scan.shape.slice(0, 2).join(" × ")} scan · {scan.shape.slice(2).join(" × ")} DP · {scan.device} (logical)</div>
+          <div>{processMemory(scan.resident_bytes)} encoded + indexes · {processMemory(scan.staging_bytes)} staging</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ color: colors.textMuted }}>{scan.saved === true ? "Saved" : scan.saved === false ? "Not saved" : "Save status unknown"}</span>
+            <span title={scan.unload_reason}><Button size="small" sx={button} disabled={!scan.can_unload || !!actionStatus?.busy}
+              aria-label={`Unload scan ${scan.name}`} onClick={() => setConfirmation({
+                message: `Unload scan ${scan.name}? Unsaved counts are discarded; saved files remain. Finish other analyses using this scan first.`,
+                command: { action: "unload", scan_id: scan.id, watch_id: recording.watch_id },
+              })}>Unload</Button></span>
+          </div>
+        </div>)}
+      </div>
+      <div style={{ color: colors.textMuted, fontSize: "0.85em", marginTop: 6 }}>Tracked buffers exclude allocator reserves, shared codec tables, receiver queues and separate analysis sessions. Device VRAM above includes them.</div>
+    </section>}
     <div style={{ marginTop: 8, color: colors.textMuted, fontSize: "0.85em", display: "flex", flexWrap: "wrap", gap: "4px 12px" }}>
       <span>Physical driver IDs · all processes · driver reserve may make used + free less than total.</span>
       {users && <span>User totals cover reported compute processes; graphics and driver memory are excluded.</span>}

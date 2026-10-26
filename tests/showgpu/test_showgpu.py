@@ -1,5 +1,8 @@
 """A live monitor updates during work and releases its sampling thread."""
 
+import os
+import subprocess
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -140,6 +143,8 @@ def test_compute_users_are_grouped_per_gpu_and_missing_values_stay_missing(monke
         return SimpleNamespace(
             as_dict=lambda **kwargs: {"username": "example-user", "name": "python"},
             memory_info=lambda: SimpleNamespace(rss=50),
+            parents=list,
+            username=lambda: "example-user",
         )
 
     monkeypatch.setattr(telemetry, "status", status)
@@ -151,15 +156,15 @@ def test_compute_users_are_grouped_per_gpu_and_missing_values_stay_missing(monke
             "used_bytes": 300,
             "processes": 2,
             "process_details": [
-                {"pid": 1, "name": "python", "used_bytes": 100},
-                {"pid": 2, "name": "python", "used_bytes": 200},
+                {"pid": 1, "name": "python", "used_bytes": 100, "created_at": None, "can_terminate": False},
+                {"pid": 2, "name": "python", "used_bytes": 200, "created_at": None, "can_terminate": False},
             ],
         },
         {
             "name": None,
             "used_bytes": 300,
             "processes": 1,
-            "process_details": [{"pid": 3, "name": None, "used_bytes": 300}],
+            "process_details": [{"pid": 3, "name": None, "used_bytes": 300, "created_at": None, "can_terminate": False}],
         },
     ]
     assert snapshot["gpus"][1]["users"] == [
@@ -167,10 +172,77 @@ def test_compute_users_are_grouped_per_gpu_and_missing_values_stay_missing(monke
             "name": "example-user",
             "used_bytes": None,
             "processes": 1,
-            "process_details": [{"pid": 1, "name": "python", "used_bytes": None}],
+            "process_details": [{"pid": 1, "name": "python", "used_bytes": None, "created_at": None, "can_terminate": False}],
         },
     ]
     assert "processes" not in snapshot
     snapshot = showgpu.sample(users=False)
     assert queried_users == [True, False]
     assert all("users" not in gpu for gpu in snapshot["gpus"])
+
+
+def test_watch_unload_select_and_stop_only_the_current_acquisition(monkeypatch):
+    monkeypatch.setattr(showgpu, "sample", lambda **kwargs: {"gpus": []})
+
+    class Recording:
+        def __init__(self):
+            self.scans = [{"id": "scan-a", "state": "Ready"}]
+            self.receiving = True
+
+        def memory_snapshot(self):
+            return {"scans": list(self.scans), "receiving": self.receiving}
+
+        def unload(self, scan_id):
+            self.scans = [scan for scan in self.scans if scan["id"] != scan_id]
+
+        def close(self):
+            self.receiving = False
+
+    selected, stopped = [], threading.Event()
+    viewer = SimpleNamespace(refresh_stream=lambda scan=None: selected.append(scan))
+    # A real widget is weak-referenceable; use a small view owner here as well.
+    class View:
+        refresh_stream = staticmethod(viewer.refresh_stream)
+
+    view, recording = View(), Recording()
+    monitor = ShowGPU(running=False)
+    try:
+        monitor.watch(recording, viewer=view, stop=stopped.set)
+        watch_id = monitor.snapshot["recording"]["watch_id"]
+        monitor.handle_message(None, {"action": "select_scan", "watch_id": watch_id, "scan_id": "scan-a"}, [])
+        assert selected == ["scan-a"]
+        monitor.handle_message(None, {"action": "unload", "watch_id": watch_id, "scan_id": "scan-a"}, [])
+        assert not monitor.snapshot["recording"]["scans"] and selected[-1] is None
+        monitor.handle_message(None, {"action": "stop_acquisition", "watch_id": watch_id}, [])
+        monitor._action_thread.join(2)
+        assert stopped.is_set() and not recording.receiving
+        replacement = Recording()
+        monitor.watch(replacement)
+        monitor.handle_message(None, {"action": "unload", "watch_id": watch_id, "scan_id": "scan-a"}, [])
+        assert replacement.scans and monitor.action_status["error"]
+    finally:
+        monitor.close()
+
+
+def test_terminate_owned_child_preserves_kernel_and_checks_process_identity(monkeypatch):
+    monkeypatch.setattr(showgpu, "sample", lambda **kwargs: {"gpus": []})
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    monitor = ShowGPU(running=False)
+    try:
+        created = psutil.Process(child.pid).create_time()
+        monitor.snapshot = {"gpus": [{"users": [{"process_details": [
+            {"pid": child.pid, "created_at": created, "can_terminate": True},
+            {"pid": os.getpid(), "created_at": psutil.Process().create_time(), "can_terminate": True},
+        ]}]}]}
+        with pytest.raises(ValueError, match="current live sample"):
+            monitor.terminate_process(child.pid, created - 1)
+        assert child.poll() is None
+        with pytest.raises(ValueError, match="identity or ownership"):
+            monitor.terminate_process(os.getpid(), psutil.Process().create_time())
+        monitor.terminate_process(child.pid, created)
+        child.wait(timeout=3)
+    finally:
+        if child.poll() is None:
+            child.terminate()
+            child.wait(timeout=3)
+        monitor.close()
