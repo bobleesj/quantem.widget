@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { WebGPUSSBBackend } from "../.generated/engine/ssb/webgpu/backend";
+import type { WebGPUSSBBackend } from "../.generated/engine/direct_ptycho/webgpu/backend";
 import { higherOrderAzimuthKey, higherOrderMagnitudeKey, reconstruct } from "./engineAdapter";
 
 describe("the units at the engine boundary", () => {

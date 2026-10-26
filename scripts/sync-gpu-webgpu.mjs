@@ -27,7 +27,7 @@ const repoRoot = path.resolve(scriptDir, "..");
 // quantem.gpu domains the widget bundles take as-is. Everything else listed in
 // quantem.gpu's webgpu/sources.json (display, device, geometry, parity) is
 // either widget-owned or unused by the widget.
-export const SCIENCE_DOMAINS = ["detector/", "dpc/", "formats/", "io/", "ssb/"];
+export const SCIENCE_DOMAINS = ["detector/", "dpc/", "formats/", "io/", "direct_ptycho/"];
 export const PINNED_GPU_REF = readFileSync(path.join(repoRoot, "gpu-ref.txt"), "utf8").trim();
 
 /** quantem.gpu's src directory beside this checkout (``../quantem.gpu/src``), or null. */
