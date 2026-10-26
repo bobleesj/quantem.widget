@@ -1297,7 +1297,7 @@ class ShowPtycho(anywidget.AnyWidget):
         finally:
             self._adopting = False
             self._property_lock = previous_lock
-        if request["id"] > 0 and request["id"] <= getattr(self, "_browser_id", 0):
+        if request["id"] > 0 and request["id"] < getattr(self, "_browser_id", 0):
             return  # an older browser request arriving late: a newer one already ran
         self._browser_id = request["id"]
         self._inflight_id = request["id"]
