@@ -236,7 +236,7 @@ export function useLocalTiltWorkspace({ Panel, tc, ui, overviewSize, zoom, setZo
     const reply=JSON.parse(replyJson);
     if(reply.status==='running'){
       setPending(true);busyRef.current=true;setFittingSelection(reply.signature);
-      if(reply.stage==='joint_fit')setStatus(`Refitting ${reply.label} · ${reply.num_trials} trials + ${reply.refinement==='newton'?'Newton':reply.refinement||'no refinement'}`);
+      if(reply.stage==='joint_fit')setStatus(`Refitting ${reply.label} · ${reply.num_trials} trials + refinement`);
       else if(reply.stage==='preparing')setStatus(`Preparing ${reply.label}`);
       else if(reply.stage==='reconstructing')setStatus(`Reconstructing ${reply.label} · full scan`);
       return;

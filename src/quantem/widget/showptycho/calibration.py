@@ -11,8 +11,7 @@ from quantem.widget.adapters.gpu import DirectSession
 RETIRED_PHASE_ESTIMATORS = ("mean_phase", "complex_wave")
 
 
-def read_calibration(path: Path, identity: dict | None, scan_region: tuple[int, int, int, int],
-                     phase_estimator: str | None, schema: str) -> dict:
+def read_calibration(path: Path, identity: dict | None, scan_region: tuple[int, int, int, int], schema: str) -> dict:
     """Require matching evidence and a complete, finite model of the session's whole scan.
 
     ``scan_region`` is ``(row_start, row_stop, col_start, col_stop)`` of the
@@ -37,8 +36,6 @@ def read_calibration(path: Path, identity: dict | None, scan_region: tuple[int, 
     estimator = saved["phase_estimator"]
     if estimator not in ("phase_of_mean", *RETIRED_PHASE_ESTIMATORS):
         raise ValueError("the saved phase estimator is not supported")
-    if phase_estimator is not None and estimator not in RETIRED_PHASE_ESTIMATORS and phase_estimator != estimator:
-        raise ValueError("the requested phase estimator differs from the saved fit")
     reconstruction = dict(saved.get("reconstruction") or saved.get("reconstruction_options") or {})
     method = reconstruction.setdefault("method", saved.get("reconstruction_method", "ssb"))
     if method not in ("ssb", "phase", "complex"):
