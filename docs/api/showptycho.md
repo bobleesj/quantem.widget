@@ -176,10 +176,7 @@ rebuilding the corresponding system. The achievable display rate depends on
 image size and the notebook/browser connection; no fixed frame rate is promised.
 
 `phase_damping=0.03` and `amplitude_damping=0.03` are independent
-Tikhonov damping strengths of the direct least-squares solve. The earlier
-spellings `phase_regularization`, `amplitude_regularization` and
-`upsampling_factor` still work during a transition with a `DeprecationWarning`;
-passing both spellings raises `TypeError`. `smoothness_inv_A=1.0` sets the prior's frequency scale in inverse
+Tikhonov damping strengths of the direct least-squares solve. `smoothness_inv_A=1.0` sets the prior's frequency scale in inverse
 angstroms; use `0` for a flat regularizer. Save records the method and all active
 strengths and detector weighting. With the default `method=None`, a compatible
 saved method is restored automatically; without a save, SSB is used. An explicit
@@ -390,10 +387,8 @@ angle in [0, 360), beside `scan_detector_rotation_flipped`; `scan_sampling_A` an
 messages use these names, and each file names its layout in a `schema` string
 (`quantem.ssb-calibration/7`, `quantem.ssb-stars/4`,
 `quantem.ssb-browser-calibration/3`, `quantem.ssb-browser-folder/3`,
-`quantem.ssb-snapshots/2`). A `quantem.ssb-calibration/6` file, which named
-the output factor `upsampling_factor` and the damping strengths
-`phase_regularization` and `amplitude_regularization`, still restores with
-the same values. No file holds an absolute path: `calibration.json`
+`quantem.ssb-snapshots/2`). An earlier `quantem.ssb-calibration/6` file is
+rewritten once with `scripts/rewrite_ssb_calibration.py`. No file holds an absolute path: `calibration.json`
 and each star name the acquisition as `source`, its file name and, when the
 data lives under the save folder, its path relative to it; the session
 identity a restore compares is quantem.gpu's portable `source_identity` (file

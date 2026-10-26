@@ -5,10 +5,6 @@ import math
 from pathlib import Path
 
 from quantem.widget.adapters.gpu import DirectSession
-from quantem.widget.showptycho._renamed import current_keys
-
-# the one earlier layout each current one still reads: /6 named upsampling and the damping strengths otherwise
-PREVIOUS_SCHEMAS = {"quantem.ssb-calibration/7": "quantem.ssb-calibration/6"}
 
 # quantem.gpu retired these SSB phase estimators for the phase of the mean wave, "phase_of_mean". A saved fit that
 # names one still restores its optics; the widget reconstructs them with phase_of_mean and says so once.
@@ -24,9 +20,6 @@ def read_calibration(path: Path, identity: dict | None, scan_region: tuple[int, 
     """
     saved = json.loads(path.read_text(encoding="utf-8"))
     found = saved.get("schema") if isinstance(saved, dict) else None
-    if found == PREVIOUS_SCHEMAS.get(schema):
-        # the same record with upsampling_factor and the *_regularization strengths under their current names
-        saved, found = current_keys(saved), schema
     if found != schema:
         rewrite = ("; rewrite it once with scripts/rewrite_ssb_calibration.py from the quantem.widget repository"
                    if isinstance(found, str) and found.startswith("quantem.ssb-calibration/") else "")

@@ -41,7 +41,6 @@ from quantem.widget.adapters import core as core_adapter
 from quantem.widget.adapters import gpu as gpu_adapter
 from quantem.widget.colormap import colorize, contrast_uint8
 from quantem.widget.device import gpu_path_hint, no_gpu_path
-from quantem.widget.showptycho._renamed import renamed_keywords
 from quantem.widget.showptycho.calibration import RETIRED_PHASE_ESTIMATORS
 from quantem.widget.showptycho.export import write_showptycho_folder
 from quantem.widget.units import axis_pair, image_axes, per_axis, stated, wrap_degrees
@@ -167,9 +166,7 @@ class ShowPtycho(anywidget.AnyWidget):
         Independent positive stabilization strengths. Omitted values restore the
         saved strengths or use 0.03. Explicit values override saved strengths.
         Tikhonov damping of the direct least-squares solve. Amplitude damping
-        is used only for complex reconstruction. The earlier spellings
-        ``phase_regularization`` and ``amplitude_regularization`` still work
-        with a DeprecationWarning.
+        is used only for complex reconstruction.
         These controls use a cached fixed-optics solve, not display smoothing.
     smoothness_inv_A : float, optional
         Frequency scale of the smoothness prior in inverse angstroms; 1.0 by
@@ -695,7 +692,6 @@ class ShowPtycho(anywidget.AnyWidget):
         finally:
             self._region_busy = False
 
-    @renamed_keywords("phase_regularization", "amplitude_regularization", "upsampling_factor")
     def __init__(
         self,
         data,

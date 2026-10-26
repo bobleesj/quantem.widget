@@ -56,6 +56,18 @@ CALIBRATION_SCHEMA = "quantem.ssb-calibration/7"
 STARS_SCHEMA = "quantem.ssb-stars/4"
 # the layouts before upsampling, phase_damping and amplitude_damping, carried over by renaming those keys
 DAMPING_RENAMED = {"quantem.ssb-calibration/6": CALIBRATION_SCHEMA, "quantem.ssb-stars/3": STARS_SCHEMA}
+# /6 and stars /3 spellings -> their /7 and /4 names
+DAMPING_KEYS = {"phase_regularization": "phase_damping", "amplitude_regularization": "amplitude_damping",
+                "upsampling_factor": "upsampling"}
+
+
+def damping_names(value):
+    """``value`` with every /6 key renamed, recursively: the record /7 reads."""
+    if isinstance(value, dict):
+        return {DAMPING_KEYS.get(key, key): damping_names(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [damping_names(item) for item in value]
+    return value
 # the layouts with an absolute source_path, carried to the current ones by portable()
 PATH_CALIBRATION_SCHEMA = "quantem.ssb-calibration/5"
 PATH_STARS_SCHEMA = "quantem.ssb-stars/2"
@@ -134,9 +146,7 @@ def rewrite(earlier, path: pathlib.Path | None = None, data: pathlib.Path | None
     if current is not None and current.get("schema") in (PATH_CALIBRATION_SCHEMA, PATH_STARS_SCHEMA):
         current = portable(current, pathlib.Path.cwd() / "calibration.json" if path is None else path, data)
     if current is not None and current.get("schema") in (CALIBRATION_SCHEMA, STARS_SCHEMA):
-        from quantem.widget.showptycho._renamed import current_keys
-
-        current = current_keys(current)
+        current = damping_names(current)
     return current, notes
 
 
