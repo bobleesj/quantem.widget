@@ -1185,7 +1185,8 @@ class ShowPtycho(anywidget.AnyWidget):
         # float32 ulps in 1-7 ms instead of 30-50. A drag frame that repeats the last values (the browser
         # coalesces moves) stays on that window. Releases, other settings and first frames stay exact.
         previous = getattr(self, "_drag_model", None)
-        options_key = json.dumps(options, sort_keys=True, default=str)
+        # the rotation is part of the key: a rotation drag is never a window drag, and never builds or drops windows
+        options_key = json.dumps({**options, "rotation": self.scan_detector_rotation_deg}, sort_keys=True, default=str)
         same_options = options_key == getattr(self, "_drag_options_key", None)
         moved = [] if previous is None else [name for name in model if previous.get(name, model[name]) != model[name]]
         if not moved and same_options and getattr(self, "_drag_control", None):
@@ -1195,7 +1196,9 @@ class ShowPtycho(anywidget.AnyWidget):
             phase, loss = self._ssb.drag(moved[0], model, **options), None
         else:
             phase, loss = self._ssb.preview(model, compute_loss=compute_loss and self.compute_loss, **options)
+        rotating = self.scan_detector_rotation_deg != getattr(self, "_drag_rotation", self.scan_detector_rotation_deg)
         self._drag_model, self._drag_options_key = model, options_key
+        self._drag_rotation = self.scan_detector_rotation_deg
         self._drag_control = moved[0] if dragging else None
         if request_id != self._inflight_id:
             return
@@ -1216,10 +1219,10 @@ class ShowPtycho(anywidget.AnyWidget):
         if dragging:
             # one window node per frame, after the frame has left
             self._ssb.advance()
-        elif (compute_loss or not same_options) and getattr(self._ssb, "drag_windows", False):
-            # a release, the first frame or other settings: windows along the slider just used and the three
-            # main ones build while the sliders rest, so the next grab starts on window frames
-            # (no work once they exist for these inputs)
+        elif (compute_loss or not (same_options or rotating)) and getattr(self._ssb, "drag_windows", False):
+            # a release, the first frame, a method switch or other settings (not a rotation drag frame): windows
+            # along the slider just used and the three main ones build while the sliders rest, so the next grab
+            # starts on window frames (no work once they exist for these inputs)
             controls = dict.fromkeys(moved + ["C10_nm", "C12_nm", "phi12_deg"])
             self._ssb.prepare(controls, model, **options)
             self._schedule_window_build()
