@@ -3,7 +3,7 @@
 The direct-method strengths are Tikhonov penalties of a damped least-squares solve, so they are
 ``phase_damping`` and ``amplitude_damping``; the output grid multiplier is ``upsampling``. Calls and
 ``quantem.ssb-calibration/6`` saves written with the older names keep working. This mirrors
-``quantem.gpu.ssb._renamed`` so an array viewer needs no quantem.gpu.
+``quantem.gpu.direct_ptycho._renamed`` so an array viewer needs no quantem.gpu.
 """
 
 import warnings

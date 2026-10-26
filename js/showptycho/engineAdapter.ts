@@ -11,8 +11,8 @@
  * is its Python counterpart.
  */
 
-import type { WebGPUSSBBackend } from "../.generated/engine/ssb/webgpu/backend";
-import type { WebGPUReconstructionOptions } from "../.generated/engine/ssb/webgpu/protocol";
+import type { WebGPUSSBBackend } from "../.generated/engine/direct_ptycho/webgpu/backend";
+import type { WebGPUReconstructionOptions } from "../.generated/engine/direct_ptycho/webgpu/protocol";
 
 /** The layout of `snapshots/snapshots.json`, written by the exported page. */
 export const SNAPSHOTS_SCHEMA = "quantem.ssb-snapshots/2";

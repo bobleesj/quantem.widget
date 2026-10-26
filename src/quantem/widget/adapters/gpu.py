@@ -388,7 +388,7 @@ class DirectSession:
         Array inputs have no persistent identity: a filename attached to a
         modified array does not make it the acquisition on disk.
         """
-        from quantem.gpu.ssb.persistence import json_value, source_identity
+        from quantem.gpu.direct_ptycho.persistence import json_value, source_identity
 
         ssb = self.ssb
         if ssb.source_kind == "array" or ssb.source_path is None:
@@ -445,7 +445,7 @@ class DirectSession:
         Assigning ``ssb.aberrations`` states them as known (quantem.gpu), so a
         later ``ptycho.reconstruct()`` applies them instead of fitting.
         """
-        from quantem.gpu.ssb.units import validate_aberrations
+        from quantem.gpu.direct_ptycho.units import validate_aberrations
 
         aberrations = validate_aberrations(saved["aberrations"], higher_order=True)
         self.set_scan_detector_rotation(saved["scan_detector_rotation_deg"])
@@ -510,33 +510,33 @@ class DirectSession:
     def drag(self, control: str, aberrations: dict, **options):
         """Transient float32 phase while one slider ``control`` (``C10_nm``, ``phi12_deg``, ...) is dragged.
 
-        ``quantem.gpu.ssb.direct_workflow.drag``: ``preview``'s image to a few
+        ``quantem.gpu.direct_ptycho.direct_workflow.drag``: ``preview``'s image to a few
         float32 ulps, served from a Chebyshev window along that control once
         ``advance`` has built it (1 ms phase, 3 ms complex, 7 ms SSB at 3x on a
         512 x 512 scan with a 192 x 192 detector), exact frames until then. ``options`` are ``preview``'s
         except ``compute_loss``; committed frames use ``preview``.
         """
-        from quantem.gpu.ssb import direct_workflow
+        from quantem.gpu.direct_ptycho import direct_workflow
 
         return direct_workflow.drag(self.ssb, control, *self._drag_inputs(aberrations, **options)).get()
 
     def prepare(self, controls, aberrations: dict, **options) -> None:
         """Ask for drag windows along ``controls`` at these optics, built by ``advance`` while the sliders are idle."""
-        from quantem.gpu.ssb import direct_workflow
+        from quantem.gpu.direct_ptycho import direct_workflow
 
         direct_workflow.prepare(self.ssb, tuple(controls), *self._drag_inputs(aberrations, **options))
 
     def advance(self) -> bool:
         """Build one more node of a pending drag window; True when none is left."""
-        from quantem.gpu.ssb import direct_workflow
+        from quantem.gpu.direct_ptycho import direct_workflow
 
         return direct_workflow.advance(self.ssb)
 
     def _drag_inputs(self, aberrations: dict, *, upsampling, method: str = "ssb", sample_tilt_mrad=(0.0, 0.0),
                      depth_spread_nm: float = 0.0, phase_estimator=None, **strengths):
         """``preview``'s options as ``direct_workflow``'s (aberrations, tilt, depth, factor, policy)."""
-        from quantem.gpu.ssb import direct_workflow
-        from quantem.gpu.ssb.units import validate_aberrations
+        from quantem.gpu.direct_ptycho import direct_workflow
+        from quantem.gpu.direct_ptycho.units import validate_aberrations
 
         policy = direct_workflow.settings(method, *(strengths.get(name) for name in (
             "phase_damping", "amplitude_damping", "smoothness_inv_A", "detector_weighting")))
@@ -607,7 +607,7 @@ class DirectSession:
         The separate phase-variance diagnostic is not needed for this fit,
         so ``compute_loss=False`` omits it without changing any fitted value.
         A fit within 0.01 of the tilt limit or of quantem.gpu's depth-spread
-        search range (``quantem.gpu.ssb.DEPTH_SPREAD_RANGE_NM``) is flagged ``bound_hit``.
+        search range (``quantem.gpu.direct_ptycho.DEPTH_SPREAD_RANGE_NM``) is flagged ``bound_hit``.
         """
         ssb = self.ssb
         if ssb.scan_region is not None or not ssb.source_path:
@@ -619,7 +619,7 @@ class DirectSession:
             raise ValueError("Regional display currently needs equal row and column scan sampling.")
         started = time.perf_counter()
         fits, images = [], {}
-        from quantem.gpu.ssb import DEPTH_SPREAD_RANGE_NM as depth_range_nm  # the joint fit's own depth search range
+        from quantem.gpu.direct_ptycho import DEPTH_SPREAD_RANGE_NM as depth_range_nm  # the joint fit's own depth search range
         factor = int(upsampling)
         geometry = {
             "backend": ssb.backend, "voltage_kV": ssb.voltage_kV,
