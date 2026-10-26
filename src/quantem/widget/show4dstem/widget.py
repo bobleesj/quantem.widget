@@ -1803,7 +1803,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                   "Pass Show4DSTEM(data, semiangle_mrad=...) to set it.")
         if semiangle <= 0:
             raise ValueError(f"semiangle_mrad must be positive, got {semiangle}.")
-        from quantem.gpu.ssb.trials import resolve_trial_count
+        from quantem.gpu.direct_ptycho.trials import resolve_trial_count
 
         trials = int(resolve_trial_count(trials, num_trials, default=self.ssb_compute_num_trials))
         if trials < 0:

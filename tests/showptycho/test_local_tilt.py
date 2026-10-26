@@ -256,7 +256,7 @@ def test_regional_fit_passes_its_trial_count_and_tilt_limit_to_the_fit():
 
 def test_regional_fit_flags_a_depth_at_the_end_of_quantem_gpus_search_range(monkeypatch):
     pytest.importorskip("quantem.gpu", reason="the regional fit runs quantem.gpu's SSB")
-    from quantem.gpu.ssb import DEPTH_SPREAD_RANGE_NM
+    from quantem.gpu.direct_ptycho import DEPTH_SPREAD_RANGE_NM
     original = _Fit.__init__
 
     def at_the_bound(self, agreement, seed):

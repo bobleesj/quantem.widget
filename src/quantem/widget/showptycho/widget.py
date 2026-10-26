@@ -1523,7 +1523,7 @@ class ShowPtycho(anywidget.AnyWidget):
         folder of the files when the data lives under it, so the folder can be moved or shared whole. Both
         files are built here, so a reader of one reads the other.
         """
-        from quantem.gpu.ssb.persistence import portable_source
+        from quantem.gpu.direct_ptycho.persistence import portable_source
 
         state = self._ssb.state()
         return {
