@@ -613,6 +613,21 @@ function RegularizationSlider({ name, value, onDrag, onCommit }: {
   );
 }
 
+type HeldStatListeners = Map<string, (value: number | null) => void>;
+
+/** A stats-row value that follows its slider while it is held, re-rendering only itself;
+ *  null (the release) returns it to the widget's value. */
+function HeldStatValue({ statKey, value, precision, listeners, color }: {
+  statKey: string; value: number; precision: number; listeners: HeldStatListeners; color: string;
+}) {
+  const [held, setHeld] = React.useState<number | null>(null);
+  React.useEffect(() => {
+    listeners.set(statKey, setHeld);
+    return () => { listeners.delete(statKey); };
+  }, [listeners, statKey]);
+  return <Box component="span" sx={{ color }}>{(held ?? value).toFixed(precision)}</Box>;
+}
+
 /** A three-thumb aberration slider (outer thumbs: sweep stoppers, middle: the value). While the
  *  middle thumb is dragged the slider shows its own value, so each pointer move re-renders this
  *  slider and not the whole widget; the widget takes the value on release. */
@@ -2382,13 +2397,17 @@ function Explore() {
   }, []);
   // A slider showing its own dragged value: the widget adopts the value on release, so a drag
   // re-renders that slider alone instead of the whole widget per animation frame.
+  // The stats row's C10, C12 and φ12 follow a held slider without re-rendering the widget.
+  const heldStatListeners = React.useMemo<HeldStatListeners>(() => new Map(), []);
   const holdSliderValue = React.useCallback((key: "c10" | "c12" | "phi12", value: number) => {
     sliderPendingRef.current[key] = value;
     sliderVals.current = { ...sliderVals.current, [key]: value };
-  }, []);
+    heldStatListeners.get(key)?.(value);
+  }, [heldStatListeners]);
   // A release shows its committed value at once.
   const commitSliderValue = React.useCallback((key: "c10" | "c12" | "phi12", value: number) => {
     sliderPendingRef.current[key] = value;
+    heldStatListeners.get(key)?.(null);
     flushSliderState();
   }, [flushSliderState]);
   // Regularization uses the same latest-wins queue as optics. Only the small
@@ -4205,17 +4224,17 @@ function Explore() {
               {tuning && <>
               <Tooltip title="Defocus in nanometers.  Primary aberration: sets the probe's axial focus point relative to the sample.  Usually the first knob to get right." placement="top" arrow>
                 <Typography sx={{ ...typography.label, ...statChip(tc, Math.abs(c10) > 0), cursor: "help" }}>
-                  C10 <Box component="span" sx={{ color: tc.accent }}>{c10.toFixed(1)}</Box> nm
+                  C10 <HeldStatValue statKey="c10" value={c10} precision={1} listeners={heldStatListeners} color={tc.accent} /> nm
                 </Typography>
               </Tooltip>
               <Tooltip title="2-fold astigmatism magnitude in nanometers.  How asymmetric the probe is.  Paired with φ₁₂ (angle)." placement="top" arrow>
                 <Typography sx={{ ...typography.label, ...statChip(tc, Math.abs(c12) > 0), cursor: "help" }}>
-                  C12 <Box component="span" sx={{ color: tc.accent }}>{c12.toFixed(1)}</Box> nm
+                  C12 <HeldStatValue statKey="c12" value={c12} precision={1} listeners={heldStatListeners} color={tc.accent} /> nm
                 </Typography>
               </Tooltip>
               <Tooltip title="Angle of 2-fold astigmatism in degrees.  Only meaningful when C12 ≠ 0." placement="top" arrow>
                 <Typography sx={{ ...typography.label, ...statChip(tc, Math.abs(phi12) > 0), cursor: "help" }}>
-                  φ₁₂ <Box component="span" sx={{ color: tc.accent }}>{phi12.toFixed(1)}</Box>°
+                  φ₁₂ <HeldStatValue statKey="phi12" value={phi12} precision={1} listeners={heldStatListeners} color={tc.accent} />°
                 </Typography>
               </Tooltip>
               {loss != null && !regionalMode && (

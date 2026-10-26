@@ -313,3 +313,13 @@ test('sampling settings explain the Auto cap and let the user explicitly choose 
   expect(model.get('upsampling_factor')).toBe(8);
   expect(document.body.textContent).not.toContain(note);
 });
+
+test('the stats row follows a held C10 slider before release', async () => {
+  const model = session({ local_tilt_enabled: false, local_tilt_active_region: '' });
+  await mount(model);
+  const chip = () => Array.from(el.querySelectorAll('p'))
+    .find(node => node.textContent?.startsWith('C10 ') && node.textContent.endsWith(' nm'))!;
+  expect(chip()).toBeDefined();
+  dragC10(6.3);
+  expect(chip().textContent).toBe('C10 6.3 nm');
+});
