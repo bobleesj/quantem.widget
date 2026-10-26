@@ -2242,10 +2242,9 @@ function Show4DSTEM() {
   const [ssbComputeEnabled] = useModelState<boolean>("ssb_compute_enabled");
   const [ssbComputeNTrials, setSsbComputeNTrials] = useModelState<number>("ssb_compute_num_trials");
   const [ssbComputeTilt, setSsbComputeTilt] = useModelState<boolean>("ssb_compute_tilt");
-  const [ssbComputeObjective, setSsbComputeObjective] = useModelState<"agreement" | "phase_variance">("ssb_compute_objective");
-  // quantem.gpu's three SSB fits: tilt-corrected (default), tilt=False, tilt=False with objective="phase_variance"
-  const ssbComputeMethod = ssbComputeTilt !== false ? "tilt" : ssbComputeObjective === "phase_variance" ? "phase_variance" : "tilt0";
-  const [ssbComputeRefinement, setSsbComputeRefinement] = useModelState<"auto" | "newton" | "nelder-mead" | null>("ssb_compute_refinement");
+  // quantem.gpu's two SSB fits: tilt-corrected (default) and tilt=False
+  const ssbComputeMethod = ssbComputeTilt !== false ? "tilt" : "tilt0";
+  const [ssbComputeRefinement, setSsbComputeRefinement] = useModelState<"auto" | null>("ssb_compute_refinement");
   const [ssbComputeLockC10, setSsbComputeLockC10] = useModelState<boolean>("ssb_compute_lock_C10");
   const [ssbComputeLockC12, setSsbComputeLockC12] = useModelState<boolean>("ssb_compute_lock_C12");
   const [ssbComputeBfPixels] = useModelState<number>("ssb_compute_num_bright_field_pixels");
@@ -4551,7 +4550,6 @@ function Show4DSTEM() {
       action: "compute_ssb",
       num_trials: nTrials,
       tilt: ssbComputeTilt !== false,
-      objective: ssbComputeTilt !== false ? "agreement" : (ssbComputeObjective ?? "agreement"),
       refinement: ssbComputeRefinement ?? null,
       lock_C10: Boolean(ssbComputeLockC10),
       lock_C12: Boolean(ssbComputeLockC12),
@@ -4574,7 +4572,6 @@ function Show4DSTEM() {
     ssbComputeRefinement,
     ssbComputeRotationDeg,
     ssbComputeTilt,
-    ssbComputeObjective,
   ]);
   const requestSsbManualReconstruct = React.useCallback((values?: {
     c10Nm?: number;
@@ -7656,7 +7653,7 @@ function Show4DSTEM() {
                     SSB (single-sideband ptychography) computes a phase image from the 4D-STEM diffraction stack using the live backend.
                   </Typography>
                   <Typography sx={{ fontSize: 11, lineHeight: 1.35 }}>
-                    Fit: the default is model-based and tilt-corrected, as everywhere in quantem: the SSB model fitted to the data with the sample tilt and depth spread; C10 is then the defocus at mid-depth. Tilt 0 holds the tilt at 0 (tilt=False). Phase variance (tilt=False, objective="phase_variance") is the earlier SSB search, kept as a backup, not an equal alternative: it cannot see sample tilt or thickness.
+                    Fit: the default is model-based and tilt-corrected, as everywhere in quantem: the SSB model fitted to the data with the sample tilt and depth spread; C10 is then the defocus at mid-depth. Tilt 0 holds the tilt at 0 (tilt=False).
                   </Typography>
                   <Typography sx={{ fontSize: 11, lineHeight: 1.35 }}>
                     Trials controls the aberration search; Refine runs a final local fit. Lock C10 or C12 to pin a coefficient at its slider value during the search. With tilt correction, C12 locks alone only at 0; lock both to fit the tilt and depth alone.
@@ -7686,16 +7683,12 @@ function Show4DSTEM() {
             </Select>
           </Stack>
           <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5, gap: 1 }}>
-            <Typography sx={themedTypography.label} title="quantem's SSB fits: model-based, tilt-corrected (the default); model-based, tilt held at 0; phase variance, the earlier search, a backup">
+            <Typography sx={themedTypography.label} title="quantem's SSB fits: model-based, tilt-corrected (the default); model-based, tilt held at 0">
               Fit
             </Typography>
             <Select
               value={ssbComputeMethod}
-              onChange={(event) => {
-                const method = String(event.target.value);
-                setSsbComputeTilt(method === "tilt");
-                setSsbComputeObjective(method === "phase_variance" ? "phase_variance" : "agreement");
-              }}
+              onChange={(event) => setSsbComputeTilt(String(event.target.value) === "tilt")}
               size="small"
               disabled={ssbComputeBusy}
               inputProps={{ "aria-label": "SSB fit" }}
@@ -7704,7 +7697,6 @@ function Show4DSTEM() {
             >
               <MenuItem value="tilt">Model, tilt-corrected (default)</MenuItem>
               <MenuItem value="tilt0">Model, tilt 0</MenuItem>
-              <MenuItem value="phase_variance">Phase variance (backup)</MenuItem>
             </Select>
           </Stack>
           <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5, gap: 1 }}>
@@ -7840,7 +7832,7 @@ function Show4DSTEM() {
     setDpMoreAnchor, setDpPanX, setDpPanY, setDpZoom, setHoveredDpProfileEndpoint,
     setIsHoveringDpProfileLine, setOfflineBackendError, setProfileActive, setProfileData, setProfileLine,
     setSsbComputeLockC10, setSsbComputeLockC12, setSsbComputeNTrials, setSsbComputeRefinement, setSsbComputeTilt,
-    setSsbComputeObjective, ssbComputeMethod,
+    ssbComputeMethod,
     ssbBfCountText, ssbComputeBusy, ssbComputeC10Nm, ssbComputeC12Nm, ssbComputeEnabled, ssbComputeLockC10,
     ssbComputeLockC12, ssbComputeNTrials, ssbComputeRefinement, ssbComputeStatus, ssbComputeTilt, ssbProgressText,
     ssbStatusIsFailure, starredReportCount, themeColors, themeInfo, themedMenuProps, themedSelect,
