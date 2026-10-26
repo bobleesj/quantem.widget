@@ -27,7 +27,7 @@ import threading
 import time
 import warnings
 from collections.abc import Sequence
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from typing import Self
 
@@ -75,11 +75,14 @@ from quantem.widget.show4dstem.detector import (
 from quantem.widget.show4dstem.preview import static_png_b64
 from quantem.widget.show4dstem.reader import acquisition_name
 from quantem.widget.show4dstem.session import DetectorSessionSource, SessionSeries
+from quantem.widget.show4dstem.streaming import StreamFollower
 from quantem.widget.state import SavedStateMixin
 from quantem.widget.units import acquisition_calibration, per_axis, stated, wrap_degrees
 from quantem.widget.utils.array import device_array
 from quantem.widget.utils.state_io import read_state
-from quantem.widget.utils.ui import UiMode, reject_unknown_kwargs, resolve_ui_mode
+from quantem.widget.utils.ui import (
+    UiMode, ViewerSize, reject_unknown_kwargs, resolve_panel_width, resolve_ui_mode,
+)
 
 BRIGHT_FIELD_RADIUS_FRACTION = 0.125  # bright-field radius as a fraction of the detector side before fitting
 DEFAULT_VI_ROI_RATIO = 0.15  # scan ROI radius as a fraction of the scan side
@@ -221,13 +224,18 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         HAADF presets are multiples of this radius.
     precompute_virtual_images
         Compute the four preset images up front so preset clicks are instant.
+    size, dp_size, image_size
+        Named display widths: ``"small"``, ``"medium"``, ``"large"`` or
+        ``"xlarge"``. ``size`` sets both panels; ``dp_size`` and ``image_size``
+        override diffraction and virtual images independently. Omitted, retain
+        the responsive layout. Source pixels and scientific precision do not change.
     panel_width_px, dp_panel_width_px, vi_panel_width_px
         Display widths in CSS pixels. The diffraction and virtual-image widths
         override ``panel_width_px`` independently; zero uses the shared default.
         Resizing changes the display only, never the data or detector sampling.
     sync_resize
-        Resize both panels together when dragging a corner (default True).
-        Set False to resize each panel independently.
+        Resize both panels together when dragging a corner. Defaults to True,
+        or False when ``dp_size`` or ``image_size`` is supplied.
     view_mode, compare_cols, compare_grid_width_px, compare_max_panels, compare_group_mode, compare_dp_mode
         Comparison grid layout for several datasets: ``"multiple"`` shows one
         virtual image per dataset, ``compare_max_panels`` per page, with the
@@ -347,6 +355,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     n_frames = traitlets.Int(1).tag(sync=True)
     frame_dim_label = traitlets.Unicode("Frame").tag(sync=True)
     frame_labels = traitlets.List(traitlets.Unicode(), []).tag(sync=True)
+    _stream_source_ids = traitlets.List(traitlets.Unicode(), []).tag(sync=True)
+    _stream_selected_source = traitlets.Unicode("").tag(sync=True)
     frame_playing = traitlets.Bool(False).tag(sync=True)
     frame_loop = traitlets.Bool(True).tag(sync=True)
     frame_fps = traitlets.Float(5.0).tag(sync=True)
@@ -366,6 +376,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     compare_hidden_panels = traitlets.List(traitlets.Int(), default_value=[]).tag(sync=True)
     compare_starred_panels = traitlets.List(traitlets.Int(), default_value=[]).tag(sync=True)
     compare_virtual_image_bytes = _ImageMemoryView().tag(sync=True)
+    compare_image_revision = traitlets.Int(0).tag(sync=True)
+    _stream_panel_update = traitlets.Dict().tag(sync=True)
     compare_panel_count = traitlets.Int(0).tag(sync=True)
     compare_panel_indices = traitlets.List(traitlets.Int(), default_value=[]).tag(sync=True)
     compare_status = traitlets.Unicode("").tag(sync=True)
@@ -412,10 +424,13 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         h5_urls: Sequence[str] | None = None,
         qem_urls: Sequence[str] | None = None,
         show_fft: bool = False,
+        size: ViewerSize | None = None,
+        dp_size: ViewerSize | None = None,
+        image_size: ViewerSize | None = None,
         panel_width_px: int = 0,
         dp_panel_width_px: int = 0,
         vi_panel_width_px: int = 0,
-        sync_resize: bool = True,
+        sync_resize: bool | None = None,
         verbose: bool = False,
         state=None,
         save_state: bool = False,
@@ -448,6 +463,27 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._folder_watch_thread = None
         self._folder_watch_started = False
         self._folder_poll_lock = threading.Lock()
+        self._stream_lock = threading.RLock()
+        self._stream_follower = None
+        self._stream_source_serial = 0
+        self._stream_display_view = None
+        self._stream_display_views: dict[str, bool] = {}
+        self._stream_display_negotiated = False
+        self._stream_display_delta = False
+        self._stream_layout_views: set[str] = set()
+        self._stream_display_probe_seq = None
+        self._stream_display_probe_at = 0.0
+        self._stream_display_seq = 0
+        self._stream_display_acknowledged = 0
+        self._stream_display_credits = 2
+        self._stream_display_pending = 0
+        self._stream_display_revision = 0
+        self._stream_display_sent_at = 0.0
+        self._stream_cell_running = False
+        self._stream_cell_hooks = None
+        self._stream_defer_compute = False
+        self._stream_deferred_state: set[str] = set()
+        self._stream_deferred_snapshot: dict | None = None
         self._compare_lock = threading.RLock()
         self._session_lock = threading.RLock()
         self._ssb_compute_flipped: bool | None = None  # the last SSB fit's flip, None before one
@@ -483,6 +519,19 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 f"offline_dtype must be 'uint8' or 'uint16', got {offline_dtype!r}. "
                 "Use 'uint8' for compact browse data or 'uint16' to preserve detector counts."
             )
+        for preset, width, name in ((size, panel_width_px, "size"),
+                                    (dp_size, dp_panel_width_px, "dp_size"),
+                                    (image_size, vi_panel_width_px, "image_size")):
+            if preset is not None and width:
+                raise ValueError(f"Use {name} or its explicit pixel width, not both.")
+        if size is not None:
+            panel_width_px = resolve_panel_width(size)
+        if dp_size is not None:
+            dp_panel_width_px = resolve_panel_width(dp_size)
+        if image_size is not None:
+            vi_panel_width_px = resolve_panel_width(image_size)
+        if sync_resize is None:
+            sync_resize = dp_size is None and image_size is None
         for name, value in (("panel_width_px", panel_width_px), ("dp_panel_width_px", dp_panel_width_px),
                             ("vi_panel_width_px", vi_panel_width_px), ("compare_cols", compare_cols),
                             ("compare_grid_width_px", compare_grid_width_px)):
@@ -1161,10 +1210,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         new dataset into the same kernel. The packed browser copy of the counts
         (up to the 2 GB offline budget) and the last export go too.
         """
-        if getattr(self, "_stream_stop", None) is not None:
-            self._stream_stop.set()
-            if self._stream_thread is not None and threading.current_thread() is not self._stream_thread:
-                self._stream_thread.join(timeout=5)
+        self._stop_stream()
         self._release_owned_acquisitions()
         data = self._data
         nbytes = data.nbytes if isinstance(data, torch.Tensor) else 0
@@ -1185,13 +1231,18 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
 
     def close(self) -> None:
         """Stop background work, release sessions and close the widget comm."""
-        if getattr(self, "_stream_stop", None) is not None:
-            self._stream_stop.set()
-            if self._stream_thread is not None and threading.current_thread() is not self._stream_thread:
-                self._stream_thread.join(timeout=5)
+        self._stop_stream()
         self._release_owned_acquisitions()
-        self._close_sessions()
-        super().close()
+        with self._stream_lock:
+            self._close_sessions()
+            self._data = None
+            self._preset_images.clear()
+            super().close()
+
+    def _stop_stream(self) -> None:
+        if self._stream_follower is not None:
+            self._stream_follower.stop()
+            self._stream_follower = None
 
     # ------------------------------------------------------------------
     # Watching a folder
@@ -1405,9 +1456,15 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         """Show acquisitions appended to the series in one update; n_frames refreshes the comparison grid."""
         if added:
             with self.hold_trait_notifications():
+                if hasattr(self, "_stream_stop"):
+                    self._stream_source_ids = [*self._stream_source_ids, *self._new_stream_source_ids(len(added))]
                 self.n_frames = len(self._data.frames)
                 self.frame_labels = labels
-                if custom_order:
+                if getattr(self, "_stream_newest_first", False):
+                    order = old_order if custom_order else list(reversed(range(added[0])))
+                    self.compare_panel_order = [*reversed(added), *order]
+                    self.compare_page_idx = 0
+                elif custom_order:
                     self.compare_panel_order = [*old_order, *added]
 
     def append(self, acquisitions, labels=None) -> list[int]:
@@ -1450,26 +1507,36 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             self._update_frame()
 
     @classmethod
-    def stream(cls, recording, *, refresh_s: float = 0.05, labels=None, first_timeout_s: float = 0.0,
+    def stream(cls, recording, *, refresh_s: float = 1 / 60, labels=None, first_timeout_s: float = 0.0,
+               newest_first: bool = True,
                **viewer_kwargs) -> Self:
         """Show arriving scans from a GPU recording, before a whole scan completes.
 
         The recording retains ANS counts. Missing positions are NaN, not measured
         zeros. Detector changes query all arrived positions. ``refresh_s`` limits
-        display updates only; no incoming patterns are dropped. Background image
+        display updates only (at most 60 updates/s by default); no incoming
+        patterns are dropped. At most two display updates await browser
+        acknowledgment; later previews coalesce. During blocking user
+        cells, previews are limited to one every two seconds; interactions wait
+        until the cell returns. Background image
         transfers coalesce during dragging so cursor requests stay responsive. Older recordings
         that expose only completed ``datasets`` still append on completion.
 
         Returns a waiting viewer immediately when the receiver is idle. It does
         not arm or trigger acquisition. Pass ``first_timeout_s=120`` to wait for
         the first pattern before returning, as in earlier versions.
+        New scans appear at the top left; the selected scan stays selected.
+        Set ``newest_first=False`` for chronological display. Data and dataset
+        indices always retain acquisition order.
 
         Examples
         --------
         >>> viewer = Show4DSTEM.stream(recording)  # doctest: +SKIP
         """
-        if refresh_s <= 0:
-            raise ValueError("refresh_s must be positive.")
+        if not math.isfinite(refresh_s) or refresh_s <= 0:
+            raise ValueError("refresh_s must be finite and positive.")
+        if not math.isfinite(first_timeout_s) or first_timeout_s < 0:
+            raise ValueError("first_timeout_s must be finite and nonnegative.")
         partial = hasattr(recording, "acquisitions")
         lock = getattr(recording, "lock", nullcontext())
 
@@ -1503,109 +1570,21 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 raise TimeoutError(f"No acquisition arrived within {waited:.0f} s.")
             pause.wait(0.01)
             waited += 0.01
+        viewer._stream_newest_first = newest_first
         if partial:
             viewer.pos_row = viewer.pos_col = 0
         viewer._stream_stop = threading.Event()
+        viewer._stream_source_ids = viewer._new_stream_source_ids(len(sources[:1]))
+        viewer._stream_selected_source = viewer._stream_source_ids[0] if sources else ""
         viewer._stream_thread = None
         viewer.stream_error = None
-        title = viewer_kwargs.get("title") or "Live acquisition"
-        shown_sources, previous = sources[:1], None
-        initialized = bool(shown_sources)
-        last_refresh = 0.0
-
-        def update(force=False):
-            nonlocal shown_sources, previous, last_refresh, initialized
-            if viewer._stream_stop.is_set():
-                return False
-            try:
-                if recording.error is not None and not force:
-                    raise recording.error
-                # Sample completion first: if it changes during this update,
-                # the next update must still publish the final counts.
-                complete = not recording.receiving
-                now = time.monotonic()
-                # Full scan images share Jupyter's ordered output channel with
-                # the small DP replies. Keep room for direct manipulation;
-                # detector gestures still recompute immediately, and the final
-                # acquisition refresh is never deferred.
-                if (not force and not complete and now - viewer._last_interaction_at < 0.15
-                        and now - last_refresh < 0.1):
-                    return True
-                with lock:
-                    sources = snapshot()
-                    shown = len(shown_sources)
-                    if not sources:
-                        if shown_sources:
-                            viewer._replace_stream_sources(shown_sources, [])
-                        shown_sources, previous = [], None
-                        return not complete
-                    if not initialized and partial and not sources[0].received:
-                        return not complete
-                    if viewer._data is None:
-                        with viewer.hold_sync(), viewer.hold_trait_notifications():
-                            viewer._replace_stream_sources([], sources, labels=labels)
-                            if not initialized:
-                                viewer._initialize_stream_geometry(sources[0], viewer_kwargs)
-                                initialized = True
-                        previous = None
-                    elif sources[:shown] == shown_sources:
-                        if len(sources) > shown:
-                            viewer.append(sources[shown:], labels[shown:len(sources)] if labels else None)
-                    elif sources and partial:
-                        viewer._replace_stream_sources(shown_sources, sources)
-                        previous = None
-                    shown_sources = sources
-                    shown = len(sources)
-                progress = tuple(source.received for source in sources[:shown]) if partial else ()
-                if partial and complete and isinstance(viewer._data, SessionSeries) and len(recording.datasets) == shown and all(
-                        gpu_adapter.is_acquisition(dataset) for dataset in recording.datasets):
-                    # Borrow the same ANS storage through the regular joint
-                    # query path once every acquisition is immutable.
-                    completed = AcquisitionSeries(recording.datasets)
-                    with viewer._compare_lock, viewer._session_lock:
-                        viewer._close_sessions()
-                        viewer._data = completed
-                    previous = None
-                if force or progress != previous:
-                    viewer.refresh()
-                    if partial:
-                        current = sources[shown - 1]
-                        viewer.title = (f"{title} | scan {shown}: {current.received:,}/{current.total:,} patterns"
-                                        " | row scan left → right | ANS on GPU")
-                    else:
-                        viewer.title = title
-                    previous = progress
-                    last_refresh = time.monotonic()
-                return not complete
-            except Exception as error:
-                viewer.stream_error = error
-                viewer.title = f"Live acquisition stopped: {error}"
-                if force:
-                    raise
-                return False
-
-        viewer._stream_update = update
-        viewer._stream_recording = recording
-        loop = IOLoop.current(instance=False)
-        if loop is not None and loop.asyncio_loop.is_running():
-            def poll():
-                started = loop.time()
-                if update():
-                    loop.call_later(max(0.0, started + refresh_s - loop.time()), poll)
-
-            # Keep trait updates on the kernel loop with detector gestures.
-            # Count query time in the interval, without queuing stale refreshes.
-            loop.add_callback(poll)
-        else:
-            def follow():
-                while not viewer._stream_stop.is_set():
-                    started = time.monotonic()
-                    if not update():
-                        break
-                    viewer._stream_stop.wait(max(0.0, started + refresh_s - time.monotonic()))
-
-            viewer._stream_thread = threading.Thread(target=follow, name="Show4DSTEM-stream", daemon=True)
-            viewer._stream_thread.start()
+        viewer._stream_follower = StreamFollower(
+            viewer, recording, sources, labels=labels, refresh_s=refresh_s, options=viewer_kwargs)
+        try:
+            viewer._stream_follower.start()
+        except Exception:
+            viewer.close()
+            raise
         return viewer
 
     def refresh_stream(self, scan_id: str | None = None) -> None:
@@ -1616,17 +1595,18 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         >>> recording.unload(scan_id)
         >>> viewer.refresh_stream()
         """
-        update = getattr(self, "_stream_update", None)
-        if update is None:
-            raise ValueError("This viewer is not streaming; use Show4DSTEM.stream(recording).")
-        update(force=True)
-        if scan_id is not None:
-            with self._stream_recording.lock:
-                sources = list(self._stream_recording.acquisitions)
-                index = next((i for i, source in enumerate(sources) if source.identifier == scan_id), None)
-                if index is None:
-                    raise ValueError("This scan is no longer available; refresh the scan list.")
-                self.frame_idx = index
+        with self._stream_lock:
+            update = getattr(self, "_stream_update", None)
+            if update is None:
+                raise ValueError("This viewer is not streaming; use Show4DSTEM.stream(recording).")
+            update(force=True)
+            if scan_id is not None:
+                with self._stream_recording.lock:
+                    sources = list(self._stream_recording.acquisitions)
+                    index = next((i for i, source in enumerate(sources) if source.identifier == scan_id), None)
+                    if index is None:
+                        raise ValueError("This scan is no longer available; refresh the scan list.")
+                    self.frame_idx = index
 
     def _initialize_stream_geometry(self, source, options) -> None:
         """Adopt the first real scan's geometry and calibration after an idle start."""
@@ -1662,6 +1642,22 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                                       min(self.det_rows, self.det_cols) * BRIGHT_FIELD_RADIUS_FRACTION)
         self._set_roi_to_disk()
 
+    @contextmanager
+    def _defer_stream_observers(self):
+        """Prepare one source topology, then let the caller refresh it once."""
+        previous = self._stream_defer_compute
+        self._stream_defer_compute = True
+        try:
+            yield
+        finally:
+            self._stream_defer_compute = previous
+
+    def _new_stream_source_ids(self, count: int) -> list[str]:
+        """Allocate viewer-local identities that never refer to a replacement scan."""
+        start = self._stream_source_serial
+        self._stream_source_serial += count
+        return [str(index) for index in range(start + 1, start + count + 1)]
+
     def _replace_stream_sources(self, previous, sources, labels=None) -> None:
         """Retire old live panels without resetting the detector or surviving query sessions."""
         with self._compare_lock, self._session_lock:
@@ -1671,6 +1667,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 self._preset_images.clear()
                 with self.hold_sync():
                     self.n_frames = 0
+                    self._stream_source_ids = []
+                    self._stream_selected_source = ""
                     self.frame_labels = []
                     self.frame_bytes = np.full((self.det_rows, self.det_cols), np.nan, np.float32).tobytes()
                     self.virtual_image_bytes = np.full((self.shape_rows, self.shape_cols), np.nan, np.float32).tobytes()
@@ -1685,6 +1683,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 sessions = dict(zip(previous, self._data.frames))
             selected = previous[min(int(self.frame_idx), len(previous) - 1)] if previous else None
             names = dict(zip(previous, self.frame_labels))
+            identities = dict(zip(previous, self._stream_source_ids))
             hidden = [previous[i] for i in self.compare_hidden_panels if i < len(previous)]
             starred = [previous[i] for i in self.compare_starred_panels if i < len(previous)]
             data = (AcquisitionSeries(sources) if gpu_adapter.is_acquisition(sources[0]) else
@@ -1700,13 +1699,18 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             self._data = data
             self._preset_images.clear()
             with self.hold_sync(), self.hold_trait_notifications():
+                self._stream_source_ids = [identities[source] if source in identities else
+                                           self._new_stream_source_ids(1)[0] for source in sources]
                 self.n_frames = len(sources)
                 self.frame_idx = sources.index(selected) if selected in sources else 0
+                self._stream_selected_source = self._stream_source_ids[self.frame_idx]
                 self.frame_labels = [str(labels[i]) if labels and i < len(labels) else
                                      names.get(source, str(source.metadata.get("name") or
                                                            source.metadata.get("series", f"acquisition {i}")))
                                      for i, source in enumerate(sources)]
-                self.compare_panel_order = list(range(len(sources)))
+                self.compare_panel_order = (list(reversed(range(len(sources))))
+                                            if getattr(self, "_stream_newest_first", False)
+                                            else list(range(len(sources))))
                 self.compare_hidden_panels = [i for i, source in enumerate(sources) if source in hidden]
                 self.compare_starred_panels = [i for i, source in enumerate(sources) if source in starred]
                 self.compare_page_idx = 0
@@ -1995,7 +1999,12 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         with self._session_lock:
             if self._multiple_view_active() and self.compare_dp_mode == "average":
                 page = self._page_indices() or [int(self.frame_idx)]
-                frame = np.mean([np.asarray(self._session(idx).frame(flat), dtype=np.float32) for idx in page], axis=0)
+                frames = [np.asarray(self._session(idx).frame(flat), dtype=np.float32) for idx in page]
+                # A live scan returns an all-NaN pattern until this position
+                # arrives. Average acquired patterns; retain NaN if none exist.
+                acquired = [frame for frame in frames if not np.isnan(frame).all()]
+                frame = (np.mean(acquired, axis=0) if acquired else
+                         np.full((self.det_rows, self.det_cols), np.nan, np.float32))
             else:
                 frame = np.asarray(self._compute.frame(flat), dtype=np.float32)
         self.frame_bytes = frame.tobytes()
@@ -2377,13 +2386,196 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
 
     def _resend_view_state(self) -> None:
         """Re-send the view buffers so a frontend that mounted after ``__init__`` still paints them."""
-        for name in ("virtual_image_bytes", "vi_product_labels", "vi_product_map_frames", "vi_product_maps_bytes",
-                     "frame_bytes", "compare_diffraction_bytes", "compare_diffraction_indices", "compare_virtual_image_bytes"):
-            self.send_state(name)
+        with self._stream_lock:
+            if self._stream_display_pending or (self._stream_display_negotiated
+                                                and self._stream_display_view is None):
+                return
+            with self.hold_sync():
+                # Jupyter deep-compares DataViews. A fresh revision guarantees
+                # a delivery event even when the full image bytes are identical.
+                self.compare_image_revision += 1
+                self._stream_panel_update = {}
+                self._states_to_send.update({
+                    "virtual_image_bytes", "vi_product_labels", "vi_product_map_frames", "vi_product_maps_bytes",
+                    "frame_bytes", "compare_diffraction_bytes", "compare_diffraction_indices",
+                    "compare_virtual_image_bytes", "compare_image_revision"})
+            self._stream_display_barrier()
+
+    def _stream_display_barrier(self) -> None:
+        """Mark the ordered end of an image update; this is transport, not GPU presentation."""
+        if self._stream_display_view is None or not hasattr(self, "_stream_stop"):
+            return
+        self._stream_display_seq += 1
+        self._stream_display_pending = self._stream_display_seq
+        self._stream_display_revision = self.compare_image_revision
+        self._stream_display_sent_at = time.monotonic()
+        self._stream_display_probe_seq = None
+        self._send_stream_display_marker()
+
+    def _send_stream_display_marker(self) -> None:
+        """Transfer a pending receipt to another view without resending images."""
+        self.send({"type": "show4dstem_stream_update", "version": 1,
+                   "view": self._stream_display_view, "seq": self._stream_display_pending,
+                   "revision": self._stream_display_revision})
+
+    def _stream_compare_delta(self, previous, revision):
+        """Send changed panels exactly; retain the complete immutable export snapshot."""
+        current = self.compare_virtual_image_bytes
+        pixels = self.shape_rows * self.shape_cols
+        count = self.compare_panel_count
+        if (self.compare_image_revision == revision or not count
+                or len(previous) != len(current) or len(current) != count * pixels * 4):
+            return None
+        old = np.frombuffer(previous, np.uint32).reshape(count, pixels)
+        new = np.frombuffer(current, np.uint32).reshape(count, pixels)
+        slots = np.flatnonzero(np.any(old != new, axis=1)).tolist()
+        if len(slots) == count:
+            return None
+        # Model traits still hold the full snapshot for export and new views.
+        # Only this ordered background publication omits the unchanged panels.
+        self._stream_panel_update = {"snapshot_pending": True}
+        self._states_to_send.difference_update({"compare_virtual_image_bytes", "compare_image_revision"})
+        message = {"type": "show4dstem_stream_panels", "version": 1, "base": revision,
+                   "revision": self.compare_image_revision, "slots": slots,
+                   "panels": count, "rows": self.shape_rows, "cols": self.shape_cols}
+        buffers = [current[slot * pixels * 4:(slot + 1) * pixels * 4] for slot in slots]
+        return message, buffers
+
+    def _stream_compare_layout(self, previous, revision, previous_ids):
+        """Reuse bit-identical panels by source identity during append or retirement."""
+        pixels = self.shape_rows * self.shape_cols
+        current = self.compare_virtual_image_bytes
+        identities = [self._stream_source_ids[index] for index in self.compare_panel_indices]
+        if (not identities or not previous_ids or self.compare_image_revision == revision
+                or len(previous) != len(previous_ids) * pixels * 4
+                or len(current) != len(identities) * pixels * 4):
+            return
+        old = np.frombuffer(previous, np.uint32).reshape(len(previous_ids), pixels)
+        new = np.frombuffer(current, np.uint32).reshape(len(identities), pixels)
+        lookup = {identity: index for index, identity in enumerate(previous_ids)}
+        reuse = [lookup[identity] if identity in lookup and np.array_equal(old[lookup[identity]], new[index])
+                 else -1 for index, identity in enumerate(identities)]
+        if all(index < 0 for index in reuse):
+            return
+        slots = [index for index, source in enumerate(reuse) if source < 0]
+        # This trait and all changed labels/indices share one remote-state
+        # transaction. New metadata can never be paired with old panel slots.
+        self._stream_panel_update = {
+            "snapshot_pending": True,
+            "base": revision, "revision": self.compare_image_revision,
+            "previous_ids": previous_ids, "source_ids": identities, "reuse": reuse,
+            "rows": self.shape_rows, "cols": self.shape_cols, "slots": slots,
+            "buffers": [current[slot * pixels * 4:(slot + 1) * pixels * 4] for slot in slots],
+        }
+        self._states_to_send.difference_update({"compare_virtual_image_bytes", "compare_image_revision"})
+
+    def get_state(self, key=None, drop_defaults=False):
+        """Keep full snapshots coherent without changing saved-state or targeted-sync policy."""
+        if key is not None:
+            # Workers can publish while holding a session lock. Do not invert
+            # the refresh order (stream lock, then session lock) here.
+            return super().get_state(key=key, drop_defaults=drop_defaults)
+        with self._stream_lock:
+            state = super().get_state(drop_defaults=drop_defaults if self._stream_deferred_snapshot is None else False)
+            # Full mounts and saved notebooks already contain canonical images;
+            # a transport delta must not be replayed or embedded beside them.
+            state.pop("_stream_panel_update", None)
+            if self._stream_deferred_snapshot is None:
+                return state
+            # The shared mixin owns heavy-buffer trimming, previews and stopped
+            # watcher badges. Only replace deferred display fields it retained.
+            for name in self._stream_deferred_state.intersection(state):
+                state[name] = self._stream_deferred_snapshot[name]
+            if drop_defaults:
+                traits = self.traits()
+                state = {name: value for name, value in state.items()
+                         if not self._compare(value, traits[name].default_value)}
+            return state
+
+    def set_state(self, sync_data) -> None:
+        """Resolve browser selection by acquisition identity before applying traits."""
+        with self._stream_lock:
+            if self._stream_deferred_state:
+                self._stream_update(force=True)
+            if hasattr(self, "_stream_stop") and ("frame_idx" in sync_data or "_stream_selected_source" in sync_data):
+                source = sync_data.get("_stream_selected_source")
+                if source not in self._stream_source_ids:
+                    self.send_state(["_stream_source_ids", "_stream_selected_source", "frame_idx"])
+                    self.send({"type": "show4dstem_source_receipt", "status": "rejected", "source": source,
+                               "error": "This scan was released. Select a retained scan."})
+                    return
+                sync_data = dict(sync_data, frame_idx=self._stream_source_ids.index(source))
+            super().set_state(sync_data)
+
+    def _interaction_context(self, keys: str) -> list:
+        """A live acquisition keeps its identity when retention changes its index."""
+        return [(self._stream_selected_source or self.frame_idx) if key == "frame_idx" else getattr(self, key)
+                for key in keys.split()]
+
+    def _handle_msg(self, msg) -> None:
+        """Serialize browser edits with arriving scan images and session changes."""
+        # Signal priority before waiting: the current refresh may hold the lock.
+        content = msg.get("content", {}).get("data", {}).get("content", {})
+        display_control = content.get("type") in {
+            "show4dstem_stream_ack", "show4dstem_frontend_ready",
+            "show4dstem_frontend_closed", "show4dstem_stream_alive", "show4dstem_stream_resync"}
+        if not display_control:
+            self._last_interaction_at = time.monotonic()
+        with self._stream_lock:
+            if self._stream_deferred_state and not display_control:
+                self._stream_update(force=True)
+            super()._handle_msg(msg)
 
     def _handle_frontend_ready_msg(self, _widget, content, _buffers) -> None:
         """Answer the frontend's ready message with the view buffers (``_schedule_initial_view_sync``)."""
-        if isinstance(content, dict) and content.get("type") == "show4dstem_frontend_ready" and content.get("version") == 1:
+        if not isinstance(content, dict) or content.get("version") != 1:
+            return
+        kind, view = content.get("type"), content.get("view")
+        if kind == "show4dstem_frontend_ready":
+            if content.get("stream_ack") is True and isinstance(content.get("view"), str):
+                self._stream_display_negotiated = True
+                self._stream_display_views[view] = content.get("stream_delta") is True
+                if content.get("stream_layout") is True:
+                    self._stream_layout_views.add(view)
+                else:
+                    self._stream_layout_views.discard(view)
+                self._stream_display_delta = all(self._stream_display_views.values())
+                self._stream_display_view = view
+                self._stream_display_acknowledged = self._stream_display_seq
+                self._stream_display_pending = 0
+                self._stream_display_probe_seq = None
+            if self._stream_deferred_state:
+                self._stream_update(force=True)
+            self._resend_view_state()
+        elif (kind == "show4dstem_stream_ack" and view == self._stream_display_view
+              and type(content.get("seq")) is int
+              and self._stream_display_acknowledged < content["seq"] <= self._stream_display_seq):
+            # The frontend applies ordered deltas before cumulatively acknowledging
+            # the newest revision. Coalescing receipts never discards a sent delta.
+            self._stream_display_acknowledged = content["seq"]
+            if content["seq"] == self._stream_display_seq:
+                self._stream_display_pending = 0
+            self._stream_display_probe_seq = None
+        elif kind == "show4dstem_frontend_closed" and isinstance(view, str):
+            self._stream_display_views.pop(view, None)
+            self._stream_layout_views.discard(view)
+            self._stream_display_delta = bool(self._stream_display_views) and all(self._stream_display_views.values())
+            if view == self._stream_display_view:
+                self._stream_display_view = next(reversed(self._stream_display_views), None)
+                if self._stream_display_view is not None and self._stream_display_pending:
+                    self._send_stream_display_marker()
+        elif (kind == "show4dstem_stream_alive" and isinstance(view, str)
+              and view in self._stream_display_views and self._stream_display_probe_seq is not None
+              and content.get("seq") == self._stream_display_probe_seq):
+            self._stream_display_probe_seq = None
+            self._stream_display_view = view
+            if self._stream_display_pending:
+                self._send_stream_display_marker()
+        elif (kind == "show4dstem_stream_resync" and isinstance(view, str)
+              and view in self._stream_display_views):
+            self._stream_display_view = view
+            self._stream_display_acknowledged = self._stream_display_seq
+            self._stream_display_pending = 0
             self._resend_view_state()
 
     def _handle_position_request(self, _widget, content, _buffers) -> None:
@@ -2395,7 +2587,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         try:
             if content.get("version") != 1 or self._data is None or self.comm is None:
                 raise ValueError("The position request is stale; reopen the viewer.")
-            if content.get("context") != [self.frame_idx, self.vi_roi_mode, self.compare_dp_mode]:
+            if content.get("context") != self._interaction_context("frame_idx vi_roi_mode compare_dp_mode"):
                 raise ValueError("The selected acquisition or diffraction mode changed.")
             row, col = content["center"]
             if not (isinstance(row, (int, float)) and isinstance(col, (int, float))
@@ -2423,7 +2615,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             context = "frame_idx vi_source view_mode compare_page_idx roi_mode roi_radius roi_radius_inner roi_width roi_height"
             if content.get("version") != 1 or self._data is None or self.comm is None:
                 raise ValueError("The detector request is stale; reopen the viewer.")
-            if content.get("context") != [getattr(self, key) for key in context.split()]:
+            if content.get("context") != self._interaction_context(context):
                 raise ValueError("Detector settings changed before this request was accepted.")
             row, col = map(float, content["center"])
             if not (math.isfinite(row) and math.isfinite(col)
@@ -2456,7 +2648,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             )
             if content.get("version") != 1 or self._data is None or self.comm is None:
                 raise ValueError("The radius request is stale; reopen the viewer.")
-            if content.get("context") != [getattr(self, key) for key in context.split()]:
+            if content.get("context") != self._interaction_context(context):
                 raise ValueError("Detector settings changed before this radius request was accepted.")
             outer, inner = map(float, content["radii"])
             if not (math.isfinite(outer) and math.isfinite(inner) and 0 <= inner < outer):
@@ -2563,6 +2755,10 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
 
     def _on_frame_idx_change(self, change=None) -> None:
         """React to a dataset switch: the cached presets belong to the old dataset, so drop them and repaint."""
+        if self._stream_source_ids:
+            self._stream_selected_source = self._stream_source_ids[self.frame_idx]
+        if self._stream_defer_compute:
+            return
         if self.n_frames <= 1:
             return
         self._preset_images = {}
@@ -2594,6 +2790,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
 
     def _on_compare_config_change(self, change=None) -> None:
         """React to a grid layout change: normalise it, keep one panel visible, rebuild the grid, keep the dataset in view."""
+        if self._stream_defer_compute:
+            return
         if change and change.get("name") == "view_mode":
             self.view_mode = self._normalize_view_mode(change.get("new", "single"))
         if change and change.get("name") == "compare_group_mode":
@@ -2709,8 +2907,10 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
 
     def _clear_compare_virtual_images(self, status: str = "") -> None:
         """Empty the comparison grid and show ``status`` (after ``free``, or when the grid has nothing to draw)."""
-        with self.hold_trait_notifications():
+        with self.hold_sync(), self.hold_trait_notifications():
             self.compare_virtual_image_bytes = b""
+            self._stream_panel_update = {}
+            self.compare_image_revision += 1
             self.compare_panel_count = 0
             self.compare_panel_indices = []
             self.compare_status = status
@@ -2741,8 +2941,10 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 return
             with self._compare_lock:
                 images = self._compare_images(indices, self._current_detector_mask())
-            with self.hold_trait_notifications():
+            with self.hold_sync(), self.hold_trait_notifications():
                 self.compare_virtual_image_bytes = memoryview(images).cast("B")
+                self._stream_panel_update = {}
+                self.compare_image_revision += 1
                 self.compare_panel_count = len(indices)
                 self.compare_panel_indices = indices
                 self.compare_status = self._compare_status(indices)

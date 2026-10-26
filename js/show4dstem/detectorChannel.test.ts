@@ -1,5 +1,6 @@
 import { expect, test, vi } from "vitest";
 import { detectorChannel, detectorViewId } from "./detectorChannel";
+import { interactionContext } from "./streamSelection";
 // @ts-expect-error Vitest raw source import is not part of the widget bundle.
 import source from "./index.tsx?raw";
 import ts from "typescript";
@@ -107,7 +108,7 @@ test.each(["circle", "square", "annular"])("%s radius requests ignore only an un
   const state: Record<string, unknown> = {roi_mode: mode, roi_center_row: 5.5, roi_center_col: 7.5};
   const messages: Record<string, unknown>[] = [];
   const model = {get: (key: string) => state[key], send: (message: Record<string, unknown>) => messages.push(message)};
-  const send = new Function("model", "radiusContext", `return (${callback});`)(model, "roi_mode roi_center_row roi_center_col");
+  const send = new Function("model", "radiusContext", "interactionContext", `return (${callback});`)(model, "roi_mode roi_center_row roi_center_col", interactionContext);
   // Switching from an annulus to a circle/square can leave an unused inner
   // radius larger than the newly dragged outer edge. Only the wire value changes.
   const request = {view: "radius", epoch: 2, seq: 3, center: [4, mode === "annular" ? 2 : 8]};

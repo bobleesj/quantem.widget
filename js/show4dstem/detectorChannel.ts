@@ -5,7 +5,7 @@ export function detectorViewId() {
 }
 
 /** A bounded request window and one replaceable position, scoped to this view. */
-export function detectorChannel(view: string, send: (request: Request) => void, settled: () => void,
+export function detectorChannel(view: string, send: (request: Request) => void, settled: (reply: Request & { status: string }) => void,
   receiptType = "show4dstem_detector_receipt", pendingLimit = 1) {
   let epoch = 0, serial = 0, completed = 0;
   const waiting = new Set<number>();
@@ -27,7 +27,7 @@ export function detectorChannel(view: string, send: (request: Request) => void, 
       if (!["accepted", "complete", "rejected"].includes(reply.status)) return;
       if (waiting.delete(reply.seq)) flush();
       if (reply.status !== "accepted" && reply.epoch === epoch && reply.seq === serial) {
-        completed = serial; settled();
+        completed = serial; settled(reply);
       }
     },
     clear() { epoch++; pending = null; completed = serial; },
