@@ -46,7 +46,7 @@ Busy scans cannot be unloaded. Saved files remain intact, and the linked
 streaming viewer updates to the remaining scans. Finish other analyses that
 borrow the scan before unloading it. Live reconstruction series require the
 run and pending saves to stop before retained inputs can be unloaded.
-**Stop Acquisition** stops the supplied trigger first, then closes the recording;
+**Stop** (square icon) stops the supplied trigger first, then closes the recording;
 retained scans stay available. `monitor.watch(None)` detaches without stopping
 or releasing the acquisition.
 
@@ -136,7 +136,7 @@ at most 120 samples per device in the browser.
 | S / M / L / XL | `size` | Text, controls and card layout resize |
 | Scan name | select linked viewer | DP/VI switch to that retained scan |
 | Unload | discard ready scan after confirmation | Scan disappears; linked viewer updates |
-| Stop Acquisition | stop trigger, then recording | Retained scans remain available |
+| Stop (square icon) | stop trigger, then recording | Retained scans remain available |
 | Terminate | request SIGTERM for an eligible PID | Process exits if it accepts the signal |
 
 ```{eval-rst}

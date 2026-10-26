@@ -2,6 +2,7 @@ import * as React from "react";
 import { createRender, useModel, useModelState } from "@anywidget/react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
+import StopRounded from "@mui/icons-material/StopRounded";
 import { compactButton } from "../controlStyles";
 import { useTheme, WIDGET_UI_FONT } from "../theme";
 
@@ -243,10 +244,12 @@ function ShowGPUView() {
         <span style={{ color: colors.accent }}>{recording.receiving ? "Acquiring / processing" : "Stopped"}</span>
         <span>{processMemory(scanBytes)} in tracked buffers</span>
         <span style={{ color: colors.textMuted }}>Peak {processMemory(Math.max(0, ...scanHistory))} · last {scanHistory.length} samples</span>
-        {recording.receiving && <Button size="small" sx={button} disabled={!!actionStatus?.busy} onClick={() => setConfirmation({
+        {recording.receiving && <Button size="small" sx={button} startIcon={<StopRounded />}
+          aria-label="Stop acquisition" title="Stop acquisition; keep retained scans"
+          disabled={!!actionStatus?.busy} onClick={() => setConfirmation({
           message: "Stop this acquisition and drain pending work? Retained scans stay in memory.",
           command: { action: "stop_acquisition", watch_id: recording.watch_id },
-        })}>Stop Acquisition</Button>}
+        })}>Stop</Button>}
       </div>
       <Sparkline values={scanHistory} total={Math.max(1, ...scanHistory)} color={colors.accent} />
       {recording.error && <div role="status" style={{ color: "#d32f2f" }}>{recording.error}</div>}
