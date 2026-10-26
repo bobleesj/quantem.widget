@@ -239,6 +239,9 @@ class ShowPtycho(anywidget.AnyWidget):
     fitted_C12_nm = traitlets.Float(0.0).tag(sync=True)
     fitted_phi12_deg = traitlets.Float(0.0).tag(sync=True)
     fitted_loss = traitlets.Float(None, allow_none=True).tag(sync=True)
+    # The kept fit's model agreement (higher is better) and its gain over standard SSB, None before a fit.
+    fitted_sample_agreement = traitlets.Float(None, allow_none=True).tag(sync=True)
+    fitted_tilt_fit_gain = traitlets.Float(None, allow_none=True).tag(sync=True)
     fitted_scan_detector_rotation_deg = traitlets.Float(0.0).tag(sync=True)
     fitted_sample_json = traitlets.Unicode("{}").tag(sync=True)
     fitted_higher_order_aberrations_json = traitlets.Unicode("{}").tag(sync=True)
@@ -867,9 +870,8 @@ class ShowPtycho(anywidget.AnyWidget):
                 scan_sampling_A=state["scan_sampling_A"],
             )
             if required > 4 + 1e-12:
-                self.sampling_limit_note = (
-                    f"Auto stops at 4×; nominal support requires {required:.2f}×. "
-                    "Choose 8× explicitly for finer output.")
+                # Auto never goes above 4×; 8× stays an explicit choice.
+                self.sampling_limit_note = f"Auto 4× (sampling supports 8×; nominal {required:.2f}×)"
         except ValueError as exc:
             # Invalid calibration still opens at native sampling.
             self.auto_sampling_note = (
@@ -1107,6 +1109,8 @@ class ShowPtycho(anywidget.AnyWidget):
                 self.fitted_scan_detector_rotation_deg = rotation
                 self.fitted_C10_nm, self.fitted_C12_nm, self.fitted_phi12_deg = fitted["C10_nm"], fitted["C12_nm"], fitted["phi12_deg"]
                 self.fitted_loss = state["loss"]
+                self.fitted_sample_agreement = state.get("sample_agreement")
+                self.fitted_tilt_fit_gain = state.get("tilt_fit_gain")
                 self.higher_order_aberrations_json = json.dumps({
                     key: value for key, value in fitted.items()
                     if key not in {"C10_nm", "C12_nm", "phi12_deg"}

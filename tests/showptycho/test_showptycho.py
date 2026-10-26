@@ -1875,7 +1875,7 @@ def test_auto_caps_output_and_preserves_saved_joint_fit(tmp_path):
                  detector_sampling_mrad=(5.0, 5.0), aberrations=dict(START))
     viewer = ShowPtycho(coarse, save_dir=tmp_path)
     assert viewer.upsampling_factor == "auto" and _shown(viewer).shape == (4 * SCAN, 4 * SCAN)
-    assert "4×" in viewer.sampling_limit_note and "5.08×" in viewer.sampling_limit_note
+    assert viewer.sampling_limit_note == "Auto 4× (sampling supports 8×; nominal 5.08×)"
     assert not viewer.auto_sampling_note
     np.testing.assert_array_equal(_shown(viewer), coarse.preview(START, upsampling_factor=4)[0])
     path = viewer.save_calibration()
@@ -2000,6 +2000,10 @@ def test_fitted_reference_distinguishes_missing_diagnostic_and_retains_higher_or
     state["loss"] = 0.0
     viewer._adopt_session(initial=False, compute_loss=False)
     assert viewer.fitted_loss == 0.0  # a measured zero remains a valid diagnostic
+    assert viewer.fitted_sample_agreement is None and viewer.fitted_tilt_fit_gain is None
+    state.update(sample_agreement=0.82, tilt_fit_gain=1.3)
+    viewer._adopt_session(initial=False, compute_loss=False)
+    assert (viewer.fitted_sample_agreement, viewer.fitted_tilt_fit_gain) == (0.82, 1.3)
     viewer.close()
 
 

@@ -229,7 +229,8 @@ def write_showptycho_folder(widget, path: str | pathlib.Path | None, title: str 
     live_values = {name: getattr(widget, name) for name in LIVE_TRAITS}
     try:
         # WebGPU's FFT supports powers of two; round the shared support target up, and say so.
-        browser_factor = next(factor for factor in (1, 2, 4, 8) if factor >= widget.auto_upsampling_factor)
+        # The browser never auto-picks above 4×; 8× stays an explicit choice.
+        browser_factor = next(factor for factor in (1, 2, 4) if factor >= min(widget.auto_upsampling_factor, 4))
         if widget.upsampling_factor == "auto" and browser_factor != widget.auto_upsampling_factor:
             print(f"ShowPtycho export: automatic sampling is {widget.auto_upsampling_factor}x here; the browser's "
                   f"WebGPU FFT takes 1, 2, 4 or 8x, so the exported review shows {browser_factor}x.")

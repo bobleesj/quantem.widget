@@ -229,6 +229,10 @@ REGION_FIT_SEED = 42
 REGION_TILT_LIMIT_MRAD = 25.0
 
 
+def _finite_or_none(value) -> float | None:
+    return float(value) if value is not None and math.isfinite(float(value)) else None
+
+
 class DirectSession:
     """A ``quantem.gpu.DirectPtycho`` session as the SSB widgets read and drive it.
 
@@ -340,6 +344,7 @@ class DirectSession:
         disagree on a name or a unit.
         """
         ssb = self.ssb
+        fit = getattr(ssb, "_aberration_search", None)
         return {
             "backend": ssb.backend, "scan_shape": tuple(int(size) for size in ssb.scan_shape), "source_path": ssb.source_path,
             "input_scan_shape": ssb.input_scan_shape,
@@ -353,6 +358,9 @@ class DirectSession:
             "num_bright_field_pixels": self.num_bright_field_pixels,
             "sample_tilt_mrad": None if ssb.sample_tilt_mrad is None else list(ssb.sample_tilt_mrad),
             "depth_spread_nm": ssb.depth_spread_nm,
+            # the kept fit's model agreement (higher is better) and its gain over standard SSB; None before a fit
+            "sample_agreement": _finite_or_none(getattr(fit, "sample_agreement", None)),
+            "tilt_fit_gain": _finite_or_none(getattr(fit, "tilt_fit_gain", None)),
         }
 
     def trials(self) -> list[dict]:

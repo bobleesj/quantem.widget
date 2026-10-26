@@ -1665,6 +1665,8 @@ function Explore() {
   const [autoRotation] = useModelState<number>("fitted_scan_detector_rotation_deg");
   const [computeLoss] = useModelState<boolean>("compute_loss");
   const [autoLoss] = useModelState<number | null>("fitted_loss");
+  const [fitAgreement] = useModelState<number | null>("fitted_sample_agreement");
+  const [tiltFitGain] = useModelState<number | null>("fitted_tilt_fit_gain");
   // an array carries the pixel size of its image; a session the scan step, which the output sampling divides
   const [objectSamplingA] = useModelState<number[]>("object_sampling_A");
   const [scanSamplingA] = useModelState<number[]>("scan_sampling_A");
@@ -1686,7 +1688,8 @@ function Explore() {
   }));
   const reconstructionRef = React.useRef(reconstructionControls);
   const [autoFactor] = useModelState<number>("auto_upsampling_factor");
-  const upsamplingFactor = sampling === "auto" ? (autoFactor || 1) : (sampling || 1);
+  // Auto never exceeds 4× on any path (the browser WebGPU path included); 8× is only an explicit choice.
+  const upsamplingFactor = sampling === "auto" ? Math.min(autoFactor || 1, 4) : (sampling || 1);
   const upsamplingFactorRef = React.useRef(upsamplingFactor || 1); upsamplingFactorRef.current = upsamplingFactor || 1;
 
   const [phaseWidth] = useModelState<number>("phase_width");
@@ -2488,7 +2491,7 @@ function Explore() {
   const trialObjectiveText = Array.from(new Set(trials.map(trial => trial.objective ?? "phase_variance")))
     .map(objective => objective === "agreement" ? "model agreement" : "phase variance").join(", ");
   const trialScoreText = (trial: OptunaTrial) => trial.objective === "agreement"
-    ? `agr ${formatNumber(-trial.loss, 4)}` : `pv ${formatNumber(trial.loss, 8)}`;
+    ? `score ${formatNumber(-trial.loss, 4)}` : `pv ${formatNumber(trial.loss, 8)}`;
   const [trialsExpanded, setTrialsExpanded] = React.useState(false);
   const [activeTrialRank, setActiveTrialRank] = React.useState<number | null>(null);
 
@@ -3988,7 +3991,7 @@ function Explore() {
                 title="Reconstruct at the selected output sampling using the current fit.">
                 <MenuItem value="auto" disabled={Boolean(autoSamplingNote)}
                   title={autoSamplingNote || "Choose from the acquisition calibration, up to 4×"}>
-                  Auto ({autoFactor || 1}×)
+                  Auto ({Math.min(autoFactor || 1, 4)}×)
                 </MenuItem>
                 {(webgpuStandalone ? [1, 2, 4, 8] : [1, 2, 3, 4, 8]).map(factor =>
                   <MenuItem key={factor} value={factor}>{factor}×</MenuItem>)}
@@ -4267,7 +4270,7 @@ function Explore() {
               <Box sx={{ flex: 1 }} />
               {tuning && (
                 <Typography sx={{ ...typography.value, color: tc.textMuted, opacity: 0.7 }}>
-                  auto {autoC10?.toFixed(1)} / {autoC12?.toFixed(1)} / {autoPhi12?.toFixed(0)}°{!regionalMode && autoLoss != null ? ` · variance ${autoLoss.toFixed(8)}` : ''}
+                  auto {autoC10?.toFixed(1)} / {autoC12?.toFixed(1)} / {autoPhi12?.toFixed(0)}°{!regionalMode && fitAgreement != null ? ` · agreement ${formatNumber(fitAgreement, 4)}` : ''}
                 </Typography>
               )}
             </Box>
@@ -4693,9 +4696,9 @@ function Explore() {
               </Box>
               <Box sx={{ flex: 1 }} />
               {trials.length > 0 && (
-                <Tooltip title={`Showing ${trials.length} retained trial previews ranked by ${trialObjectiveText}; this is not the total search budget. The refined fit's phase-variance diagnostic is ${autoLoss == null ? 'not measured' : autoLoss.toFixed(8)}. A trial shows its own objective's score: model agreement (higher is better) or phase variance (lower is better). Different objectives cannot be compared directly.`} placement="top" arrow>
+                <Tooltip title={`Showing ${trials.length} retained trial previews ranked by ${trialObjectiveText}; this is not the total search budget. The refined fit's model agreement is ${fitAgreement == null ? 'not measured' : formatNumber(fitAgreement, 4)} (higher is better)${tiltFitGain != null ? `; the tilt fit gains ${tiltFitGain.toFixed(2)}× over standard SSB` : ''}. A trial shows its own objective's score: model agreement (higher is better) or phase variance (lower is better). Different objectives cannot be compared directly.`} placement="top" arrow>
                   <Typography sx={{ ...typography.value, color: tc.textMuted, cursor: "help" }}>
-                    Refined variance {autoLoss?.toFixed(8) ?? 'not measured'}  ·  best trial {trialScoreText(trials[0])}
+                    Fit agreement {fitAgreement == null ? 'not measured' : formatNumber(fitAgreement, 4)}{tiltFitGain != null ? `  ·  tilt gain ${tiltFitGain.toFixed(2)}×` : ''}
                   </Typography>
                 </Tooltip>
               )}
@@ -4725,7 +4728,7 @@ function Explore() {
                           Refined fit
                         </Typography>
                         <Typography sx={{ fontSize: 11, color: STATUS_GOOD, fontFamily: "monospace", fontWeight: "bold" }}>
-                          {autoLoss?.toFixed(8) ?? 'not measured'}
+                          {fitAgreement == null ? '' : `agr ${formatNumber(fitAgreement, 4)}`}
                         </Typography>
                       </Stack>
                       <Typography sx={{ fontSize: 9, fontFamily: "monospace", color: tc.textMuted, whiteSpace: "nowrap" }}>
@@ -4758,7 +4761,7 @@ function Explore() {
                           #{trial.rank + 1}
                         </Typography>
                         <Typography sx={{ fontSize: 11, color: tc.accent, fontFamily: "monospace", fontWeight: "bold" }}
-                          title={trial.objective === "agreement" ? "Model agreement (the default fit), higher is better" : "Phase variance (the backup search), lower is better"}>
+                          title={trial.objective === "agreement" ? "Raw search objective of the default fit (unnormalised model agreement), higher is better; it ranks trials and is not the fit agreement" : "Phase variance (the backup search), lower is better"}>
                           {trialScoreText(trial)}
                         </Typography>
                       </Stack>

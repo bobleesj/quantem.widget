@@ -9,6 +9,7 @@ const DEFAULTS: Record<string, unknown> = {
   calibration_path: '', calibration_saved_at: '', calibration_status: '',
   crop_refit_available: false, crop_refit_request_json: '', crop_refit_status: '',
   fitted_C10_nm: 0, fitted_C12_nm: 0, fitted_loss: null, fitted_phi12_deg: 0,
+  fitted_sample_agreement: null, fitted_tilt_fit_gain: null,
   fitted_higher_order_aberrations_json: '{}',
   fitted_sample_json: '{}', fitted_scan_detector_rotation_deg: 0, display_negate_phase: false,
   higher_order_aberrations_json: '{}', initial_fft_on: false, local_tilt_active_region: '',
@@ -139,18 +140,20 @@ test('a late regional reply does not replace the overview loss', async () => {
   expect(model.sent[1].request.region_id).toBeUndefined();
 });
 
-test('unmeasured fitted variance is not displayed as zero or a sharper-image score', async () => {
+test('the fit readout shows the model agreement and tilt gain, never the phase variance', async () => {
   const model = session({
-    local_tilt_enabled: false, local_tilt_active_region: '', fitted_loss: null,
+    local_tilt_enabled: false, local_tilt_active_region: '', fitted_loss: 0.0046,
     result_json: JSON.stringify({ id: 0, ...START, loss: null }),
-    trials_json: JSON.stringify([{ rank: 0, ...START, loss: -0.6, objective: 'agreement' }]),
+    trials_json: JSON.stringify([{ rank: 0, ...START, loss: -4.0e17, objective: 'agreement' }]),
   });
   await mount(model);
-  expect(el.textContent).toContain('Refined variance not measured');
-  expect(el.textContent).not.toContain('0.00000000');
+  expect(el.textContent).toContain('Fit agreement not measured');
+  expect(el.textContent).not.toContain('variance');
   expect(el.textContent).not.toContain('undefined');
-  act(() => model.set('fitted_loss', 0));
-  expect(el.textContent).toContain('Refined variance 0.00000000');
+  act(() => { model.set('fitted_sample_agreement', 0.8123); model.set('fitted_tilt_fit_gain', 1.25); });
+  expect(el.textContent).toContain('Fit agreement 0.8123');
+  expect(el.textContent).toContain('tilt gain 1.25×');
+  expect(el.textContent).not.toContain('0.0046');
 });
 
 test('trial preview and restore use each complete fitted model, including tilt and rotation', async () => {
@@ -294,7 +297,7 @@ test('pinning an unscored reconstruction preserves a missing diagnostic', async 
 });
 
 test('sampling settings explain the Auto cap and let the user explicitly choose 8×', async () => {
-  const note = 'Auto stops at 4×; nominal support requires 5.08×. Choose 8× explicitly for finer output.';
+  const note = 'Auto 4× (sampling supports 8×; nominal 5.08×)';
   const model = session({ upsampling_available: true, auto_upsampling_factor: 4,
     sampling_limit_note: note, local_tilt_enabled: false });
   await mount(model);
