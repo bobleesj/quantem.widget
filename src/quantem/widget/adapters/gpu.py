@@ -550,7 +550,7 @@ class DirectSession:
     def browser_state(self) -> dict:
         """The compact state a browser SSB engine rebuilds its reducers from.
 
-        quantem.gpu's ``SSBExportState``: the bright-field pixel list
+        quantem.gpu's ``DirectPtychoExportState``: the bright-field pixel list
         (``bright_field_rows`` / ``_cols``), their reciprocal coordinates in the
         scan frame (``bright_field_k_row`` / ``_k_col``, quantem.gpu's ``kx_bf``
         / ``ky_bf``: its x is the scan row axis), the scan frequencies
@@ -707,7 +707,7 @@ class DirectSession:
 
     @staticmethod
     def result(result) -> dict:
-        """The values of a quantem.gpu ``SSBResult`` the widgets show and store.
+        """The values of a quantem.gpu ``DirectPtychoResult`` the widgets show and store.
 
         ``phase``, ``aberrations`` (``C10_nm``, ``C12_nm``, ``phi12_deg``),
         ``scan_detector_rotation_deg`` (the physical angle in [0, 360)),

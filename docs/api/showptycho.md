@@ -29,7 +29,7 @@ largest change. `angle` and `abs` run on the tensor's own device.
 `quantem.widget` owns presentation, project layout, and browser export. It does
 not implement CUDA, MPS, or WebGPU SSB kernels. Exact fitting and final
 reconstruction enter through the shared `quantem.gpu.DirectPtycho` API and return one
-`SSBResult`, regardless of compute backend. `ShowPtycho` consumes the prepared
+`DirectPtychoResult`, regardless of compute backend. `ShowPtycho` consumes the prepared
 `DirectPtycho` session so it can reuse resident buffers for notebook interaction; the
 returned result remains the compact analysis output.
 

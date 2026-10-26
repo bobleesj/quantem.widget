@@ -51,7 +51,7 @@ import { findFFTPeakBrowser } from "../display/geometry";
 import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI, strokePeakMarker } from "../figure";
 import { degreesWithin, wrapDegrees } from "../units";
 import { type SampleValues, SNAPSHOTS_SCHEMA, higherOrderAzimuthKey, higherOrderMagnitudeKey, reconstruct } from "./engineAdapter";
-import { WebGPUSSBBackend, deleteSSBFolderFile, readSSBFolderBytes, readSSBFolderJson, setSSBLocalDirectory, setSSBLocalFiles, ssbFolderWritable, ssbNeedsLocalSource, writeSSBFolderFile, type WebGPULoadProgress, type WebGPUSSBResult } from "../.generated/engine/direct_ptycho/webgpu/backend";
+import { WebGPUDirectPtychoBackend, deleteSSBFolderFile, readSSBFolderBytes, readSSBFolderJson, setSSBLocalDirectory, setSSBLocalFiles, ssbFolderWritable, ssbNeedsLocalSource, writeSSBFolderFile, type WebGPULoadProgress, type WebGPUDirectPtychoResult } from "../.generated/engine/direct_ptycho/webgpu/backend";
 
 /* ================================================================
    Design tokens (matching Live / Show2D)
@@ -191,7 +191,7 @@ function compactRuntimeStatus(status: string): string {
 
 /** Status line after a browser WebGPU reconstruction, naming the adapter (and whether it is software), the path, the BF
  *  count and the aberrations it ran with, so a slow or wrong frame can be traced to its configuration. */
-function webgpuRunStatus(result: WebGPUSSBResult, modeLabel: string, totalBf: number, c10Nm: number, hoLabel: string): string {
+function webgpuRunStatus(result: WebGPUDirectPtychoResult, modeLabel: string, totalBf: number, c10Nm: number, hoLabel: string): string {
   return `${result.adapterInfo}${result.softwareAdapter ? " software" : ""} WebGPU folder ${modeLabel} (${result.numBrightFieldPixels}/${totalBf} BF, C10=${c10Nm.toFixed(1)} nm, rot=${result.scanDetectorRotationDeg.toFixed(1)}°${hoLabel})`;
 }
 
@@ -2024,7 +2024,7 @@ function Explore() {
   const shouldCommitOnReleaseRef = React.useRef(false);
   const [webgpuRuntimeStatus, setWebgpuRuntimeStatus] = React.useState("");
   const [webgpuLoadProgress, setWebgpuLoadProgress] = React.useState<WebGPULoadProgress | null>(null);
-  const webgpuSsbRef = React.useRef<WebGPUSSBBackend | null>(null);
+  const webgpuSsbRef = React.useRef<WebGPUDirectPtychoBackend | null>(null);
   const webgpuInFlightRef = React.useRef(false);
   const webgpuPendingRef = React.useRef<[number, number, number, number] | null>(null);
   const webgpuPendingFullRef = React.useRef(false);
@@ -2141,7 +2141,7 @@ function Explore() {
     }
     try {
       // the engine reads the calibration and the bright-field source as ShowPtycho.export wrote them
-      const engine = new WebGPUSSBBackend(webgpuCalJson, { json: webgpuH5SourceJson });
+      const engine = new WebGPUDirectPtychoBackend(webgpuCalJson, { json: webgpuH5SourceJson });
       engine.setProgressHandler((progress) => {
         setWebgpuLoadProgress(progress.stage === "ready" ? null : progress);
         setWebgpuRuntimeStatus(webgpuProgressLabel(progress));
@@ -3058,7 +3058,7 @@ function Explore() {
   const renderAllRef = React.useRef(renderAll);
   renderAllRef.current = renderAll;
   const pendingWebgpuDisplay = React.useRef<{
-    engine: WebGPUSSBBackend; phase: Float32Array; width: number; height: number;
+    engine: WebGPUDirectPtychoBackend; phase: Float32Array; width: number; height: number;
   } | null>(null);
   const webgpuDisplayFrame = React.useMemo(() => latestFrame(() => {
     const next = pendingWebgpuDisplay.current;

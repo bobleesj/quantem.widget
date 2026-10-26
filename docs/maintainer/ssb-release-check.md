@@ -36,7 +36,7 @@ missing sampling is fitted. Do not substitute another specimen's calibration.
 The gate rejects imports from editable checkouts. It saves screenshots and
 separates fit time from the live interaction completion time. Keep private-data
 screenshots and raw reports outside the repository. CI uses public gold only.
-Kernel benchmarks use `quantem-gpu benchmark-ssb --require-installed`; they do
+Kernel benchmarks use `quantem-gpu benchmark-direct-ptycho --require-installed`; they do
 not measure browser paint. Record missing hardware, skipped tests and failures
 explicitly, and do not publish an RC that has not passed both backend gates.
 

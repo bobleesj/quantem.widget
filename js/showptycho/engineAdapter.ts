@@ -11,7 +11,7 @@
  * is its Python counterpart.
  */
 
-import type { WebGPUSSBBackend } from "../.generated/engine/direct_ptycho/webgpu/backend";
+import type { WebGPUDirectPtychoBackend } from "../.generated/engine/direct_ptycho/webgpu/backend";
 import type { WebGPUReconstructionOptions } from "../.generated/engine/direct_ptycho/webgpu/protocol";
 
 /** The layout of `snapshots/snapshots.json`, written by the exported page. */
@@ -51,7 +51,7 @@ export function higherOrderAzimuthKey(name: string): string {
 }
 
 /** Run one reconstruction on the engine, converting nm to Angstrom and degrees to radians at this boundary. */
-export function reconstruct(engine: WebGPUSSBBackend, request: ReconstructionRequest) {
+export function reconstruct(engine: WebGPUDirectPtychoBackend, request: ReconstructionRequest) {
   const higherOrder: Record<string, number> = {};
   for (const [key, value] of Object.entries(request.higherOrderAberrations)) {
     // a magnitude goes in Angstrom (C21_nm -> C21_A); an azimuth keeps its name and its degrees

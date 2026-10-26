@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import type { WebGPUSSBBackend } from "../.generated/engine/direct_ptycho/webgpu/backend";
+import type { WebGPUDirectPtychoBackend } from "../.generated/engine/direct_ptycho/webgpu/backend";
 import { higherOrderAzimuthKey, higherOrderMagnitudeKey, reconstruct } from "./engineAdapter";
 
 describe("the units at the engine boundary", () => {
   it("computes only the native diagnostic while retaining the displayed Auto phase", async () => {
     const calls: unknown[][] = [];
-    const engine = { reconstruct: (...args: unknown[]) => { calls.push(args); return Promise.resolve(null); } } as unknown as WebGPUSSBBackend;
+    const engine = { reconstruct: (...args: unknown[]) => { calls.push(args); return Promise.resolve(null); } } as unknown as WebGPUDirectPtychoBackend;
     const controller = new AbortController();
     await reconstruct(engine, {
       aberrations: { C10_nm: 3, C12_nm: 1, phi12_deg: 90 }, higherOrderAberrations: {},
@@ -20,7 +20,7 @@ describe("the units at the engine boundary", () => {
   });
   it("converts nm to Angstrom and degrees to radians once, at the call into the engine", async () => {
     const calls: unknown[][] = [];
-    const engine = { reconstruct: (...args: unknown[]) => { calls.push(args); return Promise.resolve(null); } } as unknown as WebGPUSSBBackend;
+    const engine = { reconstruct: (...args: unknown[]) => { calls.push(args); return Promise.resolve(null); } } as unknown as WebGPUDirectPtychoBackend;
     await reconstruct(engine, {
       aberrations: { C10_nm: 3, C12_nm: 1, phi12_deg: 90 },
       higherOrderAberrations: { [higherOrderMagnitudeKey("C21")]: 5, [higherOrderAzimuthKey("C21")]: 45, [higherOrderMagnitudeKey("C30")]: 2 },
@@ -41,7 +41,7 @@ describe("the units at the engine boundary", () => {
 
   it("sends no sample for standard SSB (depth spread 0)", async () => {
     const calls: unknown[][] = [];
-    const engine = { reconstruct: (...args: unknown[]) => { calls.push(args); return Promise.resolve(null); } } as unknown as WebGPUSSBBackend;
+    const engine = { reconstruct: (...args: unknown[]) => { calls.push(args); return Promise.resolve(null); } } as unknown as WebGPUDirectPtychoBackend;
     await reconstruct(engine, {
       aberrations: { C10_nm: 0, C12_nm: 0, phi12_deg: 0 }, higherOrderAberrations: {}, scanDetectorRotationDeg: 0,
       upsamplingFactor: 1, numBrightFieldPixels: 7, reducedBrightField: false, computeLoss: true,
