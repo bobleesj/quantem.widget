@@ -12,7 +12,7 @@ import { useLocalTiltWorkspace } from "./localTilt";
 import { idleDiagnostic, latestFrame } from "./interaction";
 import { GPUFrameDisplay, GPUPanelPainter, gpuPanelSources, type GPUPanelSource } from "./gpuFrame";
 import { FFTMagnitudeDisplay } from "./fftDisplay";
-import { fftAutoFrameZoom } from "./fftFraming";
+import { fftAutoFrameZoom, fftFrameRegion, type GridRegion } from "./fftFraming";
 import { createRender, useModel, useModelState } from "@anywidget/react";
 import Box from "@mui/material/Box";
 import Stack from "@mui/material/Stack";
@@ -336,13 +336,14 @@ const FFT_SNAP_RADIUS = 5;
 async function computeFFTMagnitude(
   fft: DisplayFFT, magnitudeDisplay: FFTMagnitudeDisplay,
   data: Float32Array, w: number, h: number,
+  statsRegion: (pw: number, ph: number) => GridRegion | null = () => null,
 ): Promise<{ mag: Float32Array; pw: number; ph: number; stats: FrameStats }> {
   // Windowing, padding, the magnitude and its display statistics run in the display worker; the
   // input thread only uploads the interleaved grid and reads the spectrum back, so phase frames
   // keep arriving.
   const { complex, pw, ph } = await magnitudeDisplay.prepare(data, w, h);
   const spectrum = await fft.fft2DInterleaved(complex, pw, ph, false);
-  const { magnitude, stats } = await magnitudeDisplay.magnitudeInterleaved(spectrum, pw, ph);
+  const { magnitude, stats } = await magnitudeDisplay.magnitudeInterleaved(spectrum, pw, ph, statsRegion(pw, ph));
   return { mag: magnitude, pw, ph, stats };
 }
 
@@ -2186,6 +2187,9 @@ function Explore() {
   const ampFrameData = React.useCallback(() => panelFrames[2].get().data, [panelFrames]);
   // Percentile histograms and histogram bins of each slot's newest frame, from the display worker.
   const statsWorkerRef = React.useRef<DisplayStatsWorker | null>(null);
+  // The block of a pw x ph display spectrum (of a w x h phase) that the FFT auto frame shows; its
+  // contrast window comes from that block alone. Set each render from the current calibration.
+  const fftStatsRegionRef = React.useRef<(pw: number, ph: number, w: number, h: number) => GridRegion | null>(() => null);
   const slotStatsRef = React.useRef<Record<GPUColormapSlot, { data: Float32Array; stats: FrameStats } | null>>({ 0: null, 1: null, 2: null });
   const paintedGenRef = React.useRef<Record<GPUColormapSlot, number>>({ 0: 0, 1: 0, 2: 0 });
   React.useEffect(() => {
@@ -2940,7 +2944,7 @@ function Explore() {
     void gpuFrame.process(0, w, h, withFFT ? 1 : null, phaseStats => {
       slotStatsRef.current[0] = { data, stats: phaseStats };
       paints.push(renderRealDisplayRef.current(data, w, h, phaseStats));
-    }).then(result => {
+    }, withFFT ? fftStatsRegionRef.current(pw, ph, w, h) : null).then(result => {
       if (result.fft && magnitude) {
         // an unchanged shape must not re-render the widget on every frame
         if (fftSourceShapeRef.current[0] !== h || fftSourceShapeRef.current[1] !== w) setFFTSourceShape([h, w]);
@@ -3009,7 +3013,8 @@ function Explore() {
         displayFFTRef.current = fft;
         const display = fftMagnitudeDisplayRef.current;
         if (!display) throw new Error("FFT display is closed.");
-        return computeFFTMagnitude(fft, display, phase, width, height);
+        return computeFFTMagnitude(fft, display, phase, width, height,
+          (pw, ph) => fftStatsRegionRef.current(pw, ph, width, height));
       }).then(fftResult => {
         if (gen !== fftGenRef.current) return;  // stale: newer data already rendered
         applyFFT(fftResult, width, height);
@@ -3755,6 +3760,11 @@ function Explore() {
     : objectSamplingA;
   const fftAutoZoom = fftAutoFrameZoom(fftOff?.width || 0, fftOff?.height || 0,
     fftSampling || [], scanSamplingA || []);
+  fftStatsRegionRef.current = (pw, ph, w, h) => {
+    const sampling = ssbSession && scanSamplingA?.length === 2
+      ? [scanSamplingA[0] * scanRows / h, scanSamplingA[1] * scanCols / w] : objectSamplingA;
+    return fftFrameRegion(pw, ph, fftAutoFrameZoom(pw, ph, sampling || [], scanSamplingA || []));
+  };
   const fftView = { ...fftZoom, zoom: fftZoom.zoom * fftAutoZoom };
   const fftReset = { ...ZOOM_RESET, zoom: fftAutoZoom };
   const fftRealPixelSize = fftSampling?.[1] || pixelSize;

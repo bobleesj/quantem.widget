@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { applyHannWindow2D, fftshift, computeMagnitude, nextPow2, shiftedMagnitude } from '../display/fft';
 import { displayFFTInput, fftMagnitudeWorkerSource, interleavedShiftedMagnitude } from './fftDisplay';
 import { frameStats } from '../display/displayStats';
+import { percentileWindow } from '../display/stats';
+import { cropGridRegion, fftFrameRegion } from './fftFraming';
 
 describe('full-resolution FFT display', () => {
   it('preserves every shifted log-magnitude pixel in the worker, including float32 rounding', () => {
@@ -60,5 +62,30 @@ describe('display FFT preparation in the worker', () => {
     worker.onmessage({data: {id: 9, kind: 'interleaved', complex, width, height}});
     expect(messages[0].magnitude).toEqual(expected);
     expect(messages[0].stats).toEqual(frameStats(expected));
+  });
+
+  it('takes an upsampled spectrum\'s contrast from the framed block, not its empty outer band', () => {
+    // An 8x spectrum: a bright support disc in the centre 1/8 of the grid, near zero elsewhere.
+    const width = 256, height = 256;
+    const complex = new Float32Array(width * height * 2);
+    for (let row = 0; row < height; row++) for (let col = 0; col < width; col++) {
+      const r = Math.hypot(row - height / 2, col - width / 2);
+      // DC sits at (0, 0) before the shift; place the disc around it
+      const sr = (row + height / 2) % height, sc = (col + width / 2) % width;
+      complex[2 * (sr * width + sc)] = r < 14 ? 50 + 40 * Math.sin(row * 0.7) * Math.cos(col * 0.5) : 1e-3;
+    }
+    const magnitude = interleavedShiftedMagnitude(complex, width, height);
+    const region = fftFrameRegion(width, height, 8)!;
+    expect(region).toEqual({ x0: 112, y0: 112, width: 32, height: 32 });
+    const messages: {stats: ReturnType<typeof frameStats>}[] = [];
+    const worker = {onmessage: (_event: unknown) => {}, postMessage: (value: {stats: ReturnType<typeof frameStats>}) => messages.push(value)};
+    new Function('self', fftMagnitudeWorkerSource())(worker);
+    worker.onmessage({data: {id: 1, kind: 'interleaved', complex, width, height, region}});
+    expect(messages[0].stats).toEqual(frameStats(cropGridRegion(magnitude, width, region)));
+    // The full-grid window saturates the disc; the framed window spans the disc's own values.
+    const full = percentileWindow(frameStats(magnitude).histogram, 1, 99);
+    const framed = percentileWindow(messages[0].stats.histogram, 1, 99);
+    expect(full.vmax).toBeLessThan(Math.log1p(10));
+    expect(framed.vmax).toBeGreaterThan(Math.log1p(80));
   });
 });
