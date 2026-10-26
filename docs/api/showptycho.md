@@ -223,13 +223,6 @@ model-based, tilt-corrected fit is the default everywhere, and it is where SSB i
 |---|---|---|
 | `fit_aberrations()` | model-based, tilt-corrected | the default: every fit |
 | `fit_aberrations(search="primary", tilt=False)` | model-based, tilt held at 0 | thin, untilted samples, or to see what tilt correction changes |
-| `fit_aberrations(search="primary", tilt=False, objective="phase_variance")` | phase variance, the earlier SSB search | a backup: reproducing older results, cross-checking a fit |
-
-Phase variance chooses the aberrations that make the corrected phases of all bright-field pixels agree best: the
-least variance of the corrected phase across them. It stays as a backup, not an equal alternative: it cannot see
-sample tilt or thickness, it scores only how consistent the bright-field images are rather than how well a model
-explains the measurement, and it is about 10x slower. On simulated crystals with known aberrations, the model-based
-fit lands about 3x closer in C10.
 
 ## Tilt correction
 
@@ -242,14 +235,11 @@ viewer = ShowPtycho(ptycho, show_fft=True)
 viewer
 ```
 
-The other two methods are explicit, with quantem.gpu's names:
+The other method is explicit, with quantem.gpu's names:
 `ptycho.fit_aberrations(search="primary", tilt=False)` fits the primary optics model
 with tilt and depth held at zero. Use `search="primary", tilt=True` for a
-comparison at the same aberration order.
-
-`ptycho.fit_aberrations(search="primary", tilt=False, objective="phase_variance")` is the
-phase-variance backup. Joint fit, Refit SSB and Fit Regions all run the
-model-based, tilt-corrected fit.
+comparison at the same aberration order. Joint fit, Refit SSB and Fit Regions
+all run the model-based, tilt-corrected fit.
 
 **Tilt correction** starts on. Switch it off to compare the phase and FFT with
 zero sample tilt, keeping the same fitted aberrations and depth spread. This
@@ -260,19 +250,14 @@ correction has been fitted. This does not rotate the scan or align depth slices.
 
 ## Reusing the reviewed phase
 
-For a numerical handoff to another reconstruction, choose the same estimator
-at both stages:
-
-```python
-viewer = ShowPtycho(ptycho, phase_estimator="phase_of_mean")
-```
-
-Save records this estimator along with the resolved sampling factor and optics.
-Omitting the option preserves QuantEM.GPU's phase-of-the-mean default on
-CUDA and MPS, including higher-order aberrations. These estimators
-can produce different numerical phase values. Explicit-estimator reviews stay
-in the notebook; live browser-folder export rejects them until that handoff
-preserves the estimator too.
+SSB reconstructs one phase, the phase of the mean wave, on CUDA and MPS,
+including higher-order aberrations. Save records it as
+`"phase_estimator": "phase_of_mean"` with the resolved sampling factor and
+optics, so another reconstruction can start from the same phase. The
+`phase_estimator` keyword is retired: `"phase_of_mean"` prints one line and
+changes nothing, and the retired `"mean_phase"` and `"complex_wave"` raise. A
+`calibration.json` saved with one of them still restores its optics, with one
+printed line.
 
 ## Output sampling
 
@@ -564,11 +549,11 @@ region retains independent controls, fit parameters and results; selecting
 others intact.
 
 The built-in workflow keeps detector geometry and scan-detector rotation common.
-Each changed region runs one standard fit: 200 initial TPE trials, then joint
-Newton refinement through fifth-order aberrations with both sample tilt
-components and depth spread on the selected GPU backend.
-`viewer.fit_regions(trials=..., refinement=...)` changes the initial trial budget
-and refinement method, also for the button. Progress identifies the region,
+Each changed region runs one standard fit: 200 initial TPE trials, then
+quantem.gpu's exact-gradient refinement through fifth-order aberrations with
+both sample tilt components and depth spread on the selected GPU backend.
+`viewer.fit_regions(trials=...)` changes the initial trial budget, also for the
+button; the retired `refinement=` keyword prints one line and changes nothing. Progress identifies the region,
 current operation and elapsed time. It reconstructs the full scan with each
 regional fit, then crops the corrected regional view. The overview fit remains intact.
 

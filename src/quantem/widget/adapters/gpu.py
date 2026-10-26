@@ -229,6 +229,10 @@ REGION_FIT_SEED = 42
 REGION_TILT_LIMIT_MRAD = 25.0
 
 
+def _finite_or_none(value) -> float | None:
+    return float(value) if value is not None and math.isfinite(float(value)) else None
+
+
 class DirectSession:
     """A ``quantem.gpu.DirectPtycho`` session as the SSB widgets read and drive it.
 
@@ -340,6 +344,7 @@ class DirectSession:
         disagree on a name or a unit.
         """
         ssb = self.ssb
+        fit = getattr(ssb, "_aberration_search", None)
         return {
             "backend": ssb.backend, "scan_shape": tuple(int(size) for size in ssb.scan_shape), "source_path": ssb.source_path,
             "input_scan_shape": ssb.input_scan_shape,
@@ -353,6 +358,9 @@ class DirectSession:
             "num_bright_field_pixels": self.num_bright_field_pixels,
             "sample_tilt_mrad": None if ssb.sample_tilt_mrad is None else list(ssb.sample_tilt_mrad),
             "depth_spread_nm": ssb.depth_spread_nm,
+            # the kept fit's model agreement (higher is better) and its gain over standard SSB; None before a fit
+            "sample_agreement": _finite_or_none(getattr(fit, "sample_agreement", None)),
+            "tilt_fit_gain": _finite_or_none(getattr(fit, "tilt_fit_gain", None)),
         }
 
     def trials(self) -> list[dict]:
@@ -361,7 +369,7 @@ class DirectSession:
 
         ``objective`` is quantem.gpu's name for what the trial was scored on: ``"agreement"`` (the default
         model-based fit, with or without tilt; its ``loss`` is the negative agreement, lower is better) or
-        ``"phase_variance"`` (the backup search). ``sample_tilt_mrad`` (scan frame) and ``depth_spread_nm`` are the
+        ``"phase_variance"`` (quantem.gpu's phase-variance search, for a session fitted with it). ``sample_tilt_mrad`` (scan frame) and ``depth_spread_nm`` are the
         trial's sample model, 0 for a tilt-0 trial. Losses compare only within one objective.
         """
         return [{"C10_nm": float(trial["params"].get("C10_nm", 0.0)), "C12_nm": float(trial["params"].get("C12_nm", 0.0)),
@@ -485,10 +493,6 @@ class DirectSession:
         if loss is not None:
             self.ssb.best_loss = float(loss)
 
-    def preview_context(self, num_bright_field_pixels: int):
-        """A reduced bright-field context for slider drags (``quantem.gpu.DirectPtycho.preview_context``)."""
-        return self.ssb.preview_context(int(num_bright_field_pixels))
-
     def preview(self, aberrations: dict, **options):
         """Transient ``(phase, loss)`` at ``aberrations`` (``quantem.gpu.DirectPtycho.preview(aberrations, **options)``).
 
@@ -533,15 +537,13 @@ class DirectSession:
         return direct_workflow.advance(self.ssb)
 
     def _drag_inputs(self, aberrations: dict, *, upsampling, method: str = "ssb", sample_tilt_mrad=(0.0, 0.0),
-                     depth_spread_nm: float = 0.0, phase_estimator=None, **strengths):
+                     depth_spread_nm: float = 0.0, **strengths):
         """``preview``'s options as ``direct_workflow``'s (aberrations, tilt, depth, factor, policy)."""
         from quantem.gpu.direct_ptycho import direct_workflow
         from quantem.gpu.direct_ptycho.units import validate_aberrations
 
         policy = direct_workflow.settings(method, *(strengths.get(name) for name in (
             "phase_damping", "amplitude_damping", "smoothness_inv_A", "detector_weighting")))
-        if method == "ssb" and phase_estimator is not None:
-            policy = {"phase_estimator": phase_estimator}
         return (validate_aberrations(_named_orders(aberrations), higher_order=True), tuple(sample_tilt_mrad),
                 float(depth_spread_nm), self.ssb._resolve_upsampling(upsampling), policy)
 
@@ -593,8 +595,8 @@ class DirectSession:
         return self.result(self.ssb.fit_aberrations(**options))
 
     def fit_regions(self, regions: list[dict], parameters: dict, *,
-                    upsampling: int, phase_estimator: str,
-                    num_trials: int = 200, refinement: str | None = "newton",
+                    upsampling: int,
+                    num_trials: int = 200,
                     progress: Callable[[dict], None] | None = None) -> dict:
         """Jointly fit regional models and crop their full-scan reconstructions.
 
@@ -602,8 +604,8 @@ class DirectSession:
         Independent regional sessions leave the overview calibration intact.
         Detector geometry and rotation are common; aberrations, both tilt
         components and depth spread are optimized together for each region,
-        ``quantem.gpu.DirectPtycho.fit_aberrations(tilt=True, num_trials=, refinement=)``
-        once with ``REGION_FIT_SEED``.
+        ``quantem.gpu.DirectPtycho.fit_aberrations(tilt=True, num_trials=)``
+        once with ``REGION_FIT_SEED`` and quantem.gpu's default refinement.
         The separate phase-variance diagnostic is not needed for this fit,
         so ``compute_loss=False`` omits it without changing any fitted value.
         A fit within 0.01 of the tilt limit or of quantem.gpu's depth-spread
@@ -640,7 +642,7 @@ class DirectSession:
                     progress({"label": region["label"], "region_id": region["id"],
                               "region_index": region_index, "region_count": len(regions),
                               "stage": stage, "repeat": repeat, "repeats": 1,
-                              "num_trials": int(num_trials), "refinement": refinement,
+                              "num_trials": int(num_trials),
                               "elapsed_s": time.perf_counter() - started})
             report("preparing", 0)
             with ssb.select_region(
@@ -650,7 +652,7 @@ class DirectSession:
                 report("joint_fit", 1)
                 fitted = regional.fit_aberrations(
                     search="standard",
-                    tilt=True, num_trials=int(num_trials), refinement=refinement,
+                    tilt=True, num_trials=int(num_trials),
                     tilt_limit_mrad=REGION_TILT_LIMIT_MRAD,
                     check_rotation=False, compare_standard=False,
                     compute_loss=False, seed=REGION_FIT_SEED, verbose=False, show=False)
@@ -670,8 +672,7 @@ class DirectSession:
             phase, _ = self.preview(
                 fit["aberrations"], sample_tilt_mrad=fit["sample_tilt_mrad"],
                 depth_spread_nm=fit["depth_spread_nm"],
-                upsampling=factor, phase_estimator=phase_estimator,
-                compute_loss=False)
+                upsampling=factor, compute_loss=False)
             if tuple(phase.shape) != tuple(size * factor for size in ssb.scan_shape):
                 raise ValueError("Local correction requires a full-scan reconstruction before cropping.")
             images[f"{region['label']} · SSB"] = self.crop_native(phase, bounds, factor)
@@ -690,13 +691,11 @@ class DirectSession:
                 "fit_seconds": time.perf_counter() - region_started,
                 "bound_hit": bool(bound_hit),
                 "fit_record": {"method": "joint optics, tilt and depth", "fits": [fit],
-                               "backend": ssb.backend, "num_trials": int(num_trials),
-                               "refinement": refinement},
+                               "backend": ssb.backend, "num_trials": int(num_trials)},
                 "reconstruction": {
                     "scan_shape": list(ssb.scan_shape), "scan_offset": list(self.scan_offset),
                     "scan_region": None,
                     "display_bounds": list(bounds), "upsampling": factor,
-                    "phase_estimator": phase_estimator,
                     "num_bright_field_pixels": self.num_bright_field_pixels,
                 },
             })
@@ -804,10 +803,6 @@ class AcquisitionSeries:
                 f"{self.frames[0].shape} on {self.device}."
             )
         self.frames.append(frame)
-
-
-# Compatibility for integrations using the previous adapter name.
-SsbSession = DirectSession
 
 
 def _named_orders(aberrations: dict) -> dict:

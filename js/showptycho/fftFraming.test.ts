@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { fftAutoFrameZoom } from './fftFraming';
+import { cropGridRegion, fftAutoFrameZoom, fftFrameRegion } from './fftFraming';
 
 test('Native frequency range is identical at 1x, 2x, padded 3x and 4x', () => {
   const step = 0.373, q = 0.8;
@@ -25,4 +25,12 @@ test('uncalibrated arrays and invalid metadata retain the full FFT', () => {
   }
   expect(fftAutoFrameZoom(512, 512, [0.1, 0.1])).toBe(1);
   expect(fftAutoFrameZoom(0, 0, [0.1, 0.1], [0.4, 0.4])).toBe(1);
+});
+
+test('the contrast region is the auto frame\'s centred block, and none at 1x', () => {
+  expect(fftFrameRegion(512, 512, 1)).toBeNull();
+  expect(fftFrameRegion(1024, 1024, 8)).toEqual({ x0: 448, y0: 448, width: 128, height: 128 });
+  expect(fftFrameRegion(1024, 512, 4)).toEqual({ x0: 384, y0: 192, width: 256, height: 128 });
+  const grid = Float32Array.from({ length: 16 }, (_, i) => i);
+  expect(Array.from(cropGridRegion(grid, 4, { x0: 1, y0: 1, width: 2, height: 2 }))).toEqual([5, 6, 9, 10]);
 });

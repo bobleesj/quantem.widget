@@ -9,6 +9,7 @@
 // CPU: about 200 ms per 1536 x 1536 frame.
 import type { GPUColormapEngine } from "../display/colormapEngine";
 import type { FrameStats } from "../display/displayStats";
+import type { GridRegion } from "./fftFraming";
 import { nextPow2, type WebGPUFFT } from "../display/fft";
 import { computePipeline, renderPipeline } from "../display/pipelines";
 import { DISPLAY_NORMALIZE_WGSL } from "../display/displayShaders";
@@ -21,7 +22,12 @@ const REDUCE_GROUPS = 1024;
 export const RECORD_BYTES = Math.ceil((16 + NUM_BINS * 4) / 256) * 256;
 
 const REDUCE_WGSL = /* wgsl */ `
-struct Params { count: u32, groups: u32, _a: u32, _b: u32 };
+struct Params { count: u32, groups: u32, row_width: u32, stride: u32, x0: u32, y0: u32, _a: u32, _b: u32 };
+// The index-th value of the block (x0, y0, row_width wide) of a grid stride wide.
+fn at(index: u32) -> u32 {
+  let row = index / params.row_width;
+  return (params.y0 + row) * params.stride + params.x0 + index - row * params.row_width;
+}
 @group(0) @binding(0) var<storage, read> data: array<f32>;
 @group(0) @binding(1) var<uniform> params: Params;
 @group(0) @binding(2) var<storage, read_write> partials: array<vec4<f32>>;
@@ -34,7 +40,7 @@ fn main(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index
   var vmax = -3.4e38;
   var sum = 0.0;
   for (var index = group.x * 256u + lane; index < params.count; index += params.groups * 256u) {
-    let value = data[index];
+    let value = data[at(index)];
     vmin = min(vmin, value);
     vmax = max(vmax, value);
     sum += value;
@@ -89,7 +95,12 @@ fn main(@builtin(local_invocation_index) lane: u32) {
 // percentileHistogram's binning: bin i spans [min + i*range/1024, min + (i+1)*range/1024),
 // max lands in the last bin. Bins are counted in workgroup memory, then added once per group.
 const HISTOGRAM_WGSL = /* wgsl */ `
-struct Params { count: u32, groups: u32, _a: u32, _b: u32 };
+struct Params { count: u32, groups: u32, row_width: u32, stride: u32, x0: u32, y0: u32, _a: u32, _b: u32 };
+// The index-th value of the block (x0, y0, row_width wide) of a grid stride wide.
+fn at(index: u32) -> u32 {
+  let row = index / params.row_width;
+  return (params.y0 + row) * params.stride + params.x0 + index - row * params.row_width;
+}
 @group(0) @binding(0) var<storage, read> data: array<f32>;
 @group(0) @binding(1) var<uniform> params: Params;
 @group(0) @binding(2) var<storage, read_write> record: array<atomic<u32>>;
@@ -104,7 +115,7 @@ fn main(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index
   if (range > 0.0) {
     let scale = ${NUM_BINS}.0 / range;
     for (var index = group.x * 256u + lane; index < params.count; index += params.groups * 256u) {
-      let bin = min(${NUM_BINS - 1}u, u32(floor((data[index] - vmin) * scale)));
+      let bin = min(${NUM_BINS - 1}u, u32(floor((data[at(index)] - vmin) * scale)));
       atomicAdd(&local_bins[bin], 1u);
     }
   }
@@ -226,7 +237,7 @@ export class GPUFrameDisplay {
   }
 
   private uniform(values: number[]): GPUBuffer {
-    const buffer = this.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const buffer = this.device.createBuffer({ size: values.length * 4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.device.queue.writeBuffer(buffer, 0, new Uint32Array(values));
     return buffer;
   }
@@ -242,11 +253,15 @@ export class GPUFrameDisplay {
     pass.end();
   }
 
-  /** Range, sum and 1024-bin histogram of `data` (count floats) into record `index`; returns the
-   *  (min, max, sum, count) head for later passes of the same frame. */
-  private encodeStats(encoder: GPUCommandEncoder, data: GPUBuffer, count: number, index: number, temporaries: GPUBuffer[]): GPUBuffer {
+  /** Range, sum and 1024-bin histogram of `data` (count floats, or `region` of a grid `stride`
+   *  wide) into record `index`; returns the (min, max, sum, count) head for later passes of the same frame. */
+  private encodeStats(encoder: GPUCommandEncoder, data: GPUBuffer, count: number, index: number, temporaries: GPUBuffer[],
+    region: GridRegion | null = null, stride = count): GPUBuffer {
+    if (region) count = region.width * region.height;
     const groups = Math.min(REDUCE_GROUPS, Math.max(1, Math.ceil(count / 256)));
-    const params = this.uniform([count, groups, 0, 0]);
+    const params = this.uniform(region
+      ? [count, groups, region.width, stride, region.x0, region.y0, 0, 0]
+      : [count, groups, count, count, 0, 0, 0, 0]);
     temporaries.push(params);
     const offset = index * RECORD_BYTES;
     encoder.clearBuffer(this.records, offset, RECORD_BYTES);
@@ -267,7 +282,7 @@ export class GPUFrameDisplay {
    * is given, its display spectrum written into that slot (already sized pw x ph).
    */
   async process(phaseSlot: number, width: number, height: number, fftSlot: number | null,
-    onPhase?: (stats: FrameStats) => void): Promise<GPUFrameResult> {
+    onPhase?: (stats: FrameStats) => void, fftRegion: GridRegion | null = null): Promise<GPUFrameResult> {
     const phase = this.engine.slots[phaseSlot];
     const temporaries: GPUBuffer[] = [];
     const encoder = this.device.createCommandEncoder();
@@ -300,7 +315,8 @@ export class GPUFrameDisplay {
       temporaries.push(params);
       const target = this.engine.slots[fftSlot].dataBuffer;
       this.dispatch(after, this.magnitude, [this.complex!, params, target], Math.ceil(pw / 16), Math.ceil(ph / 16));
-      this.encodeStats(after, target, pw * ph, 1, temporaries);
+      // The FFT panel's contrast comes from the block its auto frame shows (display only).
+      this.encodeStats(after, target, pw * ph, 1, temporaries, fftRegion, pw);
       const fftReadback = this.device.createBuffer({ size: RECORD_BYTES, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
       temporaries.push(fftReadback);
       after.copyBufferToBuffer(this.records, RECORD_BYTES, fftReadback, 0, RECORD_BYTES);

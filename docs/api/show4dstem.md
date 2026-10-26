@@ -285,22 +285,17 @@ from quantem.gpu.io import load
 viewer = Show4DSTEM(load("scan.qem"))
 phase = viewer.compute_ssb()             # 200 initial trials, then joint fifth-order refinement
 control = viewer.compute_ssb(tilt=False)  # the same model at tilt 0
-backup = viewer.compute_ssb(tilt=False, objective="phase_variance")  # the phase-variance backup
 ```
 
-The three fits are quantem.gpu's:
+The two fits are quantem.gpu's:
 
 | Call | Method | Use it for |
 |---|---|---|
 | `fit_aberrations()` | model-based, tilt-corrected | the default: every fit |
 | `fit_aberrations(search="primary", tilt=False)` | model-based, tilt held at 0 | thin, untilted samples, or to see what tilt correction changes |
-| `fit_aberrations(search="primary", tilt=False, objective="phase_variance")` | phase variance, the earlier SSB search | a backup: reproducing older results, cross-checking a fit |
 
-Phase variance chooses the aberrations that make the corrected phases of all bright-field pixels agree best: the
-least variance of the corrected phase across them. It stays as a backup, not an equal alternative: it cannot see
-sample tilt or thickness, it scores only how consistent the bright-field images are rather than how well a model
-explains the measurement, and it is about 10x slower. On simulated crystals with known aberrations, the model-based
-fit lands about 3x closer in C10.
+The phase-variance fit is retired: `compute_ssb(objective=...)` prints one line
+and runs the model fit.
 
 An input that records no calibration (an array, an HDF5 master) takes it from
 the constructor, under the `.qem` format's names:
@@ -316,11 +311,11 @@ value the input records raises: the dataset or file is the source of its
 calibration. The fit uses every detected
 bright-field pixel (the `compute_ssb` keywords
 `bright_field_intensity_threshold` and `bright_field_radius_px`). The keywords
-`tilt` (True, the default, or False) and `objective` (`"agreement"`, the
-default, or `"phase_variance"`, at tilt 0 only), which the **Fit** menu sets
-(Tilt-corrected, Tilt 0, Phase variance backup), `trials`, `refinement`
-(quantem.gpu's `"auto"`, the default, `"newton"`,
-`"nelder-mead"` or None) and `seed` control the search, for example
+`tilt` (True, the default, or False), which the **Fit** menu sets
+(Tilt-corrected, Tilt 0), `trials`, `refinement` (`"auto"`, the default,
+quantem.gpu's exact-derivative refinement, or None for the best trial without
+one; the retired `"newton"` and `"nelder-mead"` print one line and run
+`"auto"`) and `seed` control the search, for example
 `viewer.compute_ssb(trials=100, seed=0)`. **Lock C10** and **Lock C12**
 hold a coefficient at its slider value; in the tilt-corrected fit C12 is held
 alone only at 0, and both locks hold all three coefficients and fit the tilt
@@ -330,7 +325,7 @@ tilt-corrected fit's tilt and depth spread. The fitted values are the traits
 `ssb_compute_scan_detector_rotation_deg` (the physical rotation in [0, 360)),
 and the downloadable `*_ssb_calibration.json` holds them under the same names
 with `"schema": "quantem.show4dstem-ssb-calibration/3"` (its `refinement` names the local
-refinement quantem.gpu ran, `"newton"`, `"nelder-mead"` or null; `objective`
+refinement quantem.gpu ran, or null; `objective`
 what the fit optimized, null for a manual recompute; `tilt`,
 `sample_tilt_mrad` in the scan frame, `depth_spread_nm` and `tilt_fit_gain`
 record the sample model, false and null at tilt 0). It is not a

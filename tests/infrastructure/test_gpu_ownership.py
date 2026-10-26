@@ -194,7 +194,7 @@ def test_widget_owns_display_kernels_and_syncs_only_science() -> None:
     for name in ("colormaps.ts", "fft.ts", "stats.ts", "geometry.ts", "device.ts"):
         assert ".generated" not in (display / name).read_text(encoding="utf-8")
     assert 'targetDir = "js/.generated/engine"' in sync_script
-    assert 'SCIENCE_DOMAINS = ["detector/", "dpc/", "formats/", "io/", "ssb/"]' in sync_script
+    assert 'SCIENCE_DOMAINS = ["detector/", "dpc/", "formats/", "io/", "direct_ptycho/"]' in sync_script
     assert 'export * from "../../../display/device"' in sync_script
     assert "display/webgpu/borrowed-image" not in sync_script
     # one borrowed-image contract: quantem.gpu's, which every bundle drawing through js/display needs
@@ -213,7 +213,7 @@ def test_widget_owns_display_kernels_and_syncs_only_science() -> None:
     assert offenders == []
     assert "../.generated/engine/io/hdf5/webgpu/bslz4" in show4dstem
     assert "../.generated/engine/io/hdf5/webgpu/local-h5" in show4dstem
-    assert "../.generated/engine/ssb/webgpu/backend" in showptycho
+    assert "../.generated/engine/direct_ptycho/webgpu/backend" in showptycho
 
 
 def test_every_build_bundles_the_quantem_gpu_ref_in_gpu_ref_txt() -> None:
@@ -264,7 +264,7 @@ def test_sync_writes_a_manifest_of_the_pinned_ref_and_every_file(tmp_path) -> No
     recorded = {**manifest["files"], **manifest["generated"]}
     assert sorted(recorded) == sorted(on_disk)
     assert {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in on_disk.items()} == recorded
-    assert all(name.startswith(("detector/", "dpc/", "formats/", "io/", "ssb/")) for name in manifest["files"])
+    assert all(name.startswith(("detector/", "dpc/", "formats/", "io/", "direct_ptycho/")) for name in manifest["files"])
     assert sorted(manifest["generated"]) == ["device/webgpu.ts"]
     assert "detector/webgpu/borrowed-image.ts" in manifest["files"]
     # one line names the source and the commit it synced from; a checkout found beside this one is named first

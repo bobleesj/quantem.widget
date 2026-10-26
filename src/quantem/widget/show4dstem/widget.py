@@ -283,11 +283,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     ssb_compute_num_trials = traitlets.Int(200).tag(sync=True)
     # quantem.gpu's default SSB: the model fit with the sample tilt and depth spread; False fits at tilt 0
     ssb_compute_tilt = traitlets.Bool(True).tag(sync=True)
-    # what the fit optimizes, quantem.gpu's names: the model's agreement with the data (default) or, at tilt 0 only,
-    # the phase variance of the older SSB search
-    ssb_compute_objective = traitlets.Enum(["agreement", "phase_variance"], default_value="agreement").tag(sync=True)
-    # local refinement after the trial search, quantem.gpu's names: "auto" picks the optimizer the fit supports
-    ssb_compute_refinement = traitlets.Enum(["auto", "newton", "nelder-mead"], default_value="auto", allow_none=True).tag(sync=True)
+    # local refinement after the trial search: "auto", quantem.gpu's exact-derivative refinement, or None for none
+    ssb_compute_refinement = traitlets.Enum(["auto"], default_value="auto", allow_none=True).tag(sync=True)
     ssb_compute_num_bright_field_pixels = traitlets.Int(0).tag(sync=True)
     ssb_compute_lock_C10 = traitlets.Bool(False).tag(sync=True)
     ssb_compute_lock_C12 = traitlets.Bool(False).tag(sync=True)
@@ -1008,19 +1005,13 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
 
         The fit is quantem.gpu's default ``SSB.fit_aberrations()``, model-based
         and tilt-corrected: the SSB model fitted to the data together with the
-        sample tilt and depth spread (C10 is then the defocus at mid-depth). The
-        other two methods take quantem.gpu's names:
-
-        - ``compute_ssb()``: model-based, tilt-corrected, the default for every fit;
-        - ``compute_ssb(tilt=False)``: model-based, tilt held at 0;
-        - ``compute_ssb(tilt=False, objective="phase_variance")``: phase variance,
-          the earlier SSB search, kept as a backup, not an equal alternative (it
-          cannot see sample tilt or thickness).
+        sample tilt and depth spread (C10 is then the defocus at mid-depth).
+        ``compute_ssb(tilt=False)`` fits the same model with the tilt held at 0.
 
         ``kwargs`` go to the solver: ``tilt`` (the ``ssb_compute_tilt`` trait,
-        True by default), ``objective`` (the ``ssb_compute_objective`` trait,
-        ``"agreement"`` by default), ``trials`` (default 200; ``num_trials`` is a compatibility alias),
-        ``refinement`` (quantem.gpu's names: ``"auto"``, the default, ``"newton"``, ``"nelder-mead"`` or None), ``seed``,
+        True by default), ``trials`` (default 200; ``num_trials`` is a compatibility alias),
+        ``refinement`` (``"auto"``, the default, quantem.gpu's exact-derivative
+        refinement, or None for the best trial without one), ``seed``,
         ``aberrations`` (a dict of ``C10_nm``, ``C12_nm`` and ``phi12_deg``; a
         missing key is 0), ``scan_detector_rotation_deg`` (the physical angle
         in [0, 360); omitted, the rotation the acquisition records, else the
@@ -2109,13 +2100,13 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         trials: int | None = None,
         num_trials: int | None = None,
         tilt: bool | object = FROM_TRAIT,
-        objective: str | object = FROM_TRAIT,
         refinement: str | None | object = FROM_TRAIT,
         lock_aberrations: bool = False,
         lock_C10: bool = False,
         lock_C12: bool = False,
         seed: int = 42,
         verbose: bool = False,
+        objective: str | object = FROM_TRAIT,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Run quantem.gpu SSB on the current dataset; returns ``(phase, dpc_row, dpc_col)``.
 
@@ -2159,16 +2150,16 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         if trials < 0:
             raise ValueError(f"trials must be >= 0, got {trials}.")
         tilt = bool(self.ssb_compute_tilt if tilt is FROM_TRAIT else tilt)
-        objective = self.ssb_compute_objective if objective is FROM_TRAIT else objective
-        if objective not in ("agreement", "phase_variance"):
-            raise ValueError(f"Compute SSB objective must be 'agreement' or 'phase_variance', got {objective!r}.")
-        if tilt and objective == "phase_variance":
-            # quantem.gpu's rule, said before the data is prepared: the phase variance does not see the sample tilt
-            raise ValueError("objective='phase_variance' is the earlier SSB search, a backup at tilt 0; "
-                             "use tilt=False with it, or the default objective with tilt correction.")
+        if objective is not FROM_TRAIT:
+            print(f"Show4DSTEM: compute_ssb(objective={objective!r}) is retired; Compute SSB fits the SSB model's "
+                  "agreement with the data.")
         refinement = self.ssb_compute_refinement if refinement is FROM_TRAIT else refinement
-        if refinement not in ("auto", "newton", "nelder-mead", None):
-            raise ValueError(f"Compute SSB refinement must be 'auto', 'newton', 'nelder-mead' or None, got {refinement!r}.")
+        if refinement in ("newton", "bfgs", "nelder-mead"):
+            print(f"Show4DSTEM: compute_ssb(refinement={refinement!r}) is retired; using refinement='auto', "
+                  "quantem.gpu's exact-derivative refinement.")
+            refinement = "auto"
+        if refinement not in ("auto", None):
+            raise ValueError(f"Compute SSB refinement must be 'auto' or None, got {refinement!r}.")
         do_refine = refinement is not None
         fit_options: dict = {}
         if lock_C10 or lock_C12:
@@ -2236,13 +2227,12 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 self.ssb_compute_status = f"Reconstructing SSB with the given coefficients ({num_bright_field_pixels} BF pixels)..."
                 result = ssb.reconstruct()
             else:
-                method = "with sample tilt" if tilt else "at tilt 0" if objective == "agreement" else "by phase variance"
+                method = "with sample tilt" if tilt else "at tilt 0"
                 self.ssb_compute_status = (f"Fitting SSB aberrations {method} ({trials} trials"
                                            f"{', refined' if do_refine else ''}, {num_bright_field_pixels} BF pixels)...")
-                search = ("standard" if tilt and objective == "agreement" and not fit_options
-                          and trials > 0 and refinement is not None else "primary")
+                search = "standard" if tilt and not fit_options and trials > 0 and refinement is not None else "primary"
                 result = ssb.fit_aberrations(search=search,
-                                              tilt=tilt, objective=objective, num_trials=trials, refinement=refinement,
+                                              tilt=tilt, num_trials=trials, refinement=refinement,
                                               seed=int(seed), verbose=verbose, show=False, **fit_options)
                 self._ssb_compute_sample = None if result.get("sample_tilt_mrad") is None else {
                     "sample_tilt_mrad": result["sample_tilt_mrad"], "depth_spread_nm": result["depth_spread_nm"]}
@@ -2307,14 +2297,12 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         if self.ssb_compute_busy:
             self.ssb_compute_status = "SSB compute is already running."
             return
-        kwargs = {key: payload[key] for key in ("num_trials", "tilt", "objective", "refinement", "lock_aberrations")
+        kwargs = {key: payload[key] for key in ("num_trials", "tilt", "refinement", "lock_aberrations")
                   if key in payload}
         if "num_trials" in kwargs:
             self.ssb_compute_num_trials = int(kwargs["num_trials"])
         if "tilt" in kwargs:
             self.ssb_compute_tilt = bool(kwargs["tilt"])
-        if "objective" in kwargs:
-            self.ssb_compute_objective = kwargs["objective"]
         if "refinement" in kwargs:
             self.ssb_compute_refinement = kwargs["refinement"]
         manual = bool(kwargs.get("lock_aberrations", False))

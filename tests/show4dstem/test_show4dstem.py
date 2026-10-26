@@ -1194,7 +1194,7 @@ def test_compute_ssb_reads_the_optics_the_dataset_records(monkeypatch, tmp_path)
     downloaded = tmp_path / "calibration.json"
     downloaded.write_text(widget.ssb_compute_calibration_json)
     with pytest.raises(ValueError, match="quantem.show4dstem-ssb-calibration/3' is not ShowPtycho's"):
-        read_calibration(downloaded, {}, (0, 128, 0, 128), None, CALIBRATION_SCHEMA)
+        read_calibration(downloaded, {}, (0, 128, 0, 128), CALIBRATION_SCHEMA)
     widget._ssb_phase(aberrations=saved["aberrations"], scan_detector_rotation_deg=saved["scan_detector_rotation_deg"], lock_aberrations=True)
     assert seen["scan_detector_rotation_deg"] == 345.5 and seen["aberrations"] == {"C10_nm": 12.0, "C12_nm": 3.0, "phi12_deg": 30.0}
     widget.close()
@@ -1437,7 +1437,7 @@ def test_compute_ssb_uses_the_given_bright_field_disk_and_records_the_one_used()
         given.close()
 
 
-def test_compute_ssb_names_its_refinement_as_quantem_gpu_does():
+def test_compute_ssb_names_its_refinement_as_quantem_gpu_does(capsys):
     # the trait ssb_compute_refine and the record key "refine" were booleans; quantem.gpu calls it refinement,
     # and "auto" (its default) is recorded as the optimizer it selected
     widget = _ssb_widget(_rotated_counts(30.0))
@@ -1445,7 +1445,8 @@ def test_compute_ssb_names_its_refinement_as_quantem_gpu_does():
         assert (widget.ssb_compute_refinement, widget.ssb_compute_tilt) == ("auto", True)
         widget.compute_ssb(num_trials=2)
         record = json.loads(widget.ssb_compute_calibration_json)
-        assert record["refinement"] == "newton" and record["tilt"] is True  # the tilt-corrected fit refines with Newton
+        # the tilt-corrected fit refines with quantem.gpu's exact-gradient fifth-order refinement
+        assert record["refinement"] == "bfgs" and record["tilt"] is True
         assert len(record["sample_tilt_mrad"]) == 2 and record["depth_spread_nm"] >= 0.0
         widget.ssb_compute_refinement = None
         widget.compute_ssb(trials=2, tilt=False)
@@ -1453,17 +1454,14 @@ def test_compute_ssb_names_its_refinement_as_quantem_gpu_does():
         assert record["refinement"] is None and record["tilt"] is False and record["sample_tilt_mrad"] is None
         assert record["objective"] == "agreement"
         widget.ssb_compute_refinement = "auto"
-        widget.compute_ssb(num_trials=2, tilt=False, objective="phase_variance")
-        record = json.loads(widget.ssb_compute_calibration_json)
-        assert (record["objective"], record["refinement"], record["tilt"]) == ("phase_variance", "nelder-mead", False)
-        with pytest.raises(ValueError, match="refinement must be 'auto', 'newton', 'nelder-mead' or None"):
+        with pytest.raises(ValueError, match="refinement must be 'auto' or None"):
             widget.compute_ssb(num_trials=2, refinement="lbfgs")
-        assert not hasattr(widget, "ssb_compute_refine")
+        assert not hasattr(widget, "ssb_compute_refine") and not hasattr(widget, "ssb_compute_objective")
     finally:
         widget.close()
 
 
-def test_compute_ssb_fits_tilt_corrected_by_default_and_tilt_false_on_request(monkeypatch):
+def test_compute_ssb_fits_tilt_corrected_by_default_and_tilt_false_on_request(monkeypatch, capsys):
     """Compute SSB is quantem.gpu's default fit (model with sample tilt and depth spread); tilt=False fits at tilt 0.
 
     It ran fit_aberrations(tilt=False, refinement="nelder-mead") whatever the user asked, the one SSB entry point
@@ -1503,7 +1501,7 @@ def test_compute_ssb_fits_tilt_corrected_by_default_and_tilt_false_on_request(mo
         def fit_aberrations(self, **options):
             calls.append(("fit", options))
             result = self._result(options["tilt"], "newton" if options["refinement"] == "auto" else options["refinement"])
-            result.objective = options["objective"]
+            result.objective = "agreement"
             return result
 
         def reconstruct(self):
@@ -1518,7 +1516,7 @@ def test_compute_ssb_fits_tilt_corrected_by_default_and_tilt_false_on_request(mo
         widget.compute_ssb()
         kind, options = calls[-1]
         assert kind == "fit" and options["tilt"] is True and options["refinement"] == "auto" and options["num_trials"] == 200
-        assert options["objective"] == "agreement"
+        assert "objective" not in options  # quantem.gpu's one objective, the model's agreement
         assert options["search"] == "standard"
         assert not {"search_ranges", "refine_lock", "fixed_aberrations"} & set(options)
         record = json.loads(widget.ssb_compute_calibration_json)
@@ -1563,26 +1561,25 @@ def test_compute_ssb_fits_tilt_corrected_by_default_and_tilt_false_on_request(mo
         widget.compute_ssb(aberrations={"C10_nm": 5.0}, lock_aberrations=True)
         assert calls[-1][1]["sample_tilt_mrad"] is None
         assert json.loads(widget.ssb_compute_calibration_json)["objective"] is None
-        # the third method, quantem.gpu's names: tilt=False, objective="phase_variance"; it cannot fit a tilt
-        widget.compute_ssb(tilt=False, objective="phase_variance")
-        assert (calls[-1][1]["tilt"], calls[-1][1]["objective"]) == (False, "phase_variance")
-        assert json.loads(widget.ssb_compute_calibration_json)["objective"] == "phase_variance"
-        fits = len(calls)
-        with pytest.raises(ValueError, match="earlier SSB search, a backup at tilt 0"):
-            widget.compute_ssb(objective="phase_variance")
-        with pytest.raises(ValueError, match="objective must be 'agreement' or 'phase_variance'"):
-            widget.compute_ssb(tilt=False, objective="variance")
-        assert len(calls) == fits
+        # the retired choices say so once and run the model fit with quantem.gpu's refinement
+        capsys.readouterr()
+        widget.compute_ssb(tilt=False, objective="phase_variance", refinement="nelder-mead")
+        assert capsys.readouterr().out.splitlines() == [
+            "Show4DSTEM: compute_ssb(objective='phase_variance') is retired; Compute SSB fits the SSB model's "
+            "agreement with the data.",
+            "Show4DSTEM: compute_ssb(refinement='nelder-mead') is retired; using refinement='auto', quantem.gpu's "
+            "exact-derivative refinement."]
+        assert calls[-1][1]["tilt"] is False and "objective" not in calls[-1][1] and calls[-1][1]["refinement"] == "auto"
+        assert json.loads(widget.ssb_compute_calibration_json)["objective"] == "agreement"
         # the frontend sends the switch with its request
         widget.ssb_compute_request = json.dumps({"action": "compute_ssb", "num_trials": 20, "tilt": False,
-                                                 "objective": "phase_variance", "refinement": None})
+                                                 "refinement": None})
         deadline = time.time() + 10
         while widget.ssb_compute_busy or not calls[-1][1].get("num_trials") == 20:
             assert time.time() < deadline
             time.sleep(0.01)
-        assert (widget.ssb_compute_tilt, widget.ssb_compute_objective) == (False, "phase_variance")
-        assert calls[-1][1]["tilt"] is False and calls[-1][1]["objective"] == "phase_variance"
-        assert calls[-1][1]["refinement"] is None
+        assert widget.ssb_compute_tilt is False
+        assert calls[-1][1]["tilt"] is False and calls[-1][1]["refinement"] is None
     finally:
         widget.close()
 

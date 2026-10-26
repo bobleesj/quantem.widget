@@ -12,7 +12,7 @@ import { useLocalTiltWorkspace } from "./localTilt";
 import { idleDiagnostic, latestFrame } from "./interaction";
 import { GPUFrameDisplay, GPUPanelPainter, gpuPanelSources, type GPUPanelSource } from "./gpuFrame";
 import { FFTMagnitudeDisplay } from "./fftDisplay";
-import { fftAutoFrameZoom } from "./fftFraming";
+import { fftAutoFrameZoom, fftFrameRegion, type GridRegion } from "./fftFraming";
 import { createRender, useModel, useModelState } from "@anywidget/react";
 import Box from "@mui/material/Box";
 import Stack from "@mui/material/Stack";
@@ -336,13 +336,14 @@ const FFT_SNAP_RADIUS = 5;
 async function computeFFTMagnitude(
   fft: DisplayFFT, magnitudeDisplay: FFTMagnitudeDisplay,
   data: Float32Array, w: number, h: number,
+  statsRegion: (pw: number, ph: number) => GridRegion | null = () => null,
 ): Promise<{ mag: Float32Array; pw: number; ph: number; stats: FrameStats }> {
   // Windowing, padding, the magnitude and its display statistics run in the display worker; the
   // input thread only uploads the interleaved grid and reads the spectrum back, so phase frames
   // keep arriving.
   const { complex, pw, ph } = await magnitudeDisplay.prepare(data, w, h);
   const spectrum = await fft.fft2DInterleaved(complex, pw, ph, false);
-  const { magnitude, stats } = await magnitudeDisplay.magnitudeInterleaved(spectrum, pw, ph);
+  const { magnitude, stats } = await magnitudeDisplay.magnitudeInterleaved(spectrum, pw, ph, statsRegion(pw, ph));
   return { mag: magnitude, pw, ph, stats };
 }
 
@@ -610,6 +611,21 @@ function DampingSlider({ name, value, onDrag, onCommit }: {
         sx={{ minWidth: 90, width: 130 }} />
     </Box>
   );
+}
+
+type HeldStatListeners = Map<string, (value: number | null) => void>;
+
+/** A stats-row value that follows its slider while it is held, re-rendering only itself;
+ *  null (the release) returns it to the widget's value. */
+function HeldStatValue({ statKey, value, precision, listeners, color }: {
+  statKey: string; value: number; precision: number; listeners: HeldStatListeners; color: string;
+}) {
+  const [held, setHeld] = React.useState<number | null>(null);
+  React.useEffect(() => {
+    listeners.set(statKey, setHeld);
+    return () => { listeners.delete(statKey); };
+  }, [listeners, statKey]);
+  return <Box component="span" sx={{ color }}>{(held ?? value).toFixed(precision)}</Box>;
 }
 
 /** A three-thumb aberration slider (outer thumbs: sweep stoppers, middle: the value). While the
@@ -1665,6 +1681,8 @@ function Explore() {
   const [autoRotation] = useModelState<number>("fitted_scan_detector_rotation_deg");
   const [computeLoss] = useModelState<boolean>("compute_loss");
   const [autoLoss] = useModelState<number | null>("fitted_loss");
+  const [fitAgreement] = useModelState<number | null>("fitted_sample_agreement");
+  const [tiltFitGain] = useModelState<number | null>("fitted_tilt_fit_gain");
   // an array carries the pixel size of its image; a session the scan step, which the output sampling divides
   const [objectSamplingA] = useModelState<number[]>("object_sampling_A");
   const [scanSamplingA] = useModelState<number[]>("scan_sampling_A");
@@ -1689,14 +1707,14 @@ function Explore() {
   const launchReconstructionRef = React.useRef(reconstructionControls);
   const launchSamplingRef = React.useRef(sampling);
   const [autoFactor] = useModelState<number>("auto_upsampling");
-  const upsampling = sampling === "auto" ? (autoFactor || 1) : (sampling || 1);
+  // Auto never exceeds 4× on any path (the browser WebGPU path included); 8× is only an explicit choice.
+  const upsampling = sampling === "auto" ? Math.min(autoFactor || 1, 4) : (sampling || 1);
   const upsamplingRef = React.useRef(upsampling || 1); upsamplingRef.current = upsampling || 1;
 
   const [phaseWidth] = useModelState<number>("phase_width");
   const [phaseHeight] = useModelState<number>("phase_height");
 
   const [, setPinJson] = useModelState<string>("pin_json");
-  const [dragBfTrait, setDragBfTrait] = useModelState<number>("num_drag_bright_field_pixels");
   const [totalBf] = useModelState<number>("num_bright_field_pixels");
   const [starsPath] = useModelState<string>("stars_path");
   const [saveTrigger, setSaveTrigger] = useModelState<number>("save_trigger");
@@ -1838,14 +1856,8 @@ function Explore() {
     ? webgpuCalLogicalBf
     : Math.max(0, Math.round(totalBf || 0));
   // Use the full logical BF set for both live and exported reconstruction.
-  // Synchronize older saved widgets that still carry an explicit drag subset.
-  const dragBfRef = React.useRef(effectiveTotalBf);
-  dragBfRef.current = effectiveTotalBf;
-  React.useEffect(() => {
-    if (effectiveTotalBf > 0 && dragBfTrait !== effectiveTotalBf) {
-      setDragBfTrait(effectiveTotalBf);
-    }
-  }, [dragBfTrait, effectiveTotalBf, setDragBfTrait]);
+  const effectiveTotalBfRef = React.useRef(effectiveTotalBf);
+  effectiveTotalBfRef.current = effectiveTotalBf;
   const [pinned, setPinned] = React.useState<PinnedEntry[]>([]);
   const [viewPin, setViewPin] = React.useState<number | null>(null);
   const viewPinRef = React.useRef(viewPin); viewPinRef.current = viewPin;
@@ -1975,7 +1987,10 @@ function Explore() {
   const fftAutoContrastRef = React.useRef(fftAutoContrast); fftAutoContrastRef.current = fftAutoContrast;
   const showFFTRef = React.useRef(showFFT); showFFTRef.current = showFFT;
   const extraRealViewsRef = React.useRef(extraRealViews); extraRealViewsRef.current = extraRealViews;
-  const rotationDegRef = React.useRef(rotationDeg ?? 0); rotationDegRef.current = rotationDeg ?? 0;
+  // A dragged rotation is held here until release: drags travel on the preview channel, not as a
+  // trait sync per frame, so the widget does not re-render (or wait for kernel idle) per move.
+  const rotationHeldRef = React.useRef<number | null>(null);
+  const rotationDegRef = React.useRef(rotationDeg ?? 0); rotationDegRef.current = rotationHeldRef.current ?? rotationDeg ?? 0;
   const negatePhaseRef = React.useRef(displayNegatePhase);
   negatePhaseRef.current = !!displayNegatePhase;
   const ampDataRef = React.useRef<{ data: Float32Array; w: number; h: number } | null>(null);
@@ -2195,6 +2210,9 @@ function Explore() {
   const ampFrameData = React.useCallback(() => panelFrames[2].get().data, [panelFrames]);
   // Percentile histograms and histogram bins of each slot's newest frame, from the display worker.
   const statsWorkerRef = React.useRef<DisplayStatsWorker | null>(null);
+  // The block of a pw x ph display spectrum (of a w x h phase) that the FFT auto frame shows; its
+  // contrast window comes from that block alone. Set each render from the current calibration.
+  const fftStatsRegionRef = React.useRef<(pw: number, ph: number, w: number, h: number) => GridRegion | null>(() => null);
   const slotStatsRef = React.useRef<Record<GPUColormapSlot, { data: Float32Array; stats: FrameStats } | null>>({ 0: null, 1: null, 2: null });
   const paintedGenRef = React.useRef<Record<GPUColormapSlot, number>>({ 0: 0, 1: 0, 2: 0 });
   React.useEffect(() => {
@@ -2307,7 +2325,7 @@ function Explore() {
   /** Everything a preview request reconstructs from, so an identical one can be recognised. */
   const requestKey = (c10Val: number, c12Val: number, phi12Val: number) => JSON.stringify([
     c10Val, c12Val, phi12Val, regionContextRef.current?.id ?? null, sampleRef.current, higherOrderRef.current,
-    reconstructionRef.current, model.get("tilt_correction"), model.get("scan_detector_rotation_deg"),
+    reconstructionRef.current, model.get("tilt_correction"), rotationDegRef.current,
   ]);
 
   // The busy mark shows at once and clears only after a short quiet spell: a drag answered faster
@@ -2342,7 +2360,7 @@ function Explore() {
       higher_order: higherOrderRef.current,
       ...reconstructionRef.current,
       tilt_correction: model.get("tilt_correction") !== false,
-      scan_detector_rotation_deg: model.get("scan_detector_rotation_deg"),
+      scan_detector_rotation_deg: rotationDegRef.current,
     }});
   }, [model, showBusy]);
 
@@ -2387,13 +2405,17 @@ function Explore() {
   }, []);
   // A slider showing its own dragged value: the widget adopts the value on release, so a drag
   // re-renders that slider alone instead of the whole widget per animation frame.
+  // The stats row's C10, C12 and φ12 follow a held slider without re-rendering the widget.
+  const heldStatListeners = React.useMemo<HeldStatListeners>(() => new Map(), []);
   const holdSliderValue = React.useCallback((key: "c10" | "c12" | "phi12", value: number) => {
     sliderPendingRef.current[key] = value;
     sliderVals.current = { ...sliderVals.current, [key]: value };
-  }, []);
+    heldStatListeners.get(key)?.(value);
+  }, [heldStatListeners]);
   // A release shows its committed value at once.
   const commitSliderValue = React.useCallback((key: "c10" | "c12" | "phi12", value: number) => {
     sliderPendingRef.current[key] = value;
+    heldStatListeners.get(key)?.(null);
     flushSliderState();
   }, [flushSliderState]);
   // Damping uses the same latest-wins queue as optics. Only the small
@@ -2500,7 +2522,7 @@ function Explore() {
   const trialObjectiveText = Array.from(new Set(trials.map(trial => trial.objective ?? "phase_variance")))
     .map(objective => objective === "agreement" ? "model agreement" : "phase variance").join(", ");
   const trialScoreText = (trial: OptunaTrial) => trial.objective === "agreement"
-    ? `agr ${formatNumber(-trial.loss, 4)}` : `pv ${formatNumber(trial.loss, 8)}`;
+    ? `score ${formatNumber(-trial.loss, 4)}` : `pv ${formatNumber(trial.loss, 8)}`;
   const [trialsExpanded, setTrialsExpanded] = React.useState(false);
   const [activeTrialRank, setActiveTrialRank] = React.useState<number | null>(null);
 
@@ -2949,7 +2971,7 @@ function Explore() {
     void gpuFrame.process(0, w, h, withFFT ? 1 : null, phaseStats => {
       slotStatsRef.current[0] = { data, stats: phaseStats };
       paints.push(renderRealDisplayRef.current(data, w, h, phaseStats));
-    }).then(result => {
+    }, withFFT ? fftStatsRegionRef.current(pw, ph, w, h) : null).then(result => {
       if (result.fft && magnitude) {
         // an unchanged shape must not re-render the widget on every frame
         if (fftSourceShapeRef.current[0] !== h || fftSourceShapeRef.current[1] !== w) setFFTSourceShape([h, w]);
@@ -3018,7 +3040,8 @@ function Explore() {
         displayFFTRef.current = fft;
         const display = fftMagnitudeDisplayRef.current;
         if (!display) throw new Error("FFT display is closed.");
-        return computeFFTMagnitude(fft, display, phase, width, height);
+        return computeFFTMagnitude(fft, display, phase, width, height,
+          (pw, ph) => fftStatsRegionRef.current(pw, ph, width, height));
       }).then(fftResult => {
         if (gen !== fftGenRef.current) return;  // stale: newer data already rendered
         applyFFT(fftResult, width, height);
@@ -3198,7 +3221,7 @@ function Explore() {
     previousUpsamplingRef.current = upsampling;
     if (webgpuStandalone) frontendPreviewRef.current?.(sliderVals.current.c10, sliderVals.current.c12, sliderVals.current.phi12, rotationDegRef.current);
   }, [upsampling, webgpuStandalone]);
-  shouldCommitOnReleaseRef.current = dragBfRef.current > 0 || !!webgpuSsbRef.current;
+  shouldCommitOnReleaseRef.current = effectiveTotalBf > 0 || !!webgpuSsbRef.current;
   const standaloneInitialRenderRef = React.useRef(false);
   React.useEffect(() => {
     if (!webgpuStandalone || standaloneInitialRenderRef.current) return;
@@ -3356,6 +3379,13 @@ function Explore() {
   const doReset = () => {
     // auto values arrive asynchronously from Python; skip until init landed
     if (!initRef.current) return;
+    // The reset is the latest intent: drop queued drag values and scheduled panel or strength frames, and
+    // make the fitted values current now, so nothing sent before React re-renders carries pre-reset values.
+    pendingDragRef.current = null;
+    panelFrame.cancel();
+    reconstructionFrame.cancel();
+    sliderPendingRef.current = {};
+    sliderVals.current = { c10: autoC10, c12: autoC12, phi12: autoPhi12 };
     const fittedHigher = regionalMode && regionalReference
       ? Object.fromEntries(Object.entries(regionalReference.aberrations).filter(([key]) => !['C10_nm', 'C12_nm', 'phi12_deg'].includes(key))) as Record<string, number>
       : JSON.parse(fittedHigherOrderJson || '{}');
@@ -3514,7 +3544,7 @@ function Explore() {
         scan_detector_rotation_deg: wrapDegrees(rotationDeg ?? 0),
         display_negate_phase: !!displayNegatePhase,
         loss: loss ?? null,
-        num_bright_field_pixels: Math.round(dragBfRef.current || 0),
+        num_bright_field_pixels: Math.round(effectiveTotalBfRef.current || 0),
         notes: String(notes ?? ""),
         image: `snapshots/snapshot_${stamp}_C10_${slugPart(sliderVals.current.c10.toFixed(0))}.jpg`,
       };
@@ -3757,6 +3787,11 @@ function Explore() {
     : objectSamplingA;
   const fftAutoZoom = fftAutoFrameZoom(fftOff?.width || 0, fftOff?.height || 0,
     fftSampling || [], scanSamplingA || []);
+  fftStatsRegionRef.current = (pw, ph, w, h) => {
+    const sampling = ssbSession && scanSamplingA?.length === 2
+      ? [scanSamplingA[0] * scanRows / h, scanSamplingA[1] * scanCols / w] : objectSamplingA;
+    return fftFrameRegion(pw, ph, fftAutoFrameZoom(pw, ph, sampling || [], scanSamplingA || []));
+  };
   const fftView = { ...fftZoom, zoom: fftZoom.zoom * fftAutoZoom };
   const fftReset = { ...ZOOM_RESET, zoom: fftAutoZoom };
   const fftRealPixelSize = fftSampling?.[1] || pixelSize;
@@ -4021,7 +4056,7 @@ function Explore() {
                 title="Reconstruct at the selected output sampling using the current fit.">
                 <MenuItem value="auto" disabled={Boolean(autoSamplingNote)}
                   title={autoSamplingNote || "Choose from the acquisition calibration, up to 4×"}>
-                  Auto ({autoFactor || 1}×)
+                  Auto ({Math.min(autoFactor || 1, 4)}×)
                 </MenuItem>
                 {(webgpuStandalone ? [1, 2, 4, 8] : [1, 2, 3, 4, 8]).map(factor =>
                   <MenuItem key={factor} value={factor}>{factor}×</MenuItem>)}
@@ -4225,17 +4260,17 @@ function Explore() {
               {tuning && <>
               <Tooltip title="Defocus in nanometers.  Primary aberration: sets the probe's axial focus point relative to the sample.  Usually the first knob to get right." placement="top" arrow>
                 <Typography sx={{ ...typography.label, ...statChip(tc, Math.abs(c10) > 0), cursor: "help" }}>
-                  C10 <Box component="span" sx={{ color: tc.accent }}>{c10.toFixed(1)}</Box> nm
+                  C10 <HeldStatValue statKey="c10" value={c10} precision={1} listeners={heldStatListeners} color={tc.accent} /> nm
                 </Typography>
               </Tooltip>
               <Tooltip title="2-fold astigmatism magnitude in nanometers.  How asymmetric the probe is.  Paired with φ₁₂ (angle)." placement="top" arrow>
                 <Typography sx={{ ...typography.label, ...statChip(tc, Math.abs(c12) > 0), cursor: "help" }}>
-                  C12 <Box component="span" sx={{ color: tc.accent }}>{c12.toFixed(1)}</Box> nm
+                  C12 <HeldStatValue statKey="c12" value={c12} precision={1} listeners={heldStatListeners} color={tc.accent} /> nm
                 </Typography>
               </Tooltip>
               <Tooltip title="Angle of 2-fold astigmatism in degrees.  Only meaningful when C12 ≠ 0." placement="top" arrow>
                 <Typography sx={{ ...typography.label, ...statChip(tc, Math.abs(phi12) > 0), cursor: "help" }}>
-                  φ₁₂ <Box component="span" sx={{ color: tc.accent }}>{phi12.toFixed(1)}</Box>°
+                  φ₁₂ <HeldStatValue statKey="phi12" value={phi12} precision={1} listeners={heldStatListeners} color={tc.accent} />°
                 </Typography>
               </Tooltip>
               {loss != null && !regionalMode && (
@@ -4300,7 +4335,7 @@ function Explore() {
               <Box sx={{ flex: 1 }} />
               {tuning && (
                 <Typography sx={{ ...typography.value, color: tc.textMuted, opacity: 0.7 }}>
-                  auto {autoC10?.toFixed(1)} / {autoC12?.toFixed(1)} / {autoPhi12?.toFixed(0)}°{!regionalMode && autoLoss != null ? ` · variance ${autoLoss.toFixed(8)}` : ''}
+                  auto {autoC10?.toFixed(1)} / {autoC12?.toFixed(1)} / {autoPhi12?.toFixed(0)}°{!regionalMode && fitAgreement != null ? ` · agreement ${formatNumber(fitAgreement, 4)}` : ''}
                 </Typography>
               )}
             </Box>
@@ -4510,11 +4545,15 @@ function Explore() {
               tipFull: "Scan-detector rotation: angle between scan axes and detector axes.  Sweep to find the sharpest reconstruction.",
               min: rotationUiMin, max: rotationUiMax, step: 0.1,
               setValue: (value: number) => {
-                setRotationDeg(value);
-                if (webgpuSsbRef.current) sendDrag(sliderVals.current.c10, sliderVals.current.c12, sliderVals.current.phi12, value);
+                rotationHeldRef.current = value; rotationDegRef.current = value;
+                sendDrag(sliderVals.current.c10, sliderVals.current.c12, sliderVals.current.phi12, value);
               },
               commitValue: (value: number) => {
+                rotationHeldRef.current = value; rotationDegRef.current = value;
                 if (shouldCommitOnReleaseRef.current) sendCommit(sliderVals.current.c10, sliderVals.current.c12, sliderVals.current.phi12, value);
+                // after the request: Python already holds this value, so the sync changes nothing there
+                rotationHeldRef.current = null;
+                setRotationDeg(value);
               },
             },
           ] as const).filter(aberration => !regionalMode || aberration.key !== 'rot').map(aberration => {
@@ -4732,9 +4771,9 @@ function Explore() {
               </Box>
               <Box sx={{ flex: 1 }} />
               {trials.length > 0 && (
-                <Tooltip title={`Showing ${trials.length} retained trial previews ranked by ${trialObjectiveText}; this is not the total search budget. The refined fit's phase-variance diagnostic is ${autoLoss == null ? 'not measured' : autoLoss.toFixed(8)}. A trial shows its own objective's score: model agreement (higher is better) or phase variance (lower is better). Different objectives cannot be compared directly.`} placement="top" arrow>
+                <Tooltip title={`Showing ${trials.length} retained trial previews ranked by ${trialObjectiveText}; this is not the total search budget. The refined fit's model agreement is ${fitAgreement == null ? 'not measured' : formatNumber(fitAgreement, 4)} (higher is better)${tiltFitGain != null ? `; the tilt fit gains ${tiltFitGain.toFixed(2)}× over standard SSB` : ''}. A trial shows its own objective's score: model agreement (higher is better) or phase variance (lower is better). Different objectives cannot be compared directly.`} placement="top" arrow>
                   <Typography sx={{ ...typography.value, color: tc.textMuted, cursor: "help" }}>
-                    Refined variance {autoLoss?.toFixed(8) ?? 'not measured'}  ·  best trial {trialScoreText(trials[0])}
+                    Fit agreement {fitAgreement == null ? 'not measured' : formatNumber(fitAgreement, 4)}{tiltFitGain != null ? `  ·  tilt gain ${tiltFitGain.toFixed(2)}×` : ''}
                   </Typography>
                 </Tooltip>
               )}
@@ -4764,7 +4803,7 @@ function Explore() {
                           Refined fit
                         </Typography>
                         <Typography sx={{ fontSize: 11, color: STATUS_GOOD, fontFamily: "monospace", fontWeight: "bold" }}>
-                          {autoLoss?.toFixed(8) ?? 'not measured'}
+                          {fitAgreement == null ? '' : `agr ${formatNumber(fitAgreement, 4)}`}
                         </Typography>
                       </Stack>
                       <Typography sx={{ fontSize: 9, fontFamily: "monospace", color: tc.textMuted, whiteSpace: "nowrap" }}>
@@ -4797,7 +4836,7 @@ function Explore() {
                           #{trial.rank + 1}
                         </Typography>
                         <Typography sx={{ fontSize: 11, color: tc.accent, fontFamily: "monospace", fontWeight: "bold" }}
-                          title={trial.objective === "agreement" ? "Model agreement (the default fit), higher is better" : "Phase variance (the backup search), lower is better"}>
+                          title={trial.objective === "agreement" ? "Raw search objective of the default fit (unnormalised model agreement), higher is better; it ranks trials and is not the fit agreement" : "Phase variance (the backup search), lower is better"}>
                           {trialScoreText(trial)}
                         </Typography>
                       </Stack>

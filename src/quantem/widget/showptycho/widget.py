@@ -42,6 +42,7 @@ from quantem.widget.adapters import gpu as gpu_adapter
 from quantem.widget.colormap import colorize, contrast_uint8
 from quantem.widget.device import gpu_path_hint, no_gpu_path
 from quantem.widget.showptycho._renamed import renamed_keywords
+from quantem.widget.showptycho.calibration import RETIRED_PHASE_ESTIMATORS
 from quantem.widget.showptycho.export import write_showptycho_folder
 from quantem.widget.units import axis_pair, image_axes, per_axis, stated, wrap_degrees
 from quantem.widget.utils.array import device_array
@@ -113,13 +114,8 @@ def nonzero_higher_order(aberrations: dict) -> dict:
             if float(aberrations.get(magnitude(name), 0.0)) != 0.0}
 
 
-def has_higher_order(panel_json: str) -> bool:
-    """Whether the higher-order panel JSON holds a non-zero magnitude (``C21_nm``, ...; its azimuths do not count).
-
-    Upsampled output carries C10/C12 only, so the two validators use it to refuse a
-    higher-order term and upsampling together.
-    """
-    return any(value != 0 for key, value in json.loads(panel_json or "{}").items() if key.endswith("_nm"))
+# the default of a retired keyword, so passing it at all can say so
+_RETIRED = object()
 
 
 class ShowPtycho(anywidget.AnyWidget):
@@ -188,11 +184,13 @@ class ShowPtycho(anywidget.AnyWidget):
         Output multiplier along each scan axis. Auto stops at 4×; 8× is
         explicit only. Omitted, preserve a saved explicit choice or use Auto.
         An explicit value overrides saved sampling, retaining the joint fit.
-    phase_estimator : {"mean_phase", "phase_of_mean"}, optional
-        SSB phase estimator used for every preview and recorded on Save.
-        Omitted, use coherent phase of the mean for all aberrations on CUDA
-        and MPS. Output sampling is chosen from the acquisition calibration.
-        An array already contains its reconstructed phase.
+    phase_estimator : str, optional
+        Retired: SSB always reconstructs the phase of the mean wave
+        (``"phase_of_mean"``), which Save records. Passing
+        ``"phase_of_mean"`` prints one line and changes nothing; the retired
+        ``"mean_phase"`` and ``"complex_wave"`` raise. A saved fit that names
+        one of them restores its optics, reconstructed as the phase of the
+        mean wave, and one printed line says so.
     local_tilt : bool or dict, optional
         True adds region selection to the existing viewer. Fit Regions jointly
         optimizes aberrations, tilt and depth with the SSB backend, then crops
@@ -252,6 +250,9 @@ class ShowPtycho(anywidget.AnyWidget):
     fitted_C12_nm = traitlets.Float(0.0).tag(sync=True)
     fitted_phi12_deg = traitlets.Float(0.0).tag(sync=True)
     fitted_loss = traitlets.Float(None, allow_none=True).tag(sync=True)
+    # The kept fit's model agreement (higher is better) and its gain over standard SSB, None before a fit.
+    fitted_sample_agreement = traitlets.Float(None, allow_none=True).tag(sync=True)
+    fitted_tilt_fit_gain = traitlets.Float(None, allow_none=True).tag(sync=True)
     fitted_scan_detector_rotation_deg = traitlets.Float(0.0).tag(sync=True)
     fitted_sample_json = traitlets.Unicode("{}").tag(sync=True)
     fitted_higher_order_aberrations_json = traitlets.Unicode("{}").tag(sync=True)
@@ -291,8 +292,6 @@ class ShowPtycho(anywidget.AnyWidget):
     calibration_image_path = traitlets.Unicode("").tag(sync=True)
     # fit history for the trials strip: JSON list of {rank, C10_nm, C12_nm, phi12_deg, loss}, best first
     trials_json = traitlets.Unicode("").tag(sync=True)
-    # bright-field pixels used while dragging; the full count is the right edge of the slider
-    num_drag_bright_field_pixels = traitlets.Int(0).tag(sync=True)
     num_bright_field_pixels = traitlets.Int(0).tag(sync=True)
     # higher-order panel: {C21_nm, phi21_deg, ..., C30_nm, ..., C50_nm, ...}
     higher_order_aberrations_json = traitlets.Unicode("{}").tag(sync=True)
@@ -553,8 +552,7 @@ class ShowPtycho(anywidget.AnyWidget):
         return {name: phase.copy() for name, phase in self._region_images.items()}
 
     def fit_regions(
-        self, *, trials: int | None = None, refinement: str | None = "newton",
-        num_trials: int | None = None,
+        self, *, trials: int | None = None, num_trials: int | None = None, refinement: object = _RETIRED,
     ) -> list[dict]:
         """Jointly fit optics, tilt and depth in the current rectangles.
 
@@ -568,9 +566,11 @@ class ShowPtycho(anywidget.AnyWidget):
             Search trials of the single joint fit per region (seed 42). Default 200.
         num_trials : int, optional
             Compatibility alias for ``trials``. Supply only one of them.
-        refinement : {"newton", "nelder-mead", "auto", None}, default "newton"
-            Local refinement after each search (``quantem.gpu.DirectPtycho.fit_aberrations``).
-            The widget's Fit Regions button uses the values of the last call.
+        refinement : optional
+            Retired: every fit refines with quantem.gpu's exact-derivative
+            refinement. A value prints one line and changes nothing.
+
+        The widget's Fit Regions button uses the trials of the last call.
 
         Returns
         -------
@@ -587,7 +587,10 @@ class ShowPtycho(anywidget.AnyWidget):
         num_trials = 200 if num_trials is None else num_trials
         if int(num_trials) < 1:
             raise ValueError("Fit Regions needs at least one trial per seed.")
-        self._region_fit_options = {"num_trials": int(num_trials), "refinement": refinement}
+        if refinement is not _RETIRED:
+            print(f"ShowPtycho: fit_regions(refinement={refinement!r}) is retired; every fit refines with "
+                  "quantem.gpu's exact-derivative refinement.")
+        self._region_fit_options = {"num_trials": int(num_trials)}
         self._run_region_callback("fit")
         return self.region_fits
 
@@ -719,8 +722,6 @@ class ShowPtycho(anywidget.AnyWidget):
         is_array = not gpu_adapter.is_ssb(data)
         if method != "ssb" and is_array:
             raise ValueError("Reconstruction methods need a DirectPtycho session; an array is already reconstructed.")
-        if method != "ssb" and phase_estimator is not None:
-            raise ValueError("phase_estimator applies only to method='ssb'; omit it for regularized methods.")
         if method != "ssb" and (local_tilt or fit_regions or reconstruct_regions):
             raise ValueError("Regional fitting currently supports method='ssb'. Review regularized methods on the full session.")
 
@@ -747,12 +748,14 @@ class ShowPtycho(anywidget.AnyWidget):
             }
         elif local_tilt is False:
             local_tilt = None
-        if phase_estimator not in (None, "mean_phase", "phase_of_mean"):
-            raise ValueError("phase_estimator must be 'mean_phase' or 'phase_of_mean'.")
-        if is_array and phase_estimator is not None:
-            raise ValueError("phase_estimator needs an SSB session; an array is already reconstructed.")
-        self._phase_estimator = phase_estimator
-        self._phase_estimator_explicit = phase_estimator is not None
+        if phase_estimator in RETIRED_PHASE_ESTIMATORS:
+            raise ValueError(f"phase_estimator={phase_estimator!r} was retired; SSB reconstructs the phase of the "
+                             "mean wave, 'phase_of_mean'. Omit phase_estimator.")
+        if phase_estimator not in (None, "phase_of_mean"):
+            raise ValueError("phase_estimator is retired: SSB reconstructs the phase of the mean wave. Omit it.")
+        if phase_estimator is not None:
+            print("ShowPtycho: phase_estimator is retired; SSB always reconstructs the phase of the mean wave "
+                  "('phase_of_mean'). Omit it.")
         # an array's pixel size [row, col] in angstrom, read through the one unit table (the widget draws in angstrom)
         if is_array and sampling is None:
             # a unit stated with no step, for an image that records none, raises as in every image widget
@@ -789,7 +792,7 @@ class ShowPtycho(anywidget.AnyWidget):
         self._launch_calibration_shown = False
         self._ssb = None if is_array else data
         self._region_fit_parameters: dict = {}
-        self._region_fit_options: dict = {"num_trials": 200, "refinement": "newton"}
+        self._region_fit_options: dict = {"num_trials": 200}
         self._pinned: list[dict] = []
         self._region_callbacks = {"fit": fit_regions, "reconstruct": reconstruct_regions}
         self.local_tilt_can_fit = callable(fit_regions)
@@ -807,6 +810,8 @@ class ShowPtycho(anywidget.AnyWidget):
         self._last_phase: np.ndarray | None = None
         self._last_result: dict = {}
         self._inflight_id = -1
+        # Kernel-initiated redraws count down from -2, browser requests up from 1: the ids never collide.
+        self._redraw_id = -1
         self.initial_fft_on = bool(show_fft)
         self.observe(self._on_flip_change, names=["display_negate_phase"])
         if is_array:
@@ -857,7 +862,6 @@ class ShowPtycho(anywidget.AnyWidget):
         state = self._ssb.state()
         self.regularization_available = state["backend"] == "cuda"
         self._check_method()
-        self._default_phase_estimator = "phase_of_mean"
         self._source_path = state["source_path"]
         self._source_scan_shape = state["input_scan_shape"]
         self._scan_region = data.scan_region or (0, self._source_scan_shape[0], 0, self._source_scan_shape[1])
@@ -880,9 +884,8 @@ class ShowPtycho(anywidget.AnyWidget):
                 scan_sampling_A=state["scan_sampling_A"],
             )
             if required > 4 + 1e-12:
-                self.sampling_limit_note = (
-                    f"Auto stops at 4×; nominal support requires {required:.2f}×. "
-                    "Choose 8× explicitly for finer output.")
+                # Auto never goes above 4×; 8× stays an explicit choice.
+                self.sampling_limit_note = f"Auto 4× (sampling supports 8×; nominal {required:.2f}×)"
         except ValueError as exc:
             # Invalid calibration still opens at native sampling.
             self.auto_sampling_note = (
@@ -908,7 +911,6 @@ class ShowPtycho(anywidget.AnyWidget):
         self.observe(self._on_upsampling, names=["upsampling"])
         self.observe(self._on_save, names=["save_trigger"])
         self.observe(self._on_pin, names=["pin_json"])
-        self.observe(self._on_drag_pixels_change, names=["num_drag_bright_field_pixels"])
         self.observe(self._on_rotation_change, names=["scan_detector_rotation_deg"])
         self.observe(self._on_panel_change, names=["higher_order_aberrations_json", "sample_json"])
         self.observe(self._on_panel_change, names=["tilt_correction"])
@@ -944,7 +946,7 @@ class ShowPtycho(anywidget.AnyWidget):
         try:
             saved = read_calibration(
                 self._calibration_path, self._calibration_identity,
-                self._scan_region, self._phase_estimator, CALIBRATION_SCHEMA,
+                self._scan_region, CALIBRATION_SCHEMA,
             )
             if saved["upsampling_mode"] == "auto" and self.auto_sampling_note:
                 raise ValueError(self.auto_sampling_note)
@@ -960,7 +962,7 @@ class ShowPtycho(anywidget.AnyWidget):
             self.calibration_status = f"Saved fit not restored: {exc}. Use Joint fit, then Save."
             return
         self.method = saved_method
-        self._phase_estimator = saved["phase_estimator"] if self.method == "ssb" else None
+        retired = saved["phase_estimator"] in RETIRED_PHASE_ESTIMATORS
         for name in ("phase_damping", "amplitude_damping", "smoothness_inv_A", "detector_weighting"):
             if name in reconstruction:
                 setattr(self, name, reconstruction[name])
@@ -982,6 +984,10 @@ class ShowPtycho(anywidget.AnyWidget):
         print(f"ShowPtycho: restored {self._calibration_path.name} saved {self.calibration_saved_at or 'earlier'} "
               f"({restored})" + (f", replacing the session's {before}" if supplied else "")
               + ". Pass restore=False to keep the session's values.")
+        if retired:
+            # the file keeps its label until the next Save, which records what the widget then shows
+            print(f"ShowPtycho: {self._calibration_path.name} was saved with the retired {saved['phase_estimator']} "
+                  "estimator and loads as saved; previews and Save use phase_of_mean, the phase of the mean wave.")
         return saved
 
     def _restore_regions(self, saved: dict) -> None:
@@ -1000,7 +1006,7 @@ class ShowPtycho(anywidget.AnyWidget):
                     fit["aberrations"], sample_tilt_mrad=fit["sample_tilt_mrad"],
                     depth_spread_nm=fit["depth_spread_nm"],
                     upsampling=self._output_factor,
-                    phase_estimator=self._phase_estimator, compute_loss=False,
+                    compute_loss=False,
                 )
                 images[f"{fit['label']} · SSB"] = self._ssb.crop_native(
                     phase, fit["bounds"], self._output_factor)
@@ -1034,7 +1040,6 @@ class ShowPtycho(anywidget.AnyWidget):
         result = self._ssb.fit_regions(
             changed, self.ssb_parameters,
             upsampling=self._output_factor,
-            phase_estimator=self._phase_estimator or self._default_phase_estimator,
             progress=progress, **self._region_fit_options)
         updated = {fit["id"]: fit for fit in result["fits"]}
         result["fits"] = [updated.get(region["id"], retained.get(region["id"])) for region in regions]
@@ -1066,7 +1071,6 @@ class ShowPtycho(anywidget.AnyWidget):
             model = sample if sample["depth_spread_nm"] > 0 else {}
             phase, loss = self._ssb.preview(
                 optics, **model, upsampling=self._output_factor,
-                phase_estimator=self._phase_estimator or self._default_phase_estimator,
                 compute_loss=self.compute_loss and bool(request.get("committed")))
             crop = self._ssb.crop_native(phase, fit["bounds"], self._output_factor)
             fitted = fit.get("fitted_parameters", {
@@ -1119,6 +1123,8 @@ class ShowPtycho(anywidget.AnyWidget):
                 self.fitted_scan_detector_rotation_deg = rotation
                 self.fitted_C10_nm, self.fitted_C12_nm, self.fitted_phi12_deg = fitted["C10_nm"], fitted["C12_nm"], fitted["phi12_deg"]
                 self.fitted_loss = state["loss"]
+                self.fitted_sample_agreement = state.get("sample_agreement")
+                self.fitted_tilt_fit_gain = state.get("tilt_fit_gain")
                 self.higher_order_aberrations_json = json.dumps({
                     key: value for key, value in fitted.items()
                     if key not in {"C10_nm", "C12_nm", "phi12_deg"}
@@ -1128,17 +1134,16 @@ class ShowPtycho(anywidget.AnyWidget):
                 self.num_bright_field_pixels = state["num_bright_field_pixels"]
         finally:
             self._adopting = False
-        self._inflight_id += 1
+        self._inflight_id = self._next_redraw_id()
         self._reconstruct(self._inflight_id, fitted, compute_loss=compute_loss)
-        # Interaction and committed results use the same full bright-field set.
-        self.num_drag_bright_field_pixels = self.num_bright_field_pixels
 
     def _trials_payload(self, max_trials: int = 50) -> str:
         """The session's fit trials for the browser strip, capped so a 200-trial run stays light.
 
         Every trial is listed with the ``objective`` it was scored on: the default fit's model agreement (with its
-        sample tilt and depth spread) or the phase-variance backup. Losses rank only within one objective, so the
-        trials are ordered by objective, in the order the fit ran them, and best first within each.
+        sample tilt and depth spread) or quantem.gpu's phase variance, for a session fitted with it. Losses rank
+        only within one objective, so the trials are ordered by objective, in the order the fit ran them, and best
+        first within each.
         """
         finite = [trial for trial in self._ssb.trials() if finite_or_none(trial["loss"]) is not None]
         objectives = list(dict.fromkeys(trial["objective"] for trial in finite))
@@ -1168,14 +1173,12 @@ class ShowPtycho(anywidget.AnyWidget):
             raise ValueError("Regularized direct reconstruction currently requires CUDA; use method='ssb' on MPS.")
         if self.local_tilt_json:
             raise ValueError("Regional fitting currently supports method='ssb'; use a separate full-session review for regularization.")
-        if self._phase_estimator is not None and self._phase_estimator_explicit:
-            raise ValueError("phase_estimator applies only to method='ssb'; omit it for regularized methods.")
 
     def _reconstruction_options(self) -> dict:
         """Pass only parameters used by the selected numerical method."""
         self._check_method()
         if self.method == "ssb":
-            return {"method": "ssb", "phase_estimator": self._phase_estimator or self._default_phase_estimator}
+            return {"method": "ssb"}
         options = {"method": self.method, "phase_damping": self.phase_damping,
                    "smoothness_inv_A": self.smoothness_inv_A, "detector_weighting": self.detector_weighting}
         if self.method == "complex":
@@ -1200,7 +1203,8 @@ class ShowPtycho(anywidget.AnyWidget):
         # float32 ulps in 1-7 ms instead of 30-50. A drag frame that repeats the last values (the browser
         # coalesces moves) stays on that window. Releases, other settings and first frames stay exact.
         previous = getattr(self, "_drag_model", None)
-        options_key = json.dumps(options, sort_keys=True, default=str)
+        # the rotation is part of the key: a rotation drag is never a window drag, and never builds or drops windows
+        options_key = json.dumps({**options, "rotation": self.scan_detector_rotation_deg}, sort_keys=True, default=str)
         same_options = options_key == getattr(self, "_drag_options_key", None)
         moved = [] if previous is None else [name for name in model if previous.get(name, model[name]) != model[name]]
         if not moved and same_options and getattr(self, "_drag_control", None):
@@ -1210,7 +1214,9 @@ class ShowPtycho(anywidget.AnyWidget):
             phase, loss = self._ssb.drag(moved[0], model, **options), None
         else:
             phase, loss = self._ssb.preview(model, compute_loss=compute_loss and self.compute_loss, **options)
+        rotating = self.scan_detector_rotation_deg != getattr(self, "_drag_rotation", self.scan_detector_rotation_deg)
         self._drag_model, self._drag_options_key = model, options_key
+        self._drag_rotation = self.scan_detector_rotation_deg
         self._drag_control = moved[0] if dragging else None
         if request_id != self._inflight_id:
             return
@@ -1231,10 +1237,10 @@ class ShowPtycho(anywidget.AnyWidget):
         if dragging:
             # one window node per frame, after the frame has left
             self._ssb.advance()
-        elif (compute_loss or not same_options) and getattr(self._ssb, "drag_windows", False):
-            # a release, the first frame or other settings: windows along the slider just used and the three
-            # main ones build while the sliders rest, so the next grab starts on window frames
-            # (no work once they exist for these inputs)
+        elif (compute_loss or not (same_options or rotating)) and getattr(self._ssb, "drag_windows", False):
+            # a release, the first frame, a method switch or other settings (not a rotation drag frame): windows
+            # along the slider just used and the three main ones build while the sliders rest, so the next grab
+            # starts on window frames (no work once they exist for these inputs)
             controls = dict.fromkeys(moved + ["C10_nm", "C12_nm", "phi12_deg"])
             self._ssb.prepare(controls, model, **options)
             self._schedule_window_build()
@@ -1255,8 +1261,13 @@ class ShowPtycho(anywidget.AnyWidget):
     def _reconstruct_displayed(self, *, compute_loss: bool) -> None:
         """Reconstruct the displayed aberrations again, under a new request id, after a setting
         outside the three sliders (rotation, sampling, a panel) changed the phase."""
-        self._inflight_id += 1
+        self._inflight_id = self._next_redraw_id()
         self._reconstruct(self._inflight_id, self._current(), compute_loss=compute_loss)
+
+    def _next_redraw_id(self) -> int:
+        """A new id for a redraw the kernel starts itself: negative, so it never equals a browser request id."""
+        self._redraw_id -= 1
+        return self._redraw_id
 
     def _on_preview_message(self, widget, content: dict, buffers) -> None:
         """Receive a bounded preview command without the generic trait throttle."""
@@ -1280,7 +1291,11 @@ class ShowPtycho(anywidget.AnyWidget):
         # A dragged strength came from the browser, which already shows it: it is not echoed back,
         # so a drag sends one message per frame (the phase) and no extra widget render.
         previous_lock = self._property_lock
-        self._property_lock = {**previous_lock, **{name: request[name] for name in _BROWSER_STRENGTHS if name in request}}
+        echo = {name: request[name] for name in _BROWSER_STRENGTHS if name in request}
+        # A dragged rotation came from the browser too; it adopts the value itself on release.
+        if request.get("scan_detector_rotation_deg") is not None:
+            echo["scan_detector_rotation_deg"] = float(request["scan_detector_rotation_deg"])
+        self._property_lock = {**previous_lock, **echo}
         self._adopting = True
         try:
             with self.hold_sync():
@@ -1300,6 +1315,9 @@ class ShowPtycho(anywidget.AnyWidget):
         finally:
             self._adopting = False
             self._property_lock = previous_lock
+        if request["id"] > 0 and request["id"] < getattr(self, "_browser_id", 0):
+            return  # an older browser request arriving late: a newer one already ran
+        self._browser_id = request["id"]
         self._inflight_id = request["id"]
         try:
             self._reconstruct(request["id"], {name: request[name] for name in ("C10_nm", "C12_nm", "phi12_deg")},
@@ -1328,11 +1346,6 @@ class ShowPtycho(anywidget.AnyWidget):
         if factor > 1 and not self.upsampling_available:
             raise ValueError("This session supports native sampling only; use upsampling=1.")
         return requested
-
-    def _on_drag_pixels_change(self, change) -> None:
-        """Normalize the legacy drag-count trait to the complete bright-field set."""
-        if change["new"] != self.num_bright_field_pixels:
-            self.num_drag_bright_field_pixels = self.num_bright_field_pixels
 
     def _on_rotation_change(self, change) -> None:
         """Re-index the full bright-field geometry at the new scan-detector rotation.
@@ -1566,7 +1579,8 @@ class ShowPtycho(anywidget.AnyWidget):
             "depth_spread_nm": sample["depth_spread_nm"] if sample else None,
             "upsampling": self._output_factor,
             "upsampling_mode": "auto" if self.upsampling == "auto" else "explicit",
-            "phase_estimator": self._phase_estimator or self._default_phase_estimator,
+            # the one SSB estimator; readers of earlier versions require the key
+            "phase_estimator": "phase_of_mean",
             "reconstruction": self._reconstruction_options(),
             "display": {"tilt_correction": self.tilt_correction, "max_columns": self.local_tilt_max_columns},
             "scan_shape": list(state["input_scan_shape"]),
@@ -1689,7 +1703,6 @@ class ShowPtycho(anywidget.AnyWidget):
             (self._on_upsampling, ["upsampling"]),
             (self._on_save, ["save_trigger"]),
             (self._on_pin, ["pin_json"]),
-            (self._on_drag_pixels_change, ["num_drag_bright_field_pixels"]),
             (self._on_rotation_change, ["scan_detector_rotation_deg"]),
             (self._on_panel_change, ["higher_order_aberrations_json", "sample_json"]),
             (self._on_panel_change, ["tilt_correction"]),
@@ -1729,11 +1742,6 @@ class ShowPtycho(anywidget.AnyWidget):
             raise ValueError("export() writes an SSB review folder from a session's bright-field counts; this widget shows an array.")
         if self.method != "ssb":
             raise ValueError("Regularized reconstruction needs a live CUDA session. Use save_calibration() to save its method and strengths; standalone browser export supports method='ssb' only.")
-        if self._phase_estimator is not None:
-            raise ValueError(
-                "Browser export does not yet preserve an explicit phase_estimator. "
-                "Keep this review in the notebook; Save preserves its numerical calibration."
-            )
         return write_showptycho_folder(self, path, title)
 
     def _repr_mimebundle_(self, **kwargs):
