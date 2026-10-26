@@ -1942,6 +1942,16 @@ function Show2D() {
   // Cached offscreen canvases for main image rendering (avoids per-zoom/pan recompute)
   const mainOffscreensRef = React.useRef<HTMLCanvasElement[]>([]);
   const mainImgDatasRef = React.useRef<ImageData[]>([]);
+  // Resize targets stay private until the whole visible batch has rendered.
+  // Layout/hover events must never expose a freshly allocated, blank target.
+  const completedMainPanelsRef = React.useRef<({
+    canvas: HTMLCanvasElement; width: number; height: number; count: number; label: string;
+    titleSpans: RichTitleSpan[] | undefined;
+  } | undefined)[]>([]);
+  const imageResizePending = (panel: number) => {
+    const completed = completedMainPanelsRef.current[panel];
+    return !!completed && (completed.width !== width || completed.height !== height || completed.count !== nImages);
+  };
   const colorbarVminRef = React.useRef(0);
   const colorbarVmaxRef = React.useRef(1);
   const [offscreenVersion, setOffscreenVersion] = React.useState(0);
@@ -2173,12 +2183,14 @@ function Show2D() {
   const visibleImageCount = Math.max(1, visibleImageIndices.length);
   const panelMenuTotal = isPaged ? activePanelCount : totalPanelCount;
   const allCurrentPanelsVisible = visibleImageCount === panelMenuTotal;
-  const panelLabel = React.useCallback((idx: number) => labels?.[idx] || `Image ${idx + 1}`, [labels]);
+  const panelLabel = React.useCallback((idx: number) => imageResizePending(idx)
+    ? completedMainPanelsRef.current[idx]!.label
+    : labels?.[idx] || `Image ${idx + 1}`, [labels, width, height, nImages]);
   const panelTitleContent = React.useCallback((idx: number) => (
-    renderRichTitle(panelTitleSpans?.[idx], panelLabel(idx))
+    renderRichTitle(imageResizePending(idx) ? completedMainPanelsRef.current[idx]!.titleSpans : panelTitleSpans?.[idx], panelLabel(idx))
   ), [panelLabel, panelTitleSpans]);
   const panelTitleText = React.useCallback((idx: number) => (
-    richTitlePlainText(panelTitleSpans?.[idx], panelLabel(idx))
+    richTitlePlainText(imageResizePending(idx) ? completedMainPanelsRef.current[idx]!.titleSpans : panelTitleSpans?.[idx], panelLabel(idx))
   ), [panelLabel, panelTitleSpans]);
   const setPanelHidden = React.useCallback((panel: number, hidden: boolean) => {
     if (isPaged && !isItemPaged) {
@@ -3311,6 +3323,9 @@ function Show2D() {
     }
     mainOffscreensRef.current = canvases;
     mainImgDatasRef.current = imgDatas;
+    completedMainPanelsRef.current.length = nImages;
+    setCursorInfo(null);
+    setInsetHoverInfo(null);
   }, [width, height, nImages, canvasW, canvasH, uint8FolderPreviewMode]);
 
   // Compute histogram data for the displayed image (reflects log scale)
@@ -3589,6 +3604,7 @@ function Show2D() {
     if (mainOffscreensRef.current.length === 0 || mainImgDatasRef.current.length === 0) return;
 
     const renderGeneration = ++mainCmapGenerationRef.current;
+    const renderTargets = mainOffscreensRef.current;
     let cancelled = false;
     let renderRaf: number | null = null;
     const isCurrentRender = () => (
@@ -3596,6 +3612,16 @@ function Show2D() {
       && renderGeneration === mainCmapGenerationRef.current
       && (typeof document === "undefined" || !document.hidden)
     );
+    const commitPanels = (indices: number[]) => {
+      if (!isCurrentRender()) return;
+      for (const i of indices) {
+        completedMainPanelsRef.current[i] = {
+          canvas: renderTargets[i], width, height, count: nImages,
+          label: labels?.[i] || `Image ${i + 1}`, titleSpans: panelTitleSpans?.[i],
+        };
+      }
+      setOffscreenVersion(version => version + 1);
+    };
     const panelCmapNames = Array.from({ length: nImages }, (_, i) => panelCmapFor(i));
     const hasMixedPanelCmaps = panelCmapNames.some(name => name !== panelCmapNames[0]);
     const lutName = panelCmapNames[0] || cmap;
@@ -3725,18 +3751,19 @@ function Show2D() {
               panels.map(i => capturedRanges[i] || { vmin: 0, vmax: 1 }),
               capturedLogScale,
               panelCmapNames,
-              mainOffscreensRef.current,
+              renderTargets,
             );
             if (!isCurrentRender()) return;
+            if (panels.some((_, k) => !bitmaps[k])) return;
             let painted = !!(isRgbFlags && isRgbFlags.some(Boolean));
             for (let k = 0; k < bitmaps.length; k++) {
               const bitmap = bitmaps[k];
               if (!bitmap) continue;
-              const offscreen = mainOffscreensRef.current[panels[k]];
+              const offscreen = renderTargets[panels[k]];
               offscreen?.getContext("2d")?.drawImage(bitmap, 0, 0);
               painted = true;
             }
-            if (painted && isCurrentRender()) setOffscreenVersion(version => version + 1);
+            if (painted) commitPanels(indices);
           } catch (err) {
             if (isCurrentRender()) console.error("[Show2D] scaled WebGPU colormap repaint failed", err);
           } finally {
@@ -3769,18 +3796,22 @@ function Show2D() {
               return;
             }
             const drawn = bitmaps ?? [];
+            if (indices.some((i, k) => !capturedIsRgb[i] && !drawn[k])) {
+              closeBitmaps();
+              return;
+            }
             let painted = capturedIsRgb.some(Boolean);
             for (let k = 0; k < drawn.length; k++) {
               const bitmap = drawn[k];
               const i = indices[k];
               if (!bitmap || capturedIsRgb[i]) continue; // RGB offscreen already holds true color pixels
-              const ctx = mainOffscreensRef.current[i]?.getContext("2d");
+              const ctx = renderTargets[i]?.getContext("2d");
               if (!ctx) continue;
               ctx.drawImage(bitmap, 0, 0);
               painted = true;
             }
             closeBitmaps();
-            if (painted && isCurrentRender()) setOffscreenVersion(version => version + 1);
+            if (painted) commitPanels(indices);
           } catch (err) {
             closeBitmaps();
             if (isCurrentRender()) {
@@ -3954,21 +3985,30 @@ function Show2D() {
   const paintMainPanels = (paintIndices: number[]) => {
     for (const i of paintIndices) {
       const canvas = canvasRefs.current[i];
-      const offscreen = mainOffscreensRef.current[i];
-      if (!canvas || !offscreen) continue;
+      const completed = completedMainPanelsRef.current[i];
+      if (!canvas || !completed) continue;
+      const offscreen = completed.canvas;
       const ctx = canvas.getContext("2d");
       if (!ctx) continue;
       ctx.imageSmoothingEnabled = smooth;
       if (smooth) ctx.imageSmoothingQuality = "high";
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.save();
-      const { drawW, drawH } = applyPanelTransform(ctx, panelPlacement(i));
+      // A growing footprint may change the panel aspect ratio. Keep the old
+      // source geometry until its replacement is ready; do not stretch it.
+      const scale = Math.min(canvasW / completed.width, canvasH / completed.height);
+      const retainedW = imageResizePending(i) ? completed.width * scale : canvasW;
+      const retainedH = imageResizePending(i) ? completed.height * scale : canvasH;
+      ctx.translate((canvasW - retainedW) / 2, (canvasH - retainedH) / 2);
+      const { drawW, drawH } = applyPanelTransform(ctx, {
+        ...panelPlacement(i), canvasW: retainedW, canvasH: retainedH,
+      });
       ctx.drawImage(offscreen, 0, 0, offscreen.width, offscreen.height, 0, 0, drawW, drawH);
       // Detail tile on top of the preview (same zoom/pan transform): tile
       // coordinates are full-res pixels, so divide by the preview bin factor
       // to land in the preview's coordinate space. Outside the tile the
       // preview remains visible as the pan-away fallback.
-      const tile = displayBin > 1 ? detailTilesRef.current.get(i) : undefined;
+      const tile = displayBin > 1 && !imageResizePending(i) ? detailTilesRef.current.get(i) : undefined;
       if (tile && tile.canvas) {
         if (detailTileCoversWindow(tile, currentDetailWindow(i))) {
           const scaleX = drawW / width;
@@ -4010,6 +4050,7 @@ function Show2D() {
     logScale: boolean,
     cmapNames: string[],
   ): boolean => {
+    if (panels.some(imageResizePending)) return true;
     if (smooth || displayBin > 1 || uint8FolderPreviewMode) return false;
     const targets = panels.map(panel => {
       const canvas = canvasRefs.current[panel];
@@ -4054,6 +4095,9 @@ function Show2D() {
       if (!ctx) continue;
 
       ctx.clearRect(0, 0, overlay.width, overlay.height);
+      // Incoming coordinates/rulers describe the replacement, not the retained
+      // image. Restore them in the same render turn that commits its pixels.
+      if (imageResizePending(i)) continue;
       const view = getZoomState(i);
       const { zoom } = view;
       // Image (row, col) to this overlay's CSS pixels at the panel's zoom and pan.
@@ -4277,7 +4321,7 @@ function Show2D() {
       const lensCtx = lensCanvas.getContext("2d");
       if (lensCtx) lensCtx.clearRect(0, 0, lensCanvas.width, lensCanvas.height);
     }
-    if (!showLens || isGallery || !lensPos || !rawDataRef.current?.[0]) return;
+    if (!showLens || isGallery || !lensPos || !rawDataRef.current?.[0] || imageResizePending(0)) return;
     if (!lensCanvas) return;
     const ctx = lensCanvas.getContext("2d");
     if (!ctx) return;
@@ -5375,6 +5419,7 @@ function Show2D() {
   };
 
   const handleTouchStart = (e: React.TouchEvent, idx: number) => {
+    if (imageResizePending(idx)) return;
     if (profileActive || roiActive || measureActive) return;
     if (isGallery && idx !== selectedIdx) setSelectedIdx(idx);
     const now = Date.now();
@@ -5917,6 +5962,7 @@ function Show2D() {
   }, [insetPlots, showScaleBar, scheduleInsetDragPaint, setInsetPlots]);
 
   const handleMouseDown = (e: React.MouseEvent, idx: number) => {
+    if (imageResizePending(idx)) return;
     if (e.detail >= 2) {
       handleDoubleClick(e, idx);
       return;
@@ -6057,6 +6103,7 @@ function Show2D() {
   };
 
   const handleMouseMove = (e: React.MouseEvent, idx: number) => {
+    if (imageResizePending(idx)) { setCursorInfo(null); return; }
     if (updateInsetPlotDrag(e, idx)) return;
     if (annotationDragRef.current) {
       const drag = annotationDragRef.current;
@@ -8309,7 +8356,7 @@ function Show2D() {
                       width={Math.round(canvasW * DPR)} height={Math.round(canvasH * DPR)}
                       style={responsiveOverlayStyle}
                     />
-                    {panelChromeVisible && cursorInfo && cursorInfo.idx === i && (
+                    {panelChromeVisible && cursorInfo && cursorInfo.idx === i && !imageResizePending(i) && (
                       /* Show4DSTEM readout spec; top-right, dropped 25px below the star button row */
                       <Box sx={{ position: "absolute", top: 28, right: 3, bgcolor: "rgba(0,0,0,0.35)", px: 0.5, py: 0.15, pointerEvents: "none", minWidth: 100, textAlign: "right", zIndex: 2 }}>
                         <Typography sx={{ fontSize: 9, fontFamily: "monospace", color: "rgba(255,255,255,0.7)", whiteSpace: "nowrap", lineHeight: 1.2 }}>
@@ -8675,7 +8722,7 @@ function Show2D() {
                 width={Math.round(canvasW * DPR)} height={Math.round(canvasH * DPR)}
                 style={responsiveOverlayStyle}
               />
-              {panelChromeVisible && cursorInfo && (
+              {panelChromeVisible && cursorInfo && !imageResizePending(0) && (
                 /* Show4DSTEM readout spec verbatim (single-image mode has no star button) */
                 <Box sx={{ position: "absolute", top: 3, right: 3, bgcolor: "rgba(0,0,0,0.35)", px: 0.5, py: 0.15, pointerEvents: "none", minWidth: 100, textAlign: "right" }}>
                   <Typography sx={{ fontSize: 9, fontFamily: "monospace", color: "rgba(255,255,255,0.7)", whiteSpace: "nowrap", lineHeight: 1.2 }}>
@@ -8693,7 +8740,7 @@ function Show2D() {
           )}
 
           {/* Stats bar - right below canvas (Show3D style) */}
-          {showStats && (
+          {showStats && !imageResizePending(statsIdx) && (
             <Box sx={{ mt: `${SPACING.XS}px`, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center", flexWrap: "wrap", maxWidth: "100%", boxSizing: "border-box", opacity: 1 }}>
               {isGallery && (
                 <Typography sx={{ fontSize: 11, color: themeColors.textMuted }}>{panelTitleContent(statsIdx)}</Typography>
