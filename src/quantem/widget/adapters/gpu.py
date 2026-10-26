@@ -361,7 +361,7 @@ class DirectSession:
 
         ``objective`` is quantem.gpu's name for what the trial was scored on: ``"agreement"`` (the default
         model-based fit, with or without tilt; its ``loss`` is the negative agreement, lower is better) or
-        ``"phase_variance"`` (the backup search). ``sample_tilt_mrad`` (scan frame) and ``depth_spread_nm`` are the
+        ``"phase_variance"`` (quantem.gpu's phase-variance search, for a session fitted with it). ``sample_tilt_mrad`` (scan frame) and ``depth_spread_nm`` are the
         trial's sample model, 0 for a tilt-0 trial. Losses compare only within one objective.
         """
         return [{"C10_nm": float(trial["params"].get("C10_nm", 0.0)), "C12_nm": float(trial["params"].get("C12_nm", 0.0)),

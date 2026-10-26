@@ -1126,8 +1126,9 @@ class ShowPtycho(anywidget.AnyWidget):
         """The session's fit trials for the browser strip, capped so a 200-trial run stays light.
 
         Every trial is listed with the ``objective`` it was scored on: the default fit's model agreement (with its
-        sample tilt and depth spread) or the phase-variance backup. Losses rank only within one objective, so the
-        trials are ordered by objective, in the order the fit ran them, and best first within each.
+        sample tilt and depth spread) or quantem.gpu's phase variance, for a session fitted with it. Losses rank
+        only within one objective, so the trials are ordered by objective, in the order the fit ran them, and best
+        first within each.
         """
         finite = [trial for trial in self._ssb.trials() if finite_or_none(trial["loss"]) is not None]
         objectives = list(dict.fromkeys(trial["objective"] for trial in finite))

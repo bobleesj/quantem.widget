@@ -13,7 +13,7 @@ or exhaust device memory. No registered runner means the release stays pending.
 
 The workflow downloads the pinned public gold dataset and starts a fresh
 environment and Jupyter kernel. It verifies GPU-only joint fitting with one
-seed, 200 trials and Newton, then draws two regions, moves and resizes one,
+seed, 200 trials and the exact-gradient refinement, then draws two regions, moves and resizes one,
 checks the other remains unchanged, saves calibration and restores it in a
 second fresh kernel. Browser rendering must use a hardware adapter.
 

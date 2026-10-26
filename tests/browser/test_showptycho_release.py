@@ -55,7 +55,7 @@ if data.calibration.detector_sampling_mrad is None and data.calibration.detector
     data.calibration.fit_detector_sampling()
 ssb = SSB(data)
 started = time.perf_counter()
-fit = ssb.find_aberrations(num_trials=200, seed=42, refinement="newton", compare_standard=False)
+fit = ssb.find_aberrations(num_trials=200, seed=42, compare_standard=False)
 full_fit_s = time.perf_counter() - started
 assert fit.optimizer["host_numerical_search"] is False
 assert fit.optimizer["device"] == backend
@@ -112,7 +112,7 @@ viewer
             """() => {
             const s = document.querySelector('[data-local-tilt-controls] [role=status]');
             return s && /Fits ready/.test(s.textContent)
-                && !/refitting|trials|newton/i.test(s.textContent);
+                && !/refitting|trials/i.test(s.textContent);
         }""",
             timeout=180_000,
         )
@@ -169,7 +169,7 @@ assert viewer.phase_bytes == overview
 assert viewer.region_fits[0] == first_fit
 np.testing.assert_array_equal(viewer.region_images[first_fit['label'] + ' · SSB'], first_image)
 assert all(len(f['fit_record']['fits']) == 1 and f['num_completed_trials'] == 200
-           and f['refinement'] == 'newton' and f['optimizer']['host_numerical_search'] is False
+           and f['refinement'] == 'bfgs' and f['optimizer']['host_numerical_search'] is False
            for f in viewer.region_fits)
 viewer.save_calibration()
 print(json.dumps({'backend': backend, 'full_fit_s': full_fit_s,

@@ -82,8 +82,8 @@ before or after the fit.
 
 ## SSB in quantem: model-based by default
 
-The standard workflow uses 200 initial TPE trials, then joint Newton refinement
-through fifth-order aberrations with sample tilt and depth.
+The standard workflow uses 200 initial TPE trials, then quantem.gpu's joint
+exact-gradient refinement through fifth-order aberrations with sample tilt and depth.
 `find_aberrations(search="broad")` adds higher-order exploration.
 
 quantem fits SSB aberrations with a physical model of the measurement, not an image-quality score. For each trial
@@ -95,13 +95,6 @@ model-based, tilt-corrected fit is the default everywhere, and it is where SSB i
 |---|---|---|
 | `find_aberrations()` | model-based, tilt-corrected | the default: every fit |
 | `find_aberrations(search="primary", tilt=False)` | model-based, tilt held at 0 | thin, untilted samples, or to see what tilt correction changes |
-| `find_aberrations(search="primary", tilt=False, objective="phase_variance")` | phase variance, the earlier SSB search | a backup: reproducing older results, cross-checking a fit |
-
-Phase variance chooses the aberrations that make the corrected phases of all bright-field pixels agree best: the
-least variance of the corrected phase across them. It stays as a backup, not an equal alternative: it cannot see
-sample tilt or thickness, it scores only how consistent the bright-field images are rather than how well a model
-explains the measurement, and it is about 10x slower. On simulated crystals with known aberrations, the model-based
-fit lands about 3x closer in C10.
 
 ## Reconstruct
 
@@ -286,8 +279,8 @@ the HTML export (the browser cannot bin), so keep the whole workflow un-binned.
 
 Enable **Local Tilt** to draw independent rectangular regions on the overview.
 Moving or resizing a region invalidates its previous fit; automatic fitting
-runs one standard fit with seed 42: 200 initial TPE trials, then joint Newton
-refinement through fifth order with tilt and depth. Select a region to inspect
+runs one standard fit with seed 42: 200 initial TPE trials, then joint
+exact-gradient refinement through fifth order with tilt and depth. Select a region to inspect
 and adjust its own controls. The overview and other regional models are retained.
 
 A region estimates a local model, but its displayed phase is a crop of the

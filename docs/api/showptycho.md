@@ -220,13 +220,6 @@ model-based, tilt-corrected fit is the default everywhere, and it is where SSB i
 |---|---|---|
 | `find_aberrations()` | model-based, tilt-corrected | the default: every fit |
 | `find_aberrations(search="primary", tilt=False)` | model-based, tilt held at 0 | thin, untilted samples, or to see what tilt correction changes |
-| `find_aberrations(search="primary", tilt=False, objective="phase_variance")` | phase variance, the earlier SSB search | a backup: reproducing older results, cross-checking a fit |
-
-Phase variance chooses the aberrations that make the corrected phases of all bright-field pixels agree best: the
-least variance of the corrected phase across them. It stays as a backup, not an equal alternative: it cannot see
-sample tilt or thickness, it scores only how consistent the bright-field images are rather than how well a model
-explains the measurement, and it is about 10x slower. On simulated crystals with known aberrations, the model-based
-fit lands about 3x closer in C10.
 
 ## Tilt correction
 
@@ -239,14 +232,11 @@ viewer = ShowPtycho(ptycho, show_fft=True)
 viewer
 ```
 
-The other two methods are explicit, with quantem.gpu's names:
+The other method is explicit, with quantem.gpu's names:
 `ptycho.find_aberrations(search="primary", tilt=False)` fits the primary optics model
 with tilt and depth held at zero. Use `search="primary", tilt=True` for a
-comparison at the same aberration order.
-
-`ptycho.find_aberrations(search="primary", tilt=False, objective="phase_variance")` is the
-phase-variance backup. Joint fit, Refit SSB and Fit Regions all run the
-model-based, tilt-corrected fit.
+comparison at the same aberration order. Joint fit, Refit SSB and Fit Regions
+all run the model-based, tilt-corrected fit.
 
 **Tilt correction** starts on. Switch it off to compare the phase and FFT with
 zero sample tilt, keeping the same fitted aberrations and depth spread. This
