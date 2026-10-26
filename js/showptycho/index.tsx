@@ -1693,7 +1693,6 @@ function Explore() {
   const [phaseHeight] = useModelState<number>("phase_height");
 
   const [, setPinJson] = useModelState<string>("pin_json");
-  const [dragBfTrait, setDragBfTrait] = useModelState<number>("num_drag_bright_field_pixels");
   const [totalBf] = useModelState<number>("num_bright_field_pixels");
   const [starsPath] = useModelState<string>("stars_path");
   const [saveTrigger, setSaveTrigger] = useModelState<number>("save_trigger");
@@ -1835,14 +1834,8 @@ function Explore() {
     ? webgpuCalLogicalBf
     : Math.max(0, Math.round(totalBf || 0));
   // Use the full logical BF set for both live and exported reconstruction.
-  // Synchronize older saved widgets that still carry an explicit drag subset.
-  const dragBfRef = React.useRef(effectiveTotalBf);
-  dragBfRef.current = effectiveTotalBf;
-  React.useEffect(() => {
-    if (effectiveTotalBf > 0 && dragBfTrait !== effectiveTotalBf) {
-      setDragBfTrait(effectiveTotalBf);
-    }
-  }, [dragBfTrait, effectiveTotalBf, setDragBfTrait]);
+  const effectiveTotalBfRef = React.useRef(effectiveTotalBf);
+  effectiveTotalBfRef.current = effectiveTotalBf;
   const [pinned, setPinned] = React.useState<PinnedEntry[]>([]);
   const [viewPin, setViewPin] = React.useState<number | null>(null);
   const viewPinRef = React.useRef(viewPin); viewPinRef.current = viewPin;
@@ -3190,7 +3183,7 @@ function Explore() {
     previousUpsamplingFactorRef.current = upsamplingFactor;
     if (webgpuStandalone) frontendPreviewRef.current?.(sliderVals.current.c10, sliderVals.current.c12, sliderVals.current.phi12, rotationDegRef.current);
   }, [upsamplingFactor, webgpuStandalone]);
-  shouldCommitOnReleaseRef.current = dragBfRef.current > 0 || !!webgpuSsbRef.current;
+  shouldCommitOnReleaseRef.current = effectiveTotalBf > 0 || !!webgpuSsbRef.current;
   const standaloneInitialRenderRef = React.useRef(false);
   React.useEffect(() => {
     if (!webgpuStandalone || standaloneInitialRenderRef.current) return;
@@ -3506,7 +3499,7 @@ function Explore() {
         scan_detector_rotation_deg: wrapDegrees(rotationDeg ?? 0),
         display_negate_phase: !!displayNegatePhase,
         loss: loss ?? null,
-        num_bright_field_pixels: Math.round(dragBfRef.current || 0),
+        num_bright_field_pixels: Math.round(effectiveTotalBfRef.current || 0),
         notes: String(notes ?? ""),
         image: `snapshots/snapshot_${stamp}_C10_${slugPart(sliderVals.current.c10.toFixed(0))}.jpg`,
       };

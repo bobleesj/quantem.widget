@@ -199,11 +199,11 @@ class _PaddedSession:
 
 
 def _fit_padded(agreements):
-    from quantem.widget.adapters.gpu import SsbSession
+    from quantem.widget.adapters.gpu import DirectSession
     region = {'id': 'r', 'label': 'R', 'bounds': [8, 40, 4, 36]}
     parameters = {'aberrations': {'C10_nm': 3.0, 'C12_nm': 1.0, 'phi12_deg': 10.0},
                   'scan_detector_rotation_deg': 0.0}
-    return SsbSession(_PaddedSession(agreements)).fit_regions(
+    return DirectSession(_PaddedSession(agreements)).fit_regions(
         [region], parameters, upsampling_factor=2)
 
 
@@ -240,11 +240,11 @@ def test_regional_fit_runs_once_and_crops_measured_positions():
 def test_regional_fit_passes_its_trial_count_and_tilt_limit_to_the_fit():
     pytest.importorskip("quantem.gpu", reason="the regional fit runs quantem.gpu's SSB")
     # Fit Regions hard-coded 200 trials and tested a copied 24.99 mrad tilt bound; the refinement is quantem.gpu's
-    from quantem.widget.adapters.gpu import REGION_TILT_LIMIT_MRAD, SsbSession
+    from quantem.widget.adapters.gpu import REGION_TILT_LIMIT_MRAD, DirectSession
     session = _PaddedSession([0.5])
     region = {'id': 'r', 'label': 'R', 'bounds': [8, 40, 4, 36]}
     parameters = {'aberrations': {'C10_nm': 3.0, 'C12_nm': 1.0, 'phi12_deg': 10.0}, 'scan_detector_rotation_deg': 0.0}
-    result = SsbSession(session).fit_regions([region], parameters, upsampling_factor=1, num_trials=12)
+    result = DirectSession(session).fit_regions([region], parameters, upsampling_factor=1, num_trials=12)
     assert session.options['num_trials'] == 12 and 'refinement' not in session.options
     assert session.options['tilt_limit_mrad'] == REGION_TILT_LIMIT_MRAD
     assert session.options['compute_loss'] is False

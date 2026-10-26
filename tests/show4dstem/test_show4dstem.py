@@ -1321,7 +1321,7 @@ def test_compute_ssb_reconstructs_a_rectangular_scan_that_quantem_gpu_pads():
         assert phase.shape == (96, 80)
         with SSB(counts, voltage_kV=300, semiangle_mrad=20, scan_sampling_A=0.5, detector_sampling_mrad=20 / 6,
                  aberrations=optics, scan_detector_rotation_deg=30.0) as ssb:
-            full = np.asarray(torch.as_tensor(ssb.reconstruct().phase).cpu())
+            full = np.asarray(torch.as_tensor(ssb.run().phase).cpu())
             top, left = ((padded - measured) // 2 for padded, measured in zip(ssb.scan_shape, ssb.input_scan_shape))
         np.testing.assert_array_equal(phase, full[top:top + 96, left:left + 80])
     finally:

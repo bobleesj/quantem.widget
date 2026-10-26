@@ -485,10 +485,6 @@ class DirectSession:
         if loss is not None:
             self.ssb.best_loss = float(loss)
 
-    def preview_context(self, num_bright_field_pixels: int):
-        """A reduced bright-field context for slider drags (``quantem.gpu.DirectPtycho.preview_context``)."""
-        return self.ssb.preview_context(int(num_bright_field_pixels))
-
     def preview(self, aberrations: dict, **options):
         """Transient ``(phase, loss)`` at ``aberrations`` (``quantem.gpu.DirectPtycho.preview(aberrations, **options)``).
 
@@ -581,8 +577,6 @@ class DirectSession:
     def run(self, **options) -> dict:
         """Run direct reconstruction at the reviewed optics; see ``result`` for the keys."""
         return self.result(self.ssb.run(**options))
-
-    reconstruct = run  # Existing widget integrations share the canonical implementation.
 
     def find_aberrations(self, **options) -> dict:
         """Fit the aberrations (``quantem.gpu.DirectPtycho.find_aberrations(**options)``); see ``result`` for the keys."""
@@ -799,10 +793,6 @@ class AcquisitionSeries:
                 f"{self.frames[0].shape} on {self.device}."
             )
         self.frames.append(frame)
-
-
-# Compatibility for integrations using the previous adapter name.
-SsbSession = DirectSession
 
 
 def _named_orders(aberrations: dict) -> dict:

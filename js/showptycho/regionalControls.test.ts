@@ -16,7 +16,7 @@ const DEFAULTS: Record<string, unknown> = {
   local_tilt_images_json: '[]', local_tilt_json: '', local_tilt_max_columns: 3,
   local_tilt_preview_json: '', local_tilt_reply_json: '', local_tilt_request_json: '',
   local_tilt_selection_json: '', local_tilt_stale: false, notes: '', num_bright_field_pixels: 0,
-  num_drag_bright_field_pixels: 0, object_sampling_A: [], phase_height: 0, phase_width: 0,
+  object_sampling_A: [], phase_height: 0, phase_width: 0,
   pin_json: '', request_json: '', result_json: '', sample_available: false, sample_fit_json: '',
   sample_fit_request: 0, sample_fit_status: '', sample_json: '{}', save_trigger: 0, scan_cols: 0,
   scan_detector_rotation_deg: 0, scan_detector_rotation_max_deg: 180,

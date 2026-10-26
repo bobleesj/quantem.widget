@@ -232,7 +232,7 @@ def test_opens_on_the_session_fit_and_shows_its_preview(widget, ssb):
     assert (widget.fitted_C10_nm, widget.fitted_C12_nm, widget.fitted_phi12_deg) == (3.0, 1.0, pytest.approx(math.degrees(0.2)))
     assert widget.scan_detector_rotation_deg == widget.fitted_scan_detector_rotation_deg == 10.0
     assert (widget.scan_sampling_A, widget.object_sampling_A, widget.scan_rows, widget.scan_cols) == ([0.5, 0.5], [], SCAN, SCAN)
-    assert widget.num_bright_field_pixels == widget.num_drag_bright_field_pixels == ssb.num_bright_field_pixels
+    assert widget.num_bright_field_pixels == ssb.num_bright_field_pixels
     assert widget.initial_fft_on and widget.crop_refit_available and widget.trials_json == ""
     # Python reconstructs every live frame: no browser SSB runs, so there is no browser status to show
     assert widget.webgpu_preview_status == "" and not widget.webgpu_preview_enabled
@@ -917,7 +917,7 @@ def test_crop_and_refit_keeps_the_acquisition_and_reopens_as_a_scan_region_sessi
             restored = ShowPtycho(reopened, save_dir=tmp_path)
             assert restored.calibration_status == "Restored saved fit of scan region [16, 112, 8, 104]"
             np.testing.assert_array_equal(_shown(restored), expected)
-            result = reopened.reconstruct()  # no refit: find_aberrations would raise
+            result = reopened.run()  # no refit: find_aberrations would raise
             assert result.aberrations == crop_aberrations and result.sample_tilt_mrad == crop_tilt
             assert "C50_nm" in result.aberrations
             restored.close()
@@ -1199,14 +1199,12 @@ def test_local_ssb_results_follow_current_optics_without_replacing_the_session(s
     assert viewer.ssb_session
 
 
-def test_interaction_uses_all_bf_pixels_even_with_a_legacy_drag_count(ssb, tmp_path, monkeypatch):
+def test_interaction_uses_all_bf_pixels(ssb, tmp_path, monkeypatch):
     def no_subset(*args, **kwargs):
         raise AssertionError('Full-BF interaction must not allocate a reduced preview context.')
 
     monkeypatch.setattr(ssb, 'preview_context', no_subset)
     viewer = ShowPtycho(ssb, save_dir=tmp_path)
-    viewer.num_drag_bright_field_pixels = max(1, ssb.num_bright_field_pixels // 2)
-    assert viewer.num_drag_bright_field_pixels == ssb.num_bright_field_pixels
     parameters = {**viewer.ssb_parameters['aberrations'], 'C10_nm': 5.0}
     viewer.request_json = json.dumps({'id': 919, **parameters, 'committed': False})
     expected, _ = ssb.preview(parameters, upsampling_factor=viewer.auto_upsampling_factor,
@@ -1513,8 +1511,8 @@ def test_a_save_made_after_a_180_degree_move_reopens_at_the_launch_rotation(tmp_
         assert restored.calibration_status == "Restored saved full-field fit"
         assert restored.scan_detector_rotation_deg == reopened.scan_detector_rotation_deg == pytest.approx(moved)
         np.testing.assert_array_equal(_shown(restored), expected)
-        # reconstruct() applies the restored model (find_aberrations would raise here)
-        result = reopened.reconstruct()
+        # run() applies the restored model (find_aberrations would raise here)
+        result = reopened.run()
         assert result.aberrations == START and result.scan_detector_rotation_deg == pytest.approx(moved)
         restored.close()
     # a launch rotation that differs by anything but 180 degrees is another geometry
@@ -1556,7 +1554,7 @@ def test_a_scan_region_session_saves_a_calibration_it_reopens(tmp_path, monkeypa
             assert restored.calibration_status == "Restored saved fit of scan region [16, 112, 8, 104]"
             assert reopened.aberrations == START
             np.testing.assert_array_equal(_shown(restored), expected)
-            assert reopened.reconstruct().aberrations == START  # no refit: find_aberrations would raise
+            assert reopened.run().aberrations == START  # no refit: find_aberrations would raise
             restored.close()
         # the whole scan, or another region, is another session
         with gpu.SSB(data, **calibration) as whole:
@@ -1621,10 +1619,10 @@ def test_calibration_returns_the_record_save_writes(tmp_path):
 
 
 def test_the_tutorial_order_reopens_the_save_and_reconstruct_keeps_it(tmp_path, monkeypatch, capsys):
-    """SSB(data); ssb.reconstruct(); ssb.show(save_dir=d), then the same cells after a restart.
+    """SSB(data); ssb.run(); ssb.show(save_dir=d), then the same cells after a restart.
 
-    reconstruct() fits the new session; show() restores the save over that fit and says so, and
-    a later reconstruct() applies the restored values instead of fitting again. A session that only
+    run() fits the new session; show() restores the save over that fit and says so, and
+    a later run() applies the restored values instead of fitting again. A session that only
     calls show() restores too, and so does one whose Save stored the values without a fit.
     """
     gpu = pytest.importorskip("quantem.gpu")
@@ -1635,7 +1633,7 @@ def test_the_tutorial_order_reopens_the_save_and_reconstruct_keeps_it(tmp_path, 
     calibration = dict(voltage_kV=300, semiangle_mrad=20, scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5, 5))
     reviewed = {"C10_nm": 3.0, "C12_nm": 1.0, "phi12_deg": 11.0}
     with gpu.io.load(str(source)) as data, gpu.SSB(data, **calibration) as ssb:
-        fitted = dict(ssb.reconstruct(verbose=False).aberrations)
+        fitted = dict(ssb.run(verbose=False).aberrations)
         restored = {**fitted, **reviewed}
         viewer = ssb.show(save_dir=tmp_path)
         viewer.upsampling_factor = 1
@@ -1644,7 +1642,7 @@ def test_the_tutorial_order_reopens_the_save_and_reconstruct_keeps_it(tmp_path, 
         viewer.save_trigger += 1
         viewer.close()
     with gpu.io.load(str(source)) as data, gpu.SSB(data, **calibration) as ssb:
-        assert dict(ssb.reconstruct(verbose=False).aberrations) == fitted  # the restart fits again
+        assert dict(ssb.run(verbose=False).aberrations) == fitted  # the restart fits again
         searches = []
         monkeypatch.setattr(gpu.SSB, "find_aberrations", lambda *args, **kwargs: searches.append(1))
         capsys.readouterr()
@@ -1652,19 +1650,19 @@ def test_the_tutorial_order_reopens_the_save_and_reconstruct_keeps_it(tmp_path, 
         assert viewer.calibration_status == "Restored saved full-field fit"
         assert "replacing the session's C10" in capsys.readouterr().out
         np.testing.assert_array_equal(_shown(viewer), expected)
-        assert dict(ssb.reconstruct().aberrations) == restored and not searches
+        assert dict(ssb.run().aberrations) == restored and not searches
         viewer.close()
     with gpu.io.load(str(source)) as data, gpu.SSB(data, **calibration) as ssb:
-        viewer = ssb.show(save_dir=tmp_path)  # no reconstruct() first
+        viewer = ssb.show(save_dir=tmp_path)  # no run() first
         assert viewer.calibration_status == "Restored saved full-field fit"
-        assert dict(ssb.reconstruct().aberrations) == restored and not searches
+        assert dict(ssb.run().aberrations) == restored and not searches
         viewer.close()
     (tmp_path / "calibration.json").unlink()
     with gpu.io.load(str(source)) as data, gpu.SSB(data, **calibration) as ssb:
         viewer = ssb.show(save_dir=tmp_path)  # nothing saved yet, nothing fitted
         viewer.request_json = json.dumps({"id": 2, **reviewed, "committed": True})
         viewer.save_trigger += 1
-        assert dict(ssb.reconstruct().aberrations) == reviewed and not searches  # Save stated them as known
+        assert dict(ssb.run().aberrations) == reviewed and not searches  # Save stated them as known
         viewer.close()
 
 
@@ -1692,7 +1690,7 @@ def test_changed_acquisition_or_calibration_does_not_restore_an_old_fit(tmp_path
 
 
 def test_a_matching_save_replaces_a_supplied_model_unless_restore_is_false(tmp_path, capsys):
-    """reconstruct() then show() is the documented reopen: the save wins over the fresh fit, and says so.
+    """run() then show() is the documented reopen: the save wins over the fresh fit, and says so.
 
     A fitted or manually initialized session skipped restore, so that order refit and never restored.
     """
@@ -1943,13 +1941,13 @@ def test_the_trial_strip_lists_the_default_fits_trials_with_their_objective():
     """
     from types import SimpleNamespace
 
-    from quantem.widget.adapters.gpu import SsbSession
+    from quantem.widget.adapters.gpu import DirectSession
 
     def record(C10_nm, loss, objective, **sample):
         return {"params": {"C10_nm": C10_nm, "C12_nm": 1.0, "phi12_deg": 20.0}, "loss": loss,
                 "objective": objective, **sample}
 
-    session = SsbSession.__new__(SsbSession)
+    session = DirectSession.__new__(DirectSession)
     session.ssb = SimpleNamespace(trial_history=[
         record(4.0, -5.0, "negative_thick_agreement", sample_tilt_mrad=[1.0, -2.0], depth_spread_nm=8.0,
                scan_detector_rotation_deg=170.0),

@@ -277,8 +277,6 @@ class ShowPtycho(anywidget.AnyWidget):
     calibration_status = traitlets.Unicode("").tag(sync=True)
     # fit history for the trials strip: JSON list of {rank, C10_nm, C12_nm, phi12_deg, loss}, best first
     trials_json = traitlets.Unicode("").tag(sync=True)
-    # bright-field pixels used while dragging; the full count is the right edge of the slider
-    num_drag_bright_field_pixels = traitlets.Int(0).tag(sync=True)
     num_bright_field_pixels = traitlets.Int(0).tag(sync=True)
     # higher-order panel: {C21_nm, phi21_deg, ..., C30_nm, ..., C50_nm, ...}
     higher_order_aberrations_json = traitlets.Unicode("{}").tag(sync=True)
@@ -895,7 +893,6 @@ class ShowPtycho(anywidget.AnyWidget):
         self.observe(self._on_upsampling_factor, names=["upsampling_factor"])
         self.observe(self._on_save, names=["save_trigger"])
         self.observe(self._on_pin, names=["pin_json"])
-        self.observe(self._on_drag_pixels_change, names=["num_drag_bright_field_pixels"])
         self.observe(self._on_rotation_change, names=["scan_detector_rotation_deg"])
         self.observe(self._on_panel_change, names=["higher_order_aberrations_json", "sample_json"])
         self.observe(self._on_panel_change, names=["tilt_correction"])
@@ -1119,8 +1116,6 @@ class ShowPtycho(anywidget.AnyWidget):
             self._adopting = False
         self._inflight_id += 1
         self._reconstruct(self._inflight_id, fitted, compute_loss=compute_loss)
-        # Interaction and committed results use the same full bright-field set.
-        self.num_drag_bright_field_pixels = self.num_bright_field_pixels
 
     def _trials_payload(self, max_trials: int = 50) -> str:
         """The session's fit trials for the browser strip, capped so a 200-trial run stays light.
@@ -1316,11 +1311,6 @@ class ShowPtycho(anywidget.AnyWidget):
         if factor > 1 and not self.upsampling_available:
             raise ValueError("This session supports native sampling only; use upsampling_factor=1.")
         return requested
-
-    def _on_drag_pixels_change(self, change) -> None:
-        """Normalize the legacy drag-count trait to the complete bright-field set."""
-        if change["new"] != self.num_bright_field_pixels:
-            self.num_drag_bright_field_pixels = self.num_bright_field_pixels
 
     def _on_rotation_change(self, change) -> None:
         """Re-index the full bright-field geometry at the new scan-detector rotation.
@@ -1657,7 +1647,6 @@ class ShowPtycho(anywidget.AnyWidget):
             (self._on_upsampling_factor, ["upsampling_factor"]),
             (self._on_save, ["save_trigger"]),
             (self._on_pin, ["pin_json"]),
-            (self._on_drag_pixels_change, ["num_drag_bright_field_pixels"]),
             (self._on_rotation_change, ["scan_detector_rotation_deg"]),
             (self._on_panel_change, ["higher_order_aberrations_json", "sample_json"]),
             (self._on_panel_change, ["tilt_correction"]),

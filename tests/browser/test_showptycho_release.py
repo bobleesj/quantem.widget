@@ -60,7 +60,7 @@ full_fit_s = time.perf_counter() - started
 assert fit.optimizer["host_numerical_search"] is False
 assert fit.optimizer["device"] == backend
 assert len(fit.trial_records) == 200 * (len(fit.rotation_branches.branches) if fit.rotation_branches else 1)
-result = ssb.reconstruct(upsampling_factor="auto")
+result = ssb.run(upsampling_factor="auto")
 save_dir = Path.cwd() / 'calibration'
 viewer = ssb.show(local_tilt=True, save_dir=save_dir)
 viewer.regions = []
