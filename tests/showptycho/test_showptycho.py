@@ -401,7 +401,22 @@ def test_requests_flip_and_rotation_follow_the_session(widget, ssb):
     assert json.loads(widget.result_json)["loss"] is not None              # the release computes it
     # the request keys of the earlier release are not read under a second spelling
     with pytest.raises(KeyError, match="C10_nm"):
-        widget.request_json = json.dumps({"id": 9, "c10": 2.0, "c12": 0.5, "phi12_deg": 30.0, "committed": True})
+        widget.request_json = json.dumps({"id": 11, "c10": 2.0, "c12": 0.5, "phi12_deg": 30.0, "committed": True})
+
+
+def test_kernel_redraws_never_reuse_a_browser_request_id(widget):
+    widget.request_json = json.dumps({"id": 5, "C10_nm": 2.0, "C12_nm": 0.5, "phi12_deg": 30.0, "committed": True})
+    assert json.loads(widget.result_json)["id"] == 5
+    widget.scan_detector_rotation_deg = 25.0                               # a redraw the kernel starts itself
+    redraw = json.loads(widget.result_json)["id"]
+    assert redraw < 0
+    widget.scan_detector_rotation_deg = 26.0
+    assert json.loads(widget.result_json)["id"] < redraw                   # each redraw has its own id
+    widget.request_json = json.dumps({"id": 6, "C10_nm": 3.0, "C12_nm": 0.5, "phi12_deg": 30.0, "committed": True})
+    assert json.loads(widget.result_json)["id"] == 6
+    # a browser request older than one already answered is late: the newer intent stays on screen
+    widget.request_json = json.dumps({"id": 4, "C10_nm": 9.0, "C12_nm": 0.5, "phi12_deg": 30.0, "committed": True})
+    assert json.loads(widget.result_json)["id"] == 6 and json.loads(widget.result_json)["C10_nm"] == 3.0
 
 
 def test_higher_order_panel_switches_to_the_full_kernel():

@@ -3344,6 +3344,13 @@ function Explore() {
   const doReset = () => {
     // auto values arrive asynchronously from Python; skip until init landed
     if (!initRef.current) return;
+    // The reset is the latest intent: drop queued drag values and scheduled panel or strength frames, and
+    // make the fitted values current now, so nothing sent before React re-renders carries pre-reset values.
+    pendingDragRef.current = null;
+    panelFrame.cancel();
+    reconstructionFrame.cancel();
+    sliderPendingRef.current = {};
+    sliderVals.current = { c10: autoC10, c12: autoC12, phi12: autoPhi12 };
     const fittedHigher = regionalMode && regionalReference
       ? Object.fromEntries(Object.entries(regionalReference.aberrations).filter(([key]) => !['C10_nm', 'C12_nm', 'phi12_deg'].includes(key))) as Record<string, number>
       : JSON.parse(fittedHigherOrderJson || '{}');

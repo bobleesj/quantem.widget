@@ -794,6 +794,8 @@ class ShowPtycho(anywidget.AnyWidget):
         self._last_phase: np.ndarray | None = None
         self._last_result: dict = {}
         self._inflight_id = -1
+        # Kernel-initiated redraws count down from -2, browser requests up from 1: the ids never collide.
+        self._redraw_id = -1
         self.initial_fft_on = bool(show_fft)
         self.observe(self._on_flip_change, names=["display_negate_phase"])
         if is_array:
@@ -1114,7 +1116,7 @@ class ShowPtycho(anywidget.AnyWidget):
                 self.num_bright_field_pixels = state["num_bright_field_pixels"]
         finally:
             self._adopting = False
-        self._inflight_id += 1
+        self._inflight_id = self._next_redraw_id()
         self._reconstruct(self._inflight_id, fitted, compute_loss=compute_loss)
 
     def _trials_payload(self, max_trials: int = 50) -> str:
@@ -1238,8 +1240,13 @@ class ShowPtycho(anywidget.AnyWidget):
     def _reconstruct_displayed(self, *, compute_loss: bool) -> None:
         """Reconstruct the displayed aberrations again, under a new request id, after a setting
         outside the three sliders (rotation, sampling, a panel) changed the phase."""
-        self._inflight_id += 1
+        self._inflight_id = self._next_redraw_id()
         self._reconstruct(self._inflight_id, self._current(), compute_loss=compute_loss)
+
+    def _next_redraw_id(self) -> int:
+        """A new id for a redraw the kernel starts itself: negative, so it never equals a browser request id."""
+        self._redraw_id -= 1
+        return self._redraw_id
 
     def _on_preview_message(self, widget, content: dict, buffers) -> None:
         """Receive a bounded preview command without the generic trait throttle."""
@@ -1287,6 +1294,9 @@ class ShowPtycho(anywidget.AnyWidget):
         finally:
             self._adopting = False
             self._property_lock = previous_lock
+        if request["id"] > 0 and request["id"] <= getattr(self, "_browser_id", 0):
+            return  # an older browser request arriving late: a newer one already ran
+        self._browser_id = request["id"]
         self._inflight_id = request["id"]
         try:
             self._reconstruct(request["id"], {name: request[name] for name in ("C10_nm", "C12_nm", "phi12_deg")},
