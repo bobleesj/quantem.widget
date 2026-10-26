@@ -30,6 +30,13 @@ const TEXT_SIZES = { small: 13, medium: 15, large: 17, xlarge: 20 } as const;
 type DisplaySize = keyof typeof TEXT_SIZES;
 const SIZE_LABELS: Record<DisplaySize, string> = { small: "S", medium: "M", large: "L", xlarge: "XL" };
 
+type ScanReading = {
+  id: string; name: string; device: string; shape: number[];
+  received: number; total: number; resident_bytes: number; index_bytes: number;
+  staging_bytes: number; state: string; saved?: boolean; can_unload: boolean; unload_reason: string;
+  encoding?: string; dtype?: string; source_path?: string; encoded?: number;
+};
+
 type Snapshot = {
   sequence?: number;
   timestamp?: number;
@@ -38,6 +45,8 @@ type Snapshot = {
   process_error?: string;
   cuda_visible_devices?: string | null;
   gpus?: GPUReading[];
+  terminating?: number[];
+  activity?: { timestamp: number; message: string }[];
   system?: {
     total_bytes?: number;
     used_bytes?: number;
@@ -49,11 +58,8 @@ type Snapshot = {
     receiving?: boolean;
     error?: string | null;
     can_select?: boolean;
-    scans: {
-      id: string; name: string; device: string; shape: number[];
-      received: number; total: number; resident_bytes: number; index_bytes: number;
-      staging_bytes: number; state: string; saved?: boolean; can_unload: boolean; unload_reason: string;
-    }[];
+    scans: ScanReading[];
+    releasing?: ScanReading[];
   };
 };
 
@@ -127,7 +133,7 @@ function ShowGPUView() {
     });
     const current = snapshot?.recording;
     if (current) {
-      const bytes = current.scans.reduce((sum, scan) => sum + scan.resident_bytes + scan.staging_bytes, 0);
+      const bytes = [...current.scans, ...(current.releasing ?? [])].reduce((sum, scan) => sum + scan.resident_bytes + scan.staging_bytes, 0);
       const changed = watched.current !== current.watch_id;
       setScanHistory(previous => [...(changed ? [] : previous), bytes].slice(-120));
     } else setScanHistory([]);
@@ -143,7 +149,8 @@ function ShowGPUView() {
   const fontSize = TEXT_SIZES[size] ?? TEXT_SIZES.medium;
   const button = { ...compactButton, fontSize: "0.92em", lineHeight: 1.5 };
   const recording = snapshot?.recording;
-  const scanBytes = recording?.scans.reduce((sum, scan) => sum + scan.resident_bytes + scan.staging_bytes, 0) ?? 0;
+  const scanRows = [...(recording?.scans ?? []), ...(recording?.releasing ?? [])];
+  const scanBytes = scanRows.reduce((sum, scan) => sum + scan.resident_bytes + scan.staging_bytes, 0);
 
   return <Box data-testid="showgpu" data-size={size} sx={{ fontFamily: WIDGET_UI_FONT, fontSize, lineHeight: 1.5, color: colors.text,
     bgcolor: colors.bg, border: `1px solid ${colors.border}`, borderRadius: 1, p: 1,
@@ -215,7 +222,7 @@ function ShowGPUView() {
                     <td style={{ verticalAlign: "top", padding: "3px 4px 3px 0", overflowWrap: "anywhere" }}>{process.name ?? "Unavailable"}</td>
                     <td style={{ verticalAlign: "top", padding: "3px 0", textAlign: "right" }}>{processMemory(process.used_bytes)}</td>
                     <td style={{ textAlign: "right", verticalAlign: "top" }}>
-                      {process.can_terminate && <Button size="small" sx={button} aria-label={`Terminate PID ${process.pid}`} disabled={!!actionStatus?.busy}
+                      {snapshot?.terminating?.includes(process.pid) ? <span style={{ color: colors.textMuted }}>Termination requested</span> : process.can_terminate && <Button size="small" sx={button} aria-label={`Terminate PID ${process.pid}`} disabled={!!actionStatus?.busy}
                         onClick={() => setConfirmation({
                           message: `Terminate PID ${process.pid} (${process.name ?? "process"})? This stops all its GPU work and discards unsaved data.`,
                           command: { action: "terminate", pid: process.pid, created_at: process.created_at },
@@ -240,7 +247,8 @@ function ShowGPUView() {
     </div>
     {recording && <section aria-label="Resident scans" style={{ marginTop: 12, borderTop: `1px solid ${colors.border}`, paddingTop: 8 }}>
       <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-        <strong>Scans {recording.scans.length}</strong>
+        <strong>Resident scans {scanRows.length}</strong>
+        {!!recording.releasing?.length && <span>{recording.releasing.length} awaiting release</span>}
         <span style={{ color: colors.accent }}>{recording.receiving ? "Acquiring / processing" : "Stopped"}</span>
         <span>{processMemory(scanBytes)} in tracked buffers</span>
         <span style={{ color: colors.textMuted }}>Peak {processMemory(Math.max(0, ...scanHistory))} · last {scanHistory.length} samples</span>
@@ -253,21 +261,26 @@ function ShowGPUView() {
       </div>
       <Sparkline values={scanHistory} total={Math.max(1, ...scanHistory)} color={colors.accent} />
       {recording.error && <div role="status" style={{ color: "#d32f2f" }}>{recording.error}</div>}
-      {!recording.scans.length && <div style={{ color: colors.textMuted }}>No retained raw scans.</div>}
+      {!scanRows.length && <div style={{ color: colors.textMuted }}>No retained raw scans.</div>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 24em), 1fr))", gap: 8 }}>
-        {recording.scans.map(scan => <div key={scan.id} style={card} data-testid={`scan-${scan.id}`}>
+        {scanRows.map(scan => <div key={scan.id} style={card} data-testid={`scan-${scan.id}`}>
           <div style={{ display: "flex", gap: 8, alignItems: "baseline", justifyContent: "space-between" }}>
-            {recording.can_select && scan.received > 0 ? <Button size="small" sx={{ ...button, textTransform: "none", maxWidth: "70%", overflowWrap: "anywhere" }}
+            {recording.can_select && scan.received > 0 && scan.state !== "Waiting for viewers" ? <Button size="small" sx={{ ...button, textTransform: "none", maxWidth: "70%", overflowWrap: "anywhere" }}
               aria-label={`View scan ${scan.name}`} onClick={() => model.send({ action: "select_scan", scan_id: scan.id, watch_id: recording.watch_id })}>{scan.name}</Button> :
               <strong style={{ overflowWrap: "anywhere" }}>{scan.name}</strong>}
-            <span>{scan.state}</span>
+            <span style={{ color: colors.accent }}>{scan.state === "Receiving" ? "Receiving / encoding" : scan.state}</span>
           </div>
-          <div>{scan.received.toLocaleString()} / {scan.total.toLocaleString()} DPs</div>
+          <div title={scan.source_path || "No source filename was reported by the live detector."} style={{ overflowWrap: "anywhere", color: colors.textMuted }}>
+            {scan.source_path ? scan.source_path.split(/[\\/]/).pop() : "Live detector"}
+            {scan.encoding && ` · ${scan.encoding}`}{scan.dtype && ` · ${scan.dtype}`}
+          </div>
+          <div>{scan.received.toLocaleString()} / {scan.total.toLocaleString()} DPs received</div>
           <Meter used={scan.received} total={scan.total} color={colors.accent} background={colors.border} label={`${scan.name} received patterns`} />
+          {scan.encoded != null && <div>{scan.encoded.toLocaleString()} ANS encoded · {Math.max(0, scan.received - scan.encoded).toLocaleString()} staged</div>}
           <div style={{ color: colors.textMuted }}>{scan.shape.slice(0, 2).join(" × ")} scan · {scan.shape.slice(2).join(" × ")} DP · {scan.device} (logical)</div>
-          <div>{processMemory(scan.resident_bytes)} encoded + indexes · {processMemory(scan.staging_bytes)} staging</div>
+          <div>{processMemory(Math.max(0, scan.resident_bytes - scan.index_bytes))} ANS + metadata · {processMemory(scan.index_bytes)} indexes · {processMemory(scan.staging_bytes)} staging</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between" }}>
-            <span style={{ color: colors.textMuted }}>{scan.saved === true ? "Saved" : scan.saved === false ? "Not saved" : "Save status unknown"}</span>
+            <span style={{ color: colors.textMuted }}>{scan.state === "Waiting for viewers" ? "Close other viewers using this scan to finish release." : scan.saved === true ? "Saved" : scan.saved === false ? "Not saved" : "Save status unknown"}</span>
             <span title={scan.unload_reason}><Button size="small" sx={button} disabled={!scan.can_unload || !!actionStatus?.busy}
               aria-label={`Unload scan ${scan.name}`} onClick={() => setConfirmation({
                 message: `Unload scan ${scan.name}? Unsaved counts are discarded; saved files remain. Finish other analyses using this scan first.`,
@@ -278,6 +291,14 @@ function ShowGPUView() {
       </div>
       <div style={{ color: colors.textMuted, fontSize: "0.85em", marginTop: 6 }}>Tracked buffers exclude allocator reserves, shared codec tables, receiver queues and separate analysis sessions. Device VRAM above includes them.</div>
     </section>}
+    {!!snapshot?.activity?.length && <details open style={{ marginTop: 8 }}>
+      <summary style={{ cursor: "pointer", color: colors.textMuted }}>Recent activity</summary>
+      <div role="log" aria-live="polite" style={{ maxHeight: "9em", overflowY: "auto" }}>
+        {[...snapshot.activity].reverse().map((event, index) => <div key={`${event.timestamp}-${index}`}>
+          <span style={{ color: colors.textMuted }}>{new Date(event.timestamp * 1000).toLocaleTimeString()} </span>{event.message}
+        </div>)}
+      </div>
+    </details>}
     <div style={{ marginTop: 8, color: colors.textMuted, fontSize: "0.85em", display: "flex", flexWrap: "wrap", gap: "4px 12px" }}>
       <span>Physical driver IDs · all processes · driver reserve may make used + free less than total.</span>
       {users && <span>User totals cover reported compute processes; graphics and driver memory are excluded.</span>}

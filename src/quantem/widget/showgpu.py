@@ -180,6 +180,9 @@ class ShowGPU(anywidget.AnyWidget):
         self._watch_id = 0
         self._action_thread = None
         self._watch_lock = threading.RLock()
+        self._scan_states = {}
+        self._activity = []
+        self._terminating = {}
         super().__init__(
             users=users, expand=expand, size=size, interval=interval, running=running
         )
@@ -220,6 +223,7 @@ class ShowGPU(anywidget.AnyWidget):
             self._recording = None if recording is None else weakref.ref(recording)
             self._viewer = None if viewer is None else weakref.ref(viewer)
             self._stop_acquisition = stop
+            self._scan_states = {}
         self.action_status = {}
         self.refresh()
 
@@ -279,11 +283,49 @@ class ShowGPU(anywidget.AnyWidget):
                     snapshot["recording"] = {"scans": [], "error": str(exc)}
                 snapshot["recording"]["watch_id"] = watch_id
                 snapshot["recording"]["can_select"] = viewer is not None
+            with self._watch_lock:
+                report = snapshot.get("recording", {})
+                if watch_id != self._watch_id:
+                    snapshot.pop("recording", None)
+                elif not report.get("error"):
+                    rows = [*report.get("scans", []), *report.get("releasing", [])]
+                    states = {row["id"]: (row.get("name", row["id"]), row["state"]) for row in rows}
+                    for identifier, (name, state) in states.items():
+                        if self._scan_states.get(identifier) != (name, state):
+                            self._record_activity(f"Scan {name}: {state.lower()}.")
+                    for identifier, (name, state) in self._scan_states.items():
+                        if identifier not in states:
+                            message = "viewer buffers released" if state == "Waiting for viewers" else "no longer retained"
+                            self._record_activity(f"Scan {name}: {message}.")
+                    self._scan_states = states
+                for pid, created_at in list(self._terminating.items()):
+                    try:
+                        process = psutil.Process(pid)
+                        exited = (process.create_time() != created_at or
+                                  process.status() in {psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD})
+                    except psutil.NoSuchProcess:
+                        exited = True
+                    except psutil.Error:
+                        continue  # Keep the request pending until exit can be verified.
+                    if exited:
+                        del self._terminating[pid]
+                        message = f"PID {pid} exited."
+                        self._record_activity(message)
+                        if self.action_status.get("pid") == pid:
+                            self.action_status = {"message": message}
+                snapshot["terminating"] = list(self._terminating)
+                snapshot["activity"] = list(self._activity)
             if not self._stop.is_set():
                 self.snapshot = snapshot
             return self.snapshot
         finally:
             self._sample_lock.release()
+
+    def _record_activity(self, message: str) -> None:
+        """Keep a bounded history of observed changes without retaining source objects."""
+        with self._watch_lock:
+            self._activity.append({"timestamp": time.time(), "message": message})
+            del self._activity[:-32]
 
     def handle_message(self, widget, content: dict, buffers) -> None:
         """Apply explicit, identified actions to the current watched resources."""
@@ -298,7 +340,11 @@ class ShowGPU(anywidget.AnyWidget):
         try:
             if action == "terminate":
                 self.terminate_process(content.get("pid"), content.get("created_at"))
-                self.action_status = {"message": f"Termination requested for PID {content['pid']}."}
+                with self._watch_lock:
+                    self._terminating[content["pid"]] = content["created_at"]
+                    message = f"Termination requested for PID {content['pid']}; waiting for exit."
+                    self.action_status = {"message": message, "pid": content["pid"]}
+                    self._record_activity(message)
             elif action in {"unload", "stop_acquisition", "select_scan"}:
                 recording = None if self._recording is None else self._recording()
                 if recording is None or content.get("watch_id") != self._watch_id:
@@ -312,9 +358,10 @@ class ShowGPU(anywidget.AnyWidget):
                     viewer = None if self._viewer is None else self._viewer()
                     if viewer is not None:
                         viewer.refresh_stream()
-                    self.action_status = {"message": "Scan unloaded. Driver VRAM may include allocator reserves or other consumers."}
+                    self.action_status = {"message": "Scan removed from the acquisition. Viewers may still hold its buffers; driver VRAM also includes allocator reserves."}
                 else:
-                    self.action_status = {"message": "Stopping acquisition and draining pending work…", "busy": True}
+                    self.action_status = {"message": "Stopping acquisition and draining pending work...", "busy": True}
+                    self._record_activity("Acquisition stop requested; draining pending work.")
                     stop, watch_id = self._stop_acquisition, self._watch_id
 
                     def finish():
@@ -322,12 +369,19 @@ class ShowGPU(anywidget.AnyWidget):
                             if stop is not None:
                                 stop()
                             recording.close()
-                            status = {"message": "Stop requested; retained scans remain available."}
+                            while recording.receiving and not self._stop.wait(0.2):
+                                if self._watch_id != watch_id:
+                                    return
+                            if self._stop.is_set():
+                                return
+                            status = {"message": "Acquisition stopped; retained scans remain available."}
                         except Exception as exc:  # noqa: BLE001 - report user-controller errors in the widget
                             status = {"message": str(exc), "error": True}
-                        if self._watch_id == watch_id:
-                            self.action_status = status
-                            self.refresh()
+                        with self._watch_lock:
+                            if self._watch_id == watch_id:
+                                self.action_status = status
+                                self._record_activity(status["message"])
+                        self.refresh()
 
                     self._action_thread = threading.Thread(target=finish, name="ShowGPU stop acquisition", daemon=True)
                     self._action_thread.start()

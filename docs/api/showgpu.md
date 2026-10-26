@@ -41,6 +41,13 @@ when available:
 monitor.watch(run, viewer=viewer, stop=replay.close)
 ```
 
+Each card identifies lossless **ANS** storage, the count dtype, received and
+encoded DP counts, and memory for ANS data/metadata, interaction indexes and
+the unencoded staging tail. Progress reflects completed receive/encode batches;
+sampling does not interrupt GPU work to inspect an in-flight kernel. Source
+filenames appear when the acquisition provides `source_path` metadata; otherwise
+the card says **Live detector**. A detector stream need not have a source file.
+
 **Unload** discards the selected scan's unsaved counts after confirmation.
 Busy scans cannot be unloaded. Saved files remain intact, and the linked
 streaming viewer updates to the remaining scans. Finish other analyses that
@@ -49,6 +56,13 @@ run and pending saves to stop before retained inputs can be unloaded.
 **Stop** (square icon) stops the supplied trigger first, then closes the recording;
 retained scans stay available. `monitor.watch(None)` detaches without stopping
 or releasing the acquisition.
+
+If another live viewer still holds a discarded scan, **Waiting for viewers**
+keeps its buffers visible until that viewer closes. **Recent activity** retains
+the last 32 observed state changes and action outcomes, including automatic
+removal from the retained window. Events occur at the sampling interval; brief
+intermediate states can occur between samples. **Stopping** remains visible
+until the receiver and processing finish. This does not delete saved files.
 
 The scan chart shows the last 120 samples of tracked buffers. Encoded bytes
 include interaction indexes; staging is listed separately. Shared codec tables,
@@ -67,6 +81,9 @@ It ends all work in that process and may discard unsaved data. Only processes
 owned by the notebook's operating-system user are eligible; the notebook kernel
 and its ancestors are protected. The PID's creation time is rechecked before
 signalling to reject a stale selection. No process is stopped by sampling.
+**Termination requested** remains pending until operating-system checks confirm
+exit; disappearance from the GPU list alone does not establish process exit.
+The monitor never escalates a termination request to a forced kill.
 
 ### Python controls
 

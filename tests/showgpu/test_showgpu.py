@@ -196,7 +196,7 @@ def test_watch_unload_select_and_stop_only_the_current_acquisition(monkeypatch):
             self.scans = [scan for scan in self.scans if scan["id"] != scan_id]
 
         def close(self):
-            self.receiving = False
+            pass  # The receiver finishes its current scan asynchronously.
 
     selected, stopped = [], threading.Event()
     viewer = SimpleNamespace(refresh_stream=lambda scan=None: selected.append(scan))
@@ -213,22 +213,39 @@ def test_watch_unload_select_and_stop_only_the_current_acquisition(monkeypatch):
         assert selected == ["scan-a"]
         monitor.handle_message(None, {"action": "unload", "watch_id": watch_id, "scan_id": "scan-a"}, [])
         assert not monitor.snapshot["recording"]["scans"] and selected[-1] is None
+        assert any("no longer retained" in event["message"] for event in monitor.snapshot["activity"])
         monitor.handle_message(None, {"action": "stop_acquisition", "watch_id": watch_id}, [])
+        assert stopped.wait(2)
+        assert monitor.action_status["busy"] and recording.receiving
+        recording.receiving = False
         monitor._action_thread.join(2)
         assert stopped.is_set() and not recording.receiving
+        assert "Acquisition stopped" in monitor.action_status["message"]
         replacement = Recording()
         monitor.watch(replacement)
         monitor.handle_message(None, {"action": "unload", "watch_id": watch_id, "scan_id": "scan-a"}, [])
         assert replacement.scans and monitor.action_status["error"]
     finally:
+        recording.receiving = False
         monitor.close()
 
 
 def test_terminate_owned_child_preserves_kernel_and_checks_process_identity(monkeypatch):
     monkeypatch.setattr(showgpu, "sample", lambda **kwargs: {"gpus": []})
-    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    child = subprocess.Popen(
+        [sys.executable, "-c", ("import signal, sys, time\n"
+         "def stop(signum, frame):\n"
+         " print('stopping', flush=True)\n"
+         " sys.stdin.readline()\n"
+         " sys.exit(0)\n"
+         "signal.signal(signal.SIGTERM, stop)\n"
+         "print('ready', flush=True)\n"
+         "time.sleep(30)")],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+    )
     monitor = ShowGPU(running=False)
     try:
+        assert child.stdout.readline().strip() == "ready"
         created = psutil.Process(child.pid).create_time()
         monitor.snapshot = {"gpus": [{"users": [{"process_details": [
             {"pid": child.pid, "created_at": created, "can_terminate": True},
@@ -239,10 +256,17 @@ def test_terminate_owned_child_preserves_kernel_and_checks_process_identity(monk
         assert child.poll() is None
         with pytest.raises(ValueError, match="identity or ownership"):
             monitor.terminate_process(os.getpid(), psutil.Process().create_time())
-        monitor.terminate_process(child.pid, created)
+        monitor.handle_message(None, {"action": "terminate", "pid": child.pid, "created_at": created}, [])
+        assert child.stdout.readline().strip() == "stopping"
+        assert monitor.refresh()["terminating"] == [child.pid]
+        assert "waiting for exit" in monitor.action_status["message"]
+        child.stdin.write("finish\n")
+        child.stdin.flush()
         child.wait(timeout=3)
+        assert not monitor.refresh()["terminating"]
+        assert monitor.action_status["message"] == f"PID {child.pid} exited."
     finally:
         if child.poll() is None:
-            child.terminate()
+            child.kill()
             child.wait(timeout=3)
         monitor.close()
