@@ -51,7 +51,7 @@ import { findFFTPeakBrowser } from "../display/geometry";
 import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI, strokePeakMarker } from "../figure";
 import { degreesWithin, wrapDegrees } from "../units";
 import { type SampleValues, SNAPSHOTS_SCHEMA, higherOrderAzimuthKey, higherOrderMagnitudeKey, reconstruct } from "./engineAdapter";
-import { WebGPUDirectPtychoBackend, deleteSSBFolderFile, readSSBFolderBytes, readSSBFolderJson, setSSBLocalDirectory, setSSBLocalFiles, ssbFolderWritable, ssbNeedsLocalSource, writeSSBFolderFile, type WebGPULoadProgress, type WebGPUDirectPtychoResult } from "../.generated/engine/direct_ptycho/webgpu/backend";
+import { WebGPUSSBBackend, deleteSSBFolderFile, readSSBFolderBytes, readSSBFolderJson, setSSBLocalDirectory, setSSBLocalFiles, ssbFolderWritable, ssbNeedsLocalSource, writeSSBFolderFile, type WebGPULoadProgress, type WebGPUSSBResult } from "../.generated/engine/direct_ptycho/webgpu/backend";
 
 /* ================================================================
    Design tokens (matching Live / Show2D)
@@ -191,7 +191,7 @@ function compactRuntimeStatus(status: string): string {
 
 /** Status line after a browser WebGPU reconstruction, naming the adapter (and whether it is software), the path, the BF
  *  count and the aberrations it ran with, so a slow or wrong frame can be traced to its configuration. */
-function webgpuRunStatus(result: WebGPUDirectPtychoResult, modeLabel: string, totalBf: number, c10Nm: number, hoLabel: string): string {
+function webgpuRunStatus(result: WebGPUSSBResult, modeLabel: string, totalBf: number, c10Nm: number, hoLabel: string): string {
   return `${result.adapterInfo}${result.softwareAdapter ? " software" : ""} WebGPU folder ${modeLabel} (${result.numBrightFieldPixels}/${totalBf} BF, C10=${c10Nm.toFixed(1)} nm, rot=${result.scanDetectorRotationDeg.toFixed(1)}°${hoLabel})`;
 }
 
@@ -594,17 +594,17 @@ function Histogram({
   );
 }
 
-/** A regularization strength on a log10 slider that shows its own value while dragged, so a drag
+/** A damping strength on a log10 slider that shows its own value while dragged, so a drag
  *  re-renders this slider alone; the widget takes the strength on release. */
-function RegularizationSlider({ name, value, onDrag, onCommit }: {
+function DampingSlider({ name, value, onDrag, onCommit }: {
   name: string; value: number; onDrag: (value: number) => void; onCommit: (value: number) => void;
 }) {
   const [dragged, setDragged] = React.useState<number | null>(null);
   const shown = dragged ?? value;
   return (
     <Box sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 230 }}>
-      <Typography sx={{ ...typography.label, whiteSpace: "nowrap" }}>{name} regularization {formatNumber(shown, 4)}</Typography>
-      <Slider size="small" aria-label={`${name} regularization`}
+      <Typography sx={{ ...typography.label, whiteSpace: "nowrap" }}>{name} damping {formatNumber(shown, 4)}</Typography>
+      <Slider size="small" aria-label={`${name} damping`}
         min={-4} max={0} step={0.01} value={Math.log10(Math.max(1e-4, shown))}
         onChange={(_, next) => { const strength = 10 ** (next as number); setDragged(strength); onDrag(strength); }}
         onChangeCommitted={(_, next) => { setDragged(null); onCommit(10 ** (next as number)); }}
@@ -1686,27 +1686,30 @@ function Explore() {
   // an array carries the pixel size of its image; a session the scan step, which the output sampling divides
   const [objectSamplingA] = useModelState<number[]>("object_sampling_A");
   const [scanSamplingA] = useModelState<number[]>("scan_sampling_A");
-  const [sampling, setSampling] = useModelState<number | "auto">("upsampling_factor");
+  const [sampling, setSampling] = useModelState<number | "auto">("upsampling");
   const [upsamplingAvailable] = useModelState<boolean>("upsampling_available");
   const [autoSamplingNote] = useModelState<string>("auto_sampling_note");
   const [samplingLimitNote] = useModelState<string>("sampling_limit_note");
   const [methodModel] = useModelState<string>("method");
-  const [phaseRegularizationModel] = useModelState<number>("phase_regularization");
-  const [amplitudeRegularizationModel] = useModelState<number>("amplitude_regularization");
+  const [phaseDampingModel] = useModelState<number>("phase_damping");
+  const [amplitudeDampingModel] = useModelState<number>("amplitude_damping");
   const [smoothnessModel] = useModelState<number>("smoothness_inv_A");
   const [weightingModel] = useModelState<string>("detector_weighting");
   const [regularizationAvailable] = useModelState<boolean>("regularization_available");
-  type ReconstructionControls = { method: string; phase_regularization: number; amplitude_regularization: number; smoothness_inv_A: number; detector_weighting: string };
+  type ReconstructionControls = { method: string; phase_damping: number; amplitude_damping: number; smoothness_inv_A: number; detector_weighting: string };
   const [reconstructionControls, setReconstructionControls] = React.useState<ReconstructionControls>(() => ({
-    method: methodModel || "ssb", phase_regularization: phaseRegularizationModel ?? 0.03,
-    amplitude_regularization: amplitudeRegularizationModel ?? 0.03, smoothness_inv_A: smoothnessModel ?? 1.0,
+    method: methodModel || "ssb", phase_damping: phaseDampingModel ?? 0.03,
+    amplitude_damping: amplitudeDampingModel ?? 0.03, smoothness_inv_A: smoothnessModel ?? 1.0,
     detector_weighting: weightingModel ?? "uniform",
   }));
   const reconstructionRef = React.useRef(reconstructionControls);
-  const [autoFactor] = useModelState<number>("auto_upsampling_factor");
+  // The launch settings Reset All returns to: what the viewer opened with, not hard-coded values.
+  const launchReconstructionRef = React.useRef(reconstructionControls);
+  const launchSamplingRef = React.useRef(sampling);
+  const [autoFactor] = useModelState<number>("auto_upsampling");
   // Auto never exceeds 4× on any path (the browser WebGPU path included); 8× is only an explicit choice.
-  const upsamplingFactor = sampling === "auto" ? Math.min(autoFactor || 1, 4) : (sampling || 1);
-  const upsamplingFactorRef = React.useRef(upsamplingFactor || 1); upsamplingFactorRef.current = upsamplingFactor || 1;
+  const upsampling = sampling === "auto" ? Math.min(autoFactor || 1, 4) : (sampling || 1);
+  const upsamplingRef = React.useRef(upsampling || 1); upsamplingRef.current = upsampling || 1;
 
   const [phaseWidth] = useModelState<number>("phase_width");
   const [phaseHeight] = useModelState<number>("phase_height");
@@ -1961,7 +1964,12 @@ function Explore() {
   const [fftInsetBox, setFFTInsetBox] = React.useState<FFTInsetBox>({ x: 0.72, y: 0.02 });
   const [extraRealViews, setExtraRealViews] = React.useState<Record<ExtraRealViewMode, boolean>>({ amp: false, complex: false });
   const [smooth, setSmooth] = React.useState<boolean>(false);
-  const [cmap, setCmap] = React.useState("inferno");
+  // Synced so Save can write the phase PNG with the colormap and window shown here.
+  const [cmapModel, setCmap] = useModelState<string>("cmap");
+  const cmap = cmapModel || "inferno";
+  const launchCmapRef = React.useRef(cmap);
+  const [, setSavedVmin] = useModelState<number | null>("vmin");
+  const [, setSavedVmax] = useModelState<number | null>("vmax");
   const [fftCmap, setFftCmap] = React.useState("inferno");
   const [contrastRange, setContrastRange] = React.useState<[number, number]>([1, 99]);
   const [fftContrastRange, setFftContrastRange] = React.useState<[number, number]>([1, 99]);
@@ -2024,7 +2032,7 @@ function Explore() {
   const shouldCommitOnReleaseRef = React.useRef(false);
   const [webgpuRuntimeStatus, setWebgpuRuntimeStatus] = React.useState("");
   const [webgpuLoadProgress, setWebgpuLoadProgress] = React.useState<WebGPULoadProgress | null>(null);
-  const webgpuSsbRef = React.useRef<WebGPUDirectPtychoBackend | null>(null);
+  const webgpuSsbRef = React.useRef<WebGPUSSBBackend | null>(null);
   const webgpuInFlightRef = React.useRef(false);
   const webgpuPendingRef = React.useRef<[number, number, number, number] | null>(null);
   const webgpuPendingFullRef = React.useRef(false);
@@ -2141,7 +2149,7 @@ function Explore() {
     }
     try {
       // the engine reads the calibration and the bright-field source as ShowPtycho.export wrote them
-      const engine = new WebGPUDirectPtychoBackend(webgpuCalJson, { json: webgpuH5SourceJson });
+      const engine = new WebGPUSSBBackend(webgpuCalJson, { json: webgpuH5SourceJson });
       engine.setProgressHandler((progress) => {
         setWebgpuLoadProgress(progress.stage === "ready" ? null : progress);
         setWebgpuRuntimeStatus(webgpuProgressLabel(progress));
@@ -2410,7 +2418,7 @@ function Explore() {
     heldStatListeners.get(key)?.(null);
     flushSliderState();
   }, [flushSliderState]);
-  // Regularization uses the same latest-wins queue as optics. Only the small
+  // Damping uses the same latest-wins queue as optics. Only the small
   // reconstructed phase travels back; each strength is solved by quantem.gpu.
   const reconstructionFrame = React.useMemo(() => latestFrame(() => {
     setReconstructionControls({ ...reconstructionRef.current });
@@ -2419,19 +2427,19 @@ function Explore() {
   React.useEffect(() => {
     if (sentRequestsRef.current.length || pendingDragRef.current) return;
     reconstructionRef.current = {
-      method: methodModel || "ssb", phase_regularization: phaseRegularizationModel ?? 0.03,
-      amplitude_regularization: amplitudeRegularizationModel ?? 0.03, smoothness_inv_A: smoothnessModel ?? 1.0,
+      method: methodModel || "ssb", phase_damping: phaseDampingModel ?? 0.03,
+      amplitude_damping: amplitudeDampingModel ?? 0.03, smoothness_inv_A: smoothnessModel ?? 1.0,
       detector_weighting: weightingModel ?? "uniform",
     };
     setReconstructionControls({ ...reconstructionRef.current });
-  }, [methodModel, phaseRegularizationModel, amplitudeRegularizationModel, smoothnessModel, weightingModel]);
+  }, [methodModel, phaseDampingModel, amplitudeDampingModel, smoothnessModel, weightingModel]);
   // `render` false: the control shows its own value while dragged; the widget renders on release.
   const changeReconstruction = (next: Partial<ReconstructionControls>, committed: boolean, render = true) => {
     reconstructionRef.current = { ...reconstructionRef.current, ...next };
     if (render) reconstructionFrame.schedule();
     // Python does not echo a strength the browser sent; the browser's model takes it on release.
     if (committed) {
-      for (const key of ["phase_regularization", "amplitude_regularization", "smoothness_inv_A"] as const) {
+      for (const key of ["phase_damping", "amplitude_damping", "smoothness_inv_A"] as const) {
         if (next[key] !== undefined) model.set(key, next[key]);
       }
     }
@@ -3058,7 +3066,7 @@ function Explore() {
   const renderAllRef = React.useRef(renderAll);
   renderAllRef.current = renderAll;
   const pendingWebgpuDisplay = React.useRef<{
-    engine: WebGPUDirectPtychoBackend; phase: Float32Array; width: number; height: number;
+    engine: WebGPUSSBBackend; phase: Float32Array; width: number; height: number;
   } | null>(null);
   const webgpuDisplayFrame = React.useMemo(() => latestFrame(() => {
     const next = pendingWebgpuDisplay.current;
@@ -3105,7 +3113,7 @@ function Explore() {
       aberrations: { C10_nm: c10Val, C12_nm: c12Val, phi12_deg: phi12Val },
       higherOrderAberrations: higherOrderRef.current,
       scanDetectorRotationDeg: rotationVal,
-      upsamplingFactor: upsamplingFactorRef.current,
+      upsampling: upsamplingRef.current,
       numBrightFieldPixels: bfCount,
       reducedBrightField: !isFull,
       computeLoss: false,
@@ -3174,7 +3182,7 @@ function Explore() {
       aberrations: { C10_nm: c10Val, C12_nm: c12Val, phi12_deg: phi12Val },
       higherOrderAberrations: higherOrderRef.current,
       scanDetectorRotationDeg: rotationVal,
-      upsamplingFactor: upsamplingFactorRef.current,
+      upsampling: upsamplingRef.current,
       numBrightFieldPixels: bfCount,
       reducedBrightField: !isFull,
       computeLoss: false,
@@ -3207,12 +3215,12 @@ function Explore() {
   }, [effectiveTotalBf, runFrontendPreview, fullBrightFieldCount, webgpuStandalone, webgpuDiagnostic, computeLoss]);
 
   frontendFullRef.current = runFrontendFull;
-  const previousUpsamplingFactorRef = React.useRef(upsamplingFactor);
+  const previousUpsamplingRef = React.useRef(upsampling);
   React.useEffect(() => {
-    if (previousUpsamplingFactorRef.current === upsamplingFactor) return;
-    previousUpsamplingFactorRef.current = upsamplingFactor;
+    if (previousUpsamplingRef.current === upsampling) return;
+    previousUpsamplingRef.current = upsampling;
     if (webgpuStandalone) frontendPreviewRef.current?.(sliderVals.current.c10, sliderVals.current.c12, sliderVals.current.phi12, rotationDegRef.current);
-  }, [upsamplingFactor, webgpuStandalone]);
+  }, [upsampling, webgpuStandalone]);
   shouldCommitOnReleaseRef.current = effectiveTotalBf > 0 || !!webgpuSsbRef.current;
   const standaloneInitialRenderRef = React.useRef(false);
   React.useEffect(() => {
@@ -3481,11 +3489,11 @@ function Explore() {
       generated_at_utc: new Date().toISOString(),
       reconstruction: reconstructionRef.current.method === "ssb" ? { method: "ssb" } : {
         method: reconstructionRef.current.method,
-        phase_regularization: reconstructionRef.current.phase_regularization,
+        phase_damping: reconstructionRef.current.phase_damping,
         smoothness_inv_A: reconstructionRef.current.smoothness_inv_A,
         detector_weighting: reconstructionRef.current.detector_weighting,
         ...(reconstructionRef.current.method === "complex"
-          ? { amplitude_regularization: reconstructionRef.current.amplitude_regularization } : {}),
+          ? { amplitude_damping: reconstructionRef.current.amplitude_damping } : {}),
       },
       phaseData: new Float32Array(phase.data),
       w: phase.w, h: phase.h,
@@ -3959,6 +3967,34 @@ function Explore() {
             </Box>
           </Tooltip>
         )}
+        {tuning && (
+          <Tooltip title="Restore the fitted aberrations, rotation, tilt and depth, turn Tilt correction on, and return colormaps, contrast, method, damping and upsampling to the launch settings. Zoom is kept." placement="top" arrow>
+            <span>
+              <Button
+                size="small"
+                disabled={busy}
+                onClick={() => {
+                  doReset();
+                  updateSweepRange("c10", [c10UiMin, c10UiMax]);
+                  updateSweepRange("c12", [c12UiMin, c12UiMax]);
+                  updateSweepRange("phi12", [phi12UiMin, phi12UiMax]);
+                  updateSweepRange("rot", [rotationUiMin, rotationUiMax]);
+                  setCmap(launchCmapRef.current);
+                  setFftCmap("inferno");
+                  setContrastRange([1, 99]);
+                  setFftContrastRange([1, 99]);
+                  setAutoContrast(true);
+                  setFftAutoContrast(true);
+                  setSampling(launchSamplingRef.current);
+                  changeReconstruction({ ...launchReconstructionRef.current }, true);
+                }}
+                sx={compactButton(tc)}
+              >
+                Reset All
+              </Button>
+            </span>
+          </Tooltip>
+        )}
         {objectAmplitude && <>
         <Button
           size="small"
@@ -4203,10 +4239,10 @@ function Explore() {
             <MenuItem value="complex" disabled={!regularizationAvailable || webgpuStandalone || !!localTiltJson}>Amplitude + phase · experimental</MenuItem>
           </Select>
           {reconstructionControls.method !== "ssb" && <>
-            {(["phase_regularization", ...(reconstructionControls.method === "complex" ? ["amplitude_regularization"] : [])] as const).map(key => {
-              const name = key as "phase_regularization" | "amplitude_regularization";
+            {(["phase_damping", ...(reconstructionControls.method === "complex" ? ["amplitude_damping"] : [])] as const).map(key => {
+              const name = key as "phase_damping" | "amplitude_damping";
               const value = reconstructionControls[name];
-              return <RegularizationSlider key={name} name={name === "phase_regularization" ? "Phase" : "Amplitude"} value={value}
+              return <DampingSlider key={name} name={name === "phase_damping" ? "Phase" : "Amplitude"} value={value}
                 onDrag={next => changeReconstruction({ [name]: next }, false, false)}
                 onCommit={next => changeReconstruction({ [name]: next }, true)} />;
             })}
@@ -4238,7 +4274,7 @@ function Explore() {
                 </Typography>
               </Tooltip>
               {loss != null && !regionalMode && (
-                <Tooltip title={reconstructionControls.method === "ssb" ? "Phase variance across the corrected bright-field pixel images. Lower values indicate closer agreement between those images, not a guarantee of sharper or more accurate phase. The default fit optimizes model agreement; this is a separate diagnostic." : "Measurement disagreement for the selected direct model. Regularization trades data agreement against stability. This value is not an independent resolution measurement."} placement="top" arrow>
+                <Tooltip title={reconstructionControls.method === "ssb" ? "Phase variance across the corrected bright-field pixel images. Lower values indicate closer agreement between those images, not a guarantee of sharper or more accurate phase. The default fit optimizes model agreement; this is a separate diagnostic." : "Measurement disagreement for the selected direct model. Damping trades data agreement against stability. This value is not an independent resolution measurement."} placement="top" arrow>
                   <Typography sx={{ ...typography.label, ...statChip(tc, true), cursor: "help" }}>
                     loss <Box component="span" sx={{ color: tc.accent }}>{formatNumber(loss, 8)}</Box>
                     {delta != null && (
@@ -4645,11 +4681,21 @@ function Explore() {
           </Tooltip>
           <Box sx={{ width: "1px", height: 20, bgcolor: tc.border, mx: 0.5, alignSelf: "center" }} />
 
-          <Tooltip title="Save calibration.json in this ShowPtycho project for later sessions and downstream analysis." placement="top" arrow>
+          <Tooltip title="Save calibration.json and the displayed phase as calibration_phase.png in this ShowPtycho project for later sessions and downstream analysis." placement="top" arrow>
             <Button
               size="small" variant="outlined"
               startIcon={<SaveIcon sx={{ fontSize: 14 }} />}
-              onClick={() => { if (webgpuStandalone) { void doFolderSave(); } else { setSaveTrigger((saveTrigger ?? 0) + 1); } }}
+              onClick={() => {
+                if (webgpuStandalone) { void doFolderSave(); return; }
+                // the PNG takes the window the phase panel paints with, sent before the trigger
+                const phase = rawPhaseRef.current;
+                if (phase) {
+                  const { vmin, vmax } = percentileClip(phase.data, contrastRange[0], contrastRange[1]);
+                  setSavedVmin(vmin);
+                  setSavedVmax(vmax);
+                }
+                setSaveTrigger((saveTrigger ?? 0) + 1);
+              }}
               sx={{ ...compactButton(tc), height: ACTION_CONTROL_HEIGHT, color: STATUS_GOOD, borderColor: STATUS_GOOD, width: 76, minWidth: 76 }}
             >
               Save

@@ -321,15 +321,15 @@ class DirectSession:
             tuple(int(value) for value in scan_region), aberrations=dict(aberrations),
             scan_detector_rotation_deg=float(scan_detector_rotation_deg)))
 
-    def crop_native(self, phase, bounds, upsampling_factor: int) -> np.ndarray:
+    def crop_native(self, phase, bounds, upsampling: int) -> np.ndarray:
         """A host copy of ``bounds`` (native scan positions) from a full-scan ``phase``.
 
-        ``phase`` covers the padded grid at ``upsampling_factor``; the bounds are
+        ``phase`` covers the padded grid at ``upsampling``; the bounds are
         shifted by ``scan_offset`` so a region never shows padding.
         """
         row_offset, col_offset = self.scan_offset
         row_start, row_stop, col_start, col_stop = (
-            int(value) * upsampling_factor for value in (
+            int(value) * upsampling for value in (
                 bounds[0] + row_offset, bounds[1] + row_offset,
                 bounds[2] + col_offset, bounds[3] + col_offset))
         crop = phase[row_start:row_stop, col_start:col_stop]
@@ -451,7 +451,7 @@ class DirectSession:
         """Adopt a validated complete correction without running a new search.
 
         Assigning ``ssb.aberrations`` states them as known (quantem.gpu), so a
-        later ``ptycho.run()`` applies them instead of fitting.
+        later ``ptycho.reconstruct()`` applies them instead of fitting.
         """
         from quantem.gpu.direct_ptycho.units import validate_aberrations
 
@@ -536,21 +536,21 @@ class DirectSession:
 
         return direct_workflow.advance(self.ssb)
 
-    def _drag_inputs(self, aberrations: dict, *, upsampling_factor, method: str = "ssb", sample_tilt_mrad=(0.0, 0.0),
+    def _drag_inputs(self, aberrations: dict, *, upsampling, method: str = "ssb", sample_tilt_mrad=(0.0, 0.0),
                      depth_spread_nm: float = 0.0, **strengths):
         """``preview``'s options as ``direct_workflow``'s (aberrations, tilt, depth, factor, policy)."""
         from quantem.gpu.direct_ptycho import direct_workflow
         from quantem.gpu.direct_ptycho.units import validate_aberrations
 
         policy = direct_workflow.settings(method, *(strengths.get(name) for name in (
-            "phase_regularization", "amplitude_regularization", "smoothness_inv_A", "detector_weighting")))
+            "phase_damping", "amplitude_damping", "smoothness_inv_A", "detector_weighting")))
         return (validate_aberrations(_named_orders(aberrations), higher_order=True), tuple(sample_tilt_mrad),
-                float(depth_spread_nm), self.ssb._resolve_upsampling_factor(upsampling_factor), policy)
+                float(depth_spread_nm), self.ssb._resolve_upsampling(upsampling), policy)
 
     def browser_state(self) -> dict:
         """The compact state a browser SSB engine rebuilds its reducers from.
 
-        quantem.gpu's ``DirectPtychoExportState``: the bright-field pixel list
+        quantem.gpu's ``SSBExportState``: the bright-field pixel list
         (``bright_field_rows`` / ``_cols``), their reciprocal coordinates in the
         scan frame (``bright_field_k_row`` / ``_k_col``, quantem.gpu's ``kx_bf``
         / ``ky_bf``: its x is the scan row axis), the scan frequencies
@@ -584,16 +584,18 @@ class DirectSession:
 
     def run(self, **options) -> dict:
         """Run direct reconstruction at the reviewed optics; see ``result`` for the keys."""
-        return self.result(self.ssb.run(**options))
+        return self.result(self.ssb.reconstruct(**options))
 
-    def find_aberrations(self, **options) -> dict:
-        """Fit the aberrations (``quantem.gpu.DirectPtycho.find_aberrations(**options)``); see ``result`` for the keys."""
+    reconstruct = run  # Existing widget integrations share the canonical implementation.
+
+    def fit_aberrations(self, **options) -> dict:
+        """Fit the aberrations (``quantem.gpu.DirectPtycho.fit_aberrations(**options)``); see ``result`` for the keys."""
         options.setdefault("search", "standard")
         options.setdefault("show", False)
-        return self.result(self.ssb.find_aberrations(**options))
+        return self.result(self.ssb.fit_aberrations(**options))
 
     def fit_regions(self, regions: list[dict], parameters: dict, *,
-                    upsampling_factor: int,
+                    upsampling: int,
                     num_trials: int = 200,
                     progress: Callable[[dict], None] | None = None) -> dict:
         """Jointly fit regional models and crop their full-scan reconstructions.
@@ -602,7 +604,7 @@ class DirectSession:
         Independent regional sessions leave the overview calibration intact.
         Detector geometry and rotation are common; aberrations, both tilt
         components and depth spread are optimized together for each region,
-        ``quantem.gpu.DirectPtycho.find_aberrations(tilt=True, num_trials=)``
+        ``quantem.gpu.DirectPtycho.fit_aberrations(tilt=True, num_trials=)``
         once with ``REGION_FIT_SEED`` and quantem.gpu's default refinement.
         The separate phase-variance diagnostic is not needed for this fit,
         so ``compute_loss=False`` omits it without changing any fitted value.
@@ -620,7 +622,7 @@ class DirectSession:
         started = time.perf_counter()
         fits, images = [], {}
         from quantem.gpu.direct_ptycho import DEPTH_SPREAD_RANGE_NM as depth_range_nm  # the joint fit's own depth search range
-        factor = int(upsampling_factor)
+        factor = int(upsampling)
         geometry = {
             "backend": ssb.backend, "voltage_kV": ssb.voltage_kV,
             "semiangle_mrad": ssb.semiangle_mrad,
@@ -648,7 +650,7 @@ class DirectSession:
                 scan_detector_rotation_deg=parameters["scan_detector_rotation_deg"],
             ) as regional:
                 report("joint_fit", 1)
-                fitted = regional.find_aberrations(
+                fitted = regional.fit_aberrations(
                     search="standard",
                     tilt=True, num_trials=int(num_trials),
                     tilt_limit_mrad=REGION_TILT_LIMIT_MRAD,
@@ -670,7 +672,7 @@ class DirectSession:
             phase, _ = self.preview(
                 fit["aberrations"], sample_tilt_mrad=fit["sample_tilt_mrad"],
                 depth_spread_nm=fit["depth_spread_nm"],
-                upsampling_factor=factor, compute_loss=False)
+                upsampling=factor, compute_loss=False)
             if tuple(phase.shape) != tuple(size * factor for size in ssb.scan_shape):
                 raise ValueError("Local correction requires a full-scan reconstruction before cropping.")
             images[f"{region['label']} · SSB"] = self.crop_native(phase, bounds, factor)
@@ -693,7 +695,7 @@ class DirectSession:
                 "reconstruction": {
                     "scan_shape": list(ssb.scan_shape), "scan_offset": list(self.scan_offset),
                     "scan_region": None,
-                    "display_bounds": list(bounds), "upsampling_factor": factor,
+                    "display_bounds": list(bounds), "upsampling": factor,
                     "num_bright_field_pixels": self.num_bright_field_pixels,
                 },
             })
@@ -707,7 +709,7 @@ class DirectSession:
 
     @staticmethod
     def result(result) -> dict:
-        """The values of a quantem.gpu ``DirectPtychoResult`` the widgets show and store.
+        """The values of a quantem.gpu ``SSBResult`` the widgets show and store.
 
         ``phase``, ``aberrations`` (``C10_nm``, ``C12_nm``, ``phi12_deg``),
         ``scan_detector_rotation_deg`` (the physical angle in [0, 360)),

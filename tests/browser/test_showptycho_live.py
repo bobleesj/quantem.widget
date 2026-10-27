@@ -158,9 +158,12 @@ viewer
     jupyter.write_notebook(notebook, setup)
     page = jupyter.open(open_page, notebook, "tilt-export", webgpu=True, ready=PHASE, out=browser_out)
     hardware_adapter(page.adapter())
-    sampling = page.get_by_role("combobox", name="SSB output sampling")
+    # the output sampling select lives in the View settings popover
+    page.get_by_role("button", name="View settings").click()
+    sampling = page.get_by_role("combobox", name="Upsampling")
     sampling.click()
     page.get_by_role("option", name="Auto", exact=False).click()
+    page.keyboard.press("Escape")
     page.wait_for_timeout(1500)
     toggle = page.get_by_role("checkbox", name="Tilt correction")
     toggle.uncheck()
@@ -173,15 +176,16 @@ assert saved['sample_tilt_mrad'] == [3., -4.]
 assert saved['depth_spread_nm'] == 12.
 assert saved['display']['tilt_correction'] is False
 assert saved['upsampling_mode'] == 'auto'
-assert viewer.upsampling_factor == 'auto'
+assert viewer.upsampling == 'auto'
 assert json.loads(viewer.higher_order_aberrations_json)['C30_nm'] == 2.
-expected, _ = viewer._ssb.preview({**viewer._current(), 'C30_nm': 2.}, upsampling_factor=viewer.auto_upsampling_factor,
+expected, _ = viewer._ssb.preview({**viewer._current(), 'C30_nm': 2.}, upsampling=viewer.auto_upsampling,
     sample_tilt_mrad=(0., 0.), depth_spread_nm=12.)
 np.testing.assert_array_equal(np.frombuffer(viewer.phase_bytes, np.float32).reshape(expected.shape), expected)
 print('saved-fitted-science')
 """)
     assert "saved-fitted-science" in proof, proof
     toggle.check()
+    page.get_by_role("button", name="View settings").click()
     sampling.click()
     page.get_by_role("option", name="1×", exact=True).click()
     page.wait_for_timeout(1000)
@@ -226,7 +230,7 @@ def test_direct_methods_and_regularization_follow_live_slider_requests(jupyter, 
     select = page.get_by_role("combobox", name="Reconstruction method")
     select.click()
     page.get_by_role("option", name="Phase · experimental", exact=True).click()
-    slider = page.get_by_role("slider", name="Phase regularization", exact=True)
+    slider = page.get_by_role("slider", name="Phase damping", exact=True)
     slider.wait_for(state="visible")
     slider.focus()
     page.keyboard.press("ArrowRight")
@@ -234,7 +238,7 @@ def test_direct_methods_and_regularization_follow_live_slider_requests(jupyter, 
     page.wait_for_timeout(1500)
     select.click()
     page.get_by_role("option", name="Amplitude + phase · experimental", exact=True).click()
-    amplitude = page.get_by_role("slider", name="Amplitude regularization", exact=True)
+    amplitude = page.get_by_role("slider", name="Amplitude damping", exact=True)
     amplitude.wait_for(state="visible")
     amplitude.focus()
     page.keyboard.press("ArrowRight")
@@ -243,10 +247,10 @@ def test_direct_methods_and_regularization_follow_live_slider_requests(jupyter, 
 import json
 request = json.loads(viewer.result_json)
 assert request['method'] == 'complex', request
-assert request['phase_regularization'] > .03, request
-assert request['amplitude_regularization'] > .03, request
+assert request['phase_damping'] > .03, request
+assert request['amplitude_damping'] > .03, request
 expected, _ = viewer._ssb.preview(viewer.ssb_parameters['aberrations'], compute_loss=False,
-    upsampling_factor=viewer._output_factor, **viewer._reconstruction_options())
+    upsampling=viewer._output_factor, **viewer._reconstruction_options())
 shown = np.frombuffer(viewer.phase_bytes, np.float32).reshape(expected.shape)
 np.testing.assert_array_equal(shown, expected)
 assert not viewer.webgpu_preview_enabled
@@ -254,4 +258,76 @@ print('live direct method and strengths match backend')
 """)
     assert "live direct method and strengths match backend" in proof
     page.screenshot(path=str(browser_out / "showptycho_direct_methods.png"))
+    assert [error for error in page.errors if "debugger session" not in error] == [], page.errors
+
+
+def test_phase_draws_on_open_and_save_writes_the_shown_png(jupyter, open_page, hardware_adapter, browser_out):
+    """The phase shows before any control is touched, and Save writes it as PNG in the shown colormap."""
+    notebook = "showptycho_save_png.ipynb"
+    jupyter.write_notebook(notebook, SESSION)
+    page = jupyter.open(open_page, notebook, "save-png", webgpu=True, ready=PHASE, out=browser_out)
+    hardware_adapter(page.adapter())
+    page.wait_for_timeout(1500)
+    first_draw = browser_out / "showptycho_first_draw.png"
+    page.locator(PHASE).first.screenshot(path=str(first_draw))
+    assert np.asarray(Image.open(first_draw).convert("L")).std() > 10, "phase blank until a control changes"
+    combos = page.locator('.jp-OutputArea-output [role="combobox"]')
+    first = next(index for index in range(combos.count()) if combos.nth(index).inner_text().strip() == "Inferno")
+    combos.nth(first).click()
+    page.locator('li[role="option"]', has_text="Gray").first.click()
+    page.mouse.move(5, 300)
+    page.wait_for_timeout(1000)
+    page.locator("button").filter(has_text=re.compile(r"^Save$")).click()
+    page.wait_for_timeout(1500)
+    proof = jupyter.run_in_kernel(notebook, """
+from PIL import Image
+image = np.asarray(Image.open(viewer.calibration_image_path).convert('RGB'))
+assert viewer.cmap == 'gray' and viewer.vmin is not None and viewer.vmin < viewer.vmax
+assert image.shape[:2] == (viewer.phase_height, viewer.phase_width)
+assert (image[..., 0] == image[..., 1]).all() and image.std() > 10
+print('saved-shown-png')
+""")
+    assert "saved-shown-png" in proof, proof
+    assert [error for error in page.errors if "debugger session" not in error] == [], page.errors
+
+
+def test_reset_all_returns_model_and_display_to_launch(jupyter, open_page, hardware_adapter, browser_out):
+    """Reset All undoes colormap, output sampling and tilt-correction edits in one click."""
+    notebook = "showptycho_reset_all.ipynb"
+    setup = SESSION.replace("size=(24, 24, 1, 1)", "size=(128, 128, 1, 1)").rsplit("\nviewer", 1)[0] + """
+import json
+viewer.sample_json = json.dumps({'sample_tilt_mrad': [3., -4.], 'depth_spread_nm': 12.})
+viewer.fitted_sample_json = viewer.sample_json
+launch = (viewer.cmap, viewer.upsampling, viewer.method, viewer.phase_damping)
+viewer
+"""
+    jupyter.write_notebook(notebook, setup)
+    page = jupyter.open(open_page, notebook, "reset-all", webgpu=True, ready=PHASE, out=browser_out)
+    hardware_adapter(page.adapter())
+    page.wait_for_timeout(1500)
+    combos = page.locator('.jp-OutputArea-output [role="combobox"]')
+    first = next(index for index in range(combos.count()) if combos.nth(index).inner_text().strip() == "Inferno")
+    combos.nth(first).click()
+    page.locator('li[role="option"]', has_text="Gray").first.click()
+    page.mouse.move(5, 300)
+    # the output sampling select lives in the View settings popover
+    page.get_by_role("button", name="View settings").click()
+    sampling = page.get_by_role("combobox", name="Upsampling")
+    sampling.click()
+    page.get_by_role("option", name="1×", exact=True).click()
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(1000)
+    page.get_by_role("checkbox", name="Tilt correction").uncheck()
+    page.wait_for_timeout(1000)
+    edited = jupyter.run_in_kernel(notebook, "print(viewer.cmap, viewer.upsampling, viewer.tilt_correction)")
+    assert "gray 1 False" in edited, edited
+    page.locator("button").filter(has_text=re.compile(r"^Reset All$")).click()
+    page.wait_for_timeout(2000)
+    proof = jupyter.run_in_kernel(notebook, """
+assert (viewer.cmap, viewer.upsampling, viewer.method, viewer.phase_damping) == launch, (viewer.cmap, viewer.upsampling, launch)
+assert viewer.tilt_correction is True
+print('reset-all-launch')
+""")
+    assert "reset-all-launch" in proof, proof
+    page.locator(PHASE).first.screenshot(path=str(browser_out / "showptycho_reset_all.png"))
     assert [error for error in page.errors if "debugger session" not in error] == [], page.errors

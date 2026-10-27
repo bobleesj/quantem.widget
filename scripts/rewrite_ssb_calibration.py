@@ -31,6 +31,11 @@ identity is computed from the data, so a /5 calibration with an identity needs i
 beside the calibration (the file name it recorded), or given with ``--data``. The flagged-pixel
 fill is recorded as quantem.gpu fills it now (half to even; a cluster from the ring around it).
 
+Calibration /6 and stars /3 named the output factor ``upsampling_factor`` and the direct-method
+strengths ``phase_regularization`` and ``amplitude_regularization``; /7 and /4 name them
+``upsampling``, ``phase_damping`` and ``amplitude_damping``. No number changes. ShowPtycho
+also reads a /6 calibration directly.
+
     python scripts/rewrite_ssb_calibration.py --dry-run path/to/calibration.json
     python scripts/rewrite_ssb_calibration.py path/to/calibration.json path/to/showptycho_stars.json
     python scripts/rewrite_ssb_calibration.py --data path/to/scan_master.h5 path/to/calibration.json
@@ -47,8 +52,22 @@ import json
 import math
 import pathlib
 
-CALIBRATION_SCHEMA = "quantem.ssb-calibration/6"
-STARS_SCHEMA = "quantem.ssb-stars/3"
+CALIBRATION_SCHEMA = "quantem.ssb-calibration/7"
+STARS_SCHEMA = "quantem.ssb-stars/4"
+# the layouts before upsampling, phase_damping and amplitude_damping, carried over by renaming those keys
+DAMPING_RENAMED = {"quantem.ssb-calibration/6": CALIBRATION_SCHEMA, "quantem.ssb-stars/3": STARS_SCHEMA}
+# /6 and stars /3 spellings -> their /7 and /4 names
+DAMPING_KEYS = {"phase_regularization": "phase_damping", "amplitude_regularization": "amplitude_damping",
+                "upsampling_factor": "upsampling"}
+
+
+def damping_names(value):
+    """``value`` with every /6 key renamed, recursively: the record /7 reads."""
+    if isinstance(value, dict):
+        return {DAMPING_KEYS.get(key, key): damping_names(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [damping_names(item) for item in value]
+    return value
 # the layouts with an absolute source_path, carried to the current ones by portable()
 PATH_CALIBRATION_SCHEMA = "quantem.ssb-calibration/5"
 PATH_STARS_SCHEMA = "quantem.ssb-stars/2"
@@ -126,12 +145,14 @@ def rewrite(earlier, path: pathlib.Path | None = None, data: pathlib.Path | None
     current, notes = path_layout(earlier)
     if current is not None and current.get("schema") in (PATH_CALIBRATION_SCHEMA, PATH_STARS_SCHEMA):
         current = portable(current, pathlib.Path.cwd() / "calibration.json" if path is None else path, data)
+    if current is not None and current.get("schema") in (CALIBRATION_SCHEMA, STARS_SCHEMA):
+        current = damping_names(current)
     return current, notes
 
 
 def portable(record: dict, path: pathlib.Path, data: pathlib.Path | None) -> dict:
     """Calibration /5 or stars /2 as /6 or /3: ``source`` for ``source_path``, a portable session identity."""
-    from quantem.gpu.ssb.persistence import portable_source
+    from quantem.gpu.direct_ptycho.persistence import portable_source
 
     folder = path.resolve().parent
 
@@ -168,7 +189,7 @@ def session_identity(earlier: dict, data: pathlib.Path, scan_shape) -> dict:
     """A /5 session identity (paths, inodes, times) as the portable one ShowPtycho now compares."""
     import numpy as np
     from quantem.gpu.resident.hot_pixels import median_plan
-    from quantem.gpu.ssb.persistence import acquisition_identity, json_value, source_identity
+    from quantem.gpu.direct_ptycho.persistence import acquisition_identity, json_value, source_identity
 
     signature = earlier.get("source") or {}
     companions = {}
@@ -207,6 +228,8 @@ def path_layout(earlier) -> tuple[dict | None, list[str]]:
         return {"schema": PATH_STARS_SCHEMA, "stars": [record for record, _ in records]}, [note for _, notes in records for note in notes]
     if earlier.get("schema") in (PATH_CALIBRATION_SCHEMA, PATH_STARS_SCHEMA):
         return earlier, []
+    if earlier.get("schema") in DAMPING_RENAMED:
+        return {**earlier, "schema": DAMPING_RENAMED[earlier["schema"]]}, []
     if earlier.get("schema") in (CALIBRATION_SCHEMA, STARS_SCHEMA, SNAPSHOTS_SCHEMA, BROWSER_CALIBRATION_SCHEMA, SHOW4DSTEM_SCHEMA):
         return None, []
     later = {"quantem.ssb-calibration/4": PATH_CALIBRATION_SCHEMA, "quantem.ssb-stars/1": PATH_STARS_SCHEMA,

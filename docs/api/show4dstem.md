@@ -266,13 +266,13 @@ Python GPU allocation, so it does not expose a "free GPU memory" control.
 
 The default on CUDA and MPS uses 200 initial TPE trials, then jointly
 refines aberrations through fifth order with sample tilt and depth.
-`ptycho.find_aberrations(search="broad")` adds broader exploration.
+`ptycho.fit_aberrations(search="broad")` adds broader exploration.
 The initial result is provisional; final refinement can change its phase.
 
 
 With a live kernel on CUDA or MPS, the **Compute SSB** control, or
 `viewer.compute_ssb()`, runs quantem.gpu's default fit,
-`quantem.gpu.DirectPtycho(...).find_aberrations()`, on the current 4D frame: the SSB
+`quantem.gpu.DirectPtycho(...).fit_aberrations()`, on the current 4D frame: the SSB
 model fitted to the data together with the sample tilt and depth spread
 (tilt-corrected; the fitted C10 is the defocus at mid-depth). It attaches the SSB phase and the aligned DPC row/col maps as
 virtual-image sources and switches the virtual image to the phase. The
@@ -291,8 +291,8 @@ The two fits are quantem.gpu's:
 
 | Call | Method | Use it for |
 |---|---|---|
-| `find_aberrations()` | model-based, tilt-corrected | the default: every fit |
-| `find_aberrations(search="primary", tilt=False)` | model-based, tilt held at 0 | thin, untilted samples, or to see what tilt correction changes |
+| `fit_aberrations()` | model-based, tilt-corrected | the default: every fit |
+| `fit_aberrations(search="primary", tilt=False)` | model-based, tilt held at 0 | thin, untilted samples, or to see what tilt correction changes |
 
 The phase-variance fit is retired: `compute_ssb(objective=...)` prints one line
 and runs the model fit.
@@ -329,7 +329,7 @@ refinement quantem.gpu ran, or null; `objective`
 what the fit optimized, null for a manual recompute; `tilt`,
 `sample_tilt_mrad` in the scan frame, `depth_spread_nm` and `tilt_fit_gain`
 record the sample model, false and null at tilt 0). It is not a
-ShowPtycho `calibration.json` (`quantem.ssb-calibration/6`), which records the
+ShowPtycho `calibration.json` (`quantem.ssb-calibration/7`), which records the
 source file, scan region, phase estimator and session identity. Compute SSB
 needs one 4D frame; quantem.gpu centres any scan shape in its FFT grid and the
 phase shows the measured positions. An encoded

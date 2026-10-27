@@ -10,6 +10,7 @@ where the two paths must agree exactly.
 import gzip
 import json
 import re
+import threading
 import time
 from pathlib import Path
 
@@ -146,6 +147,73 @@ def _pattern(widget) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # Encoded acquisition through quantem.gpu.io.load
 # ---------------------------------------------------------------------------
+
+
+def test_stream_opens_on_the_first_acquisition_and_appends_the_rest_as_they_complete(tmp_path, accelerator):
+    # A live recording grows its datasets list from another thread; stream shows each one as it arrives,
+    # labelled in arrival order, and append leaves ownership with the caller.
+    import threading
+    from types import SimpleNamespace
+
+    loaded = [gpu_adapter.load_acquisition(_write_master(tmp_path, f"tilt{index}", _counts(index))) for index in range(3)]
+    recording = SimpleNamespace(datasets=[loaded[0]], error=None, receiving=True)
+
+    def arrive():
+        for acquisition in loaded[1:]:
+            time.sleep(0.2)
+            recording.datasets.append(acquisition)
+        recording.receiving = False
+
+    threading.Thread(target=arrive, daemon=True).start()
+    widget = Show4DSTEM.stream(recording, refresh_s=0.05, labels=["-17x", "0x", "17x"], verbose=False)
+    try:
+        widget._stream_thread.join(timeout=5)
+        assert widget.n_frames == 3 and widget.frame_labels == ["-17x", "0x", "17x"]
+        assert [frame.source for frame in widget._data.frames] == loaded and not widget._owned_acquisitions
+    finally:
+        widget.close()
+        for acquisition in loaded:
+            acquisition.close()
+
+
+def test_stream_retires_old_scans_without_resetting_detector_or_cursor(accelerator, live_recording):
+    if not torch.cuda.is_available():
+        pytest.skip("Live ANS acquisition is CUDA only")
+    import cupy as cp
+
+    recording = live_recording()
+    widget = None
+
+    def arrive(index):
+        recording.add(cp.asarray(_counts(index)).reshape(-1, *DET), SCAN, str(index))
+
+    try:
+        arrive(0)
+        widget = Show4DSTEM.stream(recording, refresh_s=0.01, verbose=False)
+        assert widget.frame_labels == ["0"]
+        widget.apply_preset("adf")
+        widget.pos_row, widget.pos_col = 2, 3
+        detector = (widget.roi_radius_inner, widget.roi_radius)
+        oldest = recording.acquisitions[0]
+        for index in range(1, 5):
+            arrive(index)
+            if len(recording.datasets) > 2:
+                recording.discard(recording.datasets[0])
+            deadline = time.monotonic() + 5
+            while widget.frame_labels[-1] != str(index) or widget.n_frames != min(index + 1, 2):
+                assert time.monotonic() < deadline and widget.stream_error is None
+                time.sleep(0.01)
+            assert widget.frame_labels == [str(number) for number in range(max(0, index - 1), index + 1)]
+        assert oldest.source.is_released
+        assert len(recording.datasets) == len(recording.acquisitions) == 2
+        assert (widget.roi_radius_inner, widget.roi_radius) == detector
+        assert (widget.pos_row, widget.pos_col) == (2, 3)
+        widget.frame_idx = 1
+        np.testing.assert_array_equal(widget.pattern(2, 3), _counts(4)[2, 3])
+    finally:
+        if widget is not None:
+            widget.close()
+        recording.release()
 
 
 def test_encoded_master_opens_with_detector_products(tmp_path, accelerator):
@@ -1008,7 +1076,7 @@ def test_compute_ssb_accepts_a_1024_scan(monkeypatch):
         def __exit__(self, *exc):
             return False
 
-        def run(self):
+        def reconstruct(self):
             return types.SimpleNamespace(phase=np.ones((1024, 1024), np.float32), aberrations={"C10_nm": 0.0, "C12_nm": 0.0, "phi12_deg": 0.0},
                                          scan_detector_rotation_deg=0.0, loss=None, elapsed_s=None, sample_tilt_mrad=None)
 
@@ -1084,7 +1152,7 @@ def test_compute_ssb_reads_the_optics_the_dataset_records(monkeypatch, tmp_path)
         def __exit__(self, *exc):
             return False
 
-        def run(self):
+        def reconstruct(self):
             # a fit on the reversed branch: quantem.gpu reports the physical angle, here above 180
             return types.SimpleNamespace(phase=np.ones((128, 128), np.float32), aberrations={"C10_nm": 12.0, "C12_nm": 3.0, "phi12_deg": 30.0},
                                          scan_detector_rotation_deg=345.5, loss=0.25, elapsed_s=1.5, sample_tilt_mrad=None)
@@ -1288,7 +1356,7 @@ def test_compute_ssb_converts_a_detector_step_in_reciprocal_angstrom(monkeypatch
         def __exit__(self, *exc):
             return False
 
-        def run(self):
+        def reconstruct(self):
             return types.SimpleNamespace(phase=np.ones((128, 128), np.float32), aberrations={"C10_nm": 0.0, "C12_nm": 0.0, "phi12_deg": 0.0},
                                          scan_detector_rotation_deg=0.0, loss=None, elapsed_s=None, sample_tilt_mrad=None)
 
@@ -1321,7 +1389,7 @@ def test_compute_ssb_reconstructs_a_rectangular_scan_that_quantem_gpu_pads():
         assert phase.shape == (96, 80)
         with SSB(counts, voltage_kV=300, semiangle_mrad=20, scan_sampling_A=0.5, detector_sampling_mrad=20 / 6,
                  aberrations=optics, scan_detector_rotation_deg=30.0) as ssb:
-            full = np.asarray(torch.as_tensor(ssb.run().phase).cpu())
+            full = np.asarray(torch.as_tensor(ssb.reconstruct().phase).cpu())
             top, left = ((padded - measured) // 2 for padded, measured in zip(ssb.scan_shape, ssb.input_scan_shape))
         np.testing.assert_array_equal(phase, full[top:top + 96, left:left + 80])
     finally:
@@ -1387,7 +1455,7 @@ def test_compute_ssb_names_its_refinement_as_quantem_gpu_does(capsys):
 def test_compute_ssb_fits_tilt_corrected_by_default_and_tilt_false_on_request(monkeypatch, capsys):
     """Compute SSB is quantem.gpu's default fit (model with sample tilt and depth spread); tilt=False fits at tilt 0.
 
-    It ran find_aberrations(tilt=False, refinement="nelder-mead") whatever the user asked, the one SSB entry point
+    It ran fit_aberrations(tilt=False, refinement="nelder-mead") whatever the user asked, the one SSB entry point
     that did not default to the tilt-corrected fit.
     """
     pytest.importorskip("quantem.gpu", reason="the SSB phase also takes quantem.gpu's centre of mass")
@@ -1421,13 +1489,13 @@ def test_compute_ssb_fits_tilt_corrected_by_default_and_tilt_false_on_request(mo
                 sample_tilt_mrad=(1.5, -2.0) if tilt else None, depth_spread_nm=6.0 if tilt else None,
                 tilt_fit_gain=0.1 if tilt else None)
 
-        def find_aberrations(self, **options):
+        def fit_aberrations(self, **options):
             calls.append(("fit", options))
             result = self._result(options["tilt"], "newton" if options["refinement"] == "auto" else options["refinement"])
             result.objective = "agreement"
             return result
 
-        def run(self):
+        def reconstruct(self):
             calls.append(("reconstruct", {"aberrations": self.aberrations, "sample_tilt_mrad": self.sample_tilt_mrad,
                                           "depth_spread_nm": self.depth_spread_nm}))
             return self._result(self.sample_tilt_mrad is not None, None)

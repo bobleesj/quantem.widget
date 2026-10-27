@@ -124,6 +124,7 @@ jobs:
           wheel = wheels[0]
           required = {
               "quantem/widget/static/chooselattice.js",
+              "quantem/widget/static/scancontrol.js",
               "quantem/widget/static/engine-manifest.json",
               "quantem/widget/static/show1d.js",
               "quantem/widget/static/plot2d.js",

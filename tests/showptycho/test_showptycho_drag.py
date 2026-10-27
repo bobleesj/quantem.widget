@@ -52,11 +52,11 @@ def _shown(widget) -> np.ndarray:
 @pytest.mark.parametrize("method", ["phase", "ssb"])
 def test_one_slider_drag_uses_its_window_and_a_release_prepares_the_next(ptycho, tmp_path, method):
     viewer = ShowPtycho(ptycho, method=method, save_dir=tmp_path, restore=False)
-    viewer.upsampling_factor = 3
+    viewer.upsampling = 3
     viewer.sample_json = json.dumps({"sample_tilt_mrad": list(SAMPLE["sample_tilt_mrad"]),
                                      "depth_spread_nm": SAMPLE["depth_spread_nm"]})
-    strengths = {"phase_regularization": 0.03} if method == "phase" else {}
-    expected_options = dict(upsampling_factor=3, method=method, compute_loss=False, **SAMPLE, **strengths)
+    strengths = {"phase_damping": 0.03} if method == "phase" else {}
+    expected_options = dict(upsampling=3, method=method, compute_loss=False, **SAMPLE, **strengths)
 
     def request(index, C10_nm, committed=False):
         viewer._on_request({"new": json.dumps({"id": index, **ABERRATIONS, "C10_nm": C10_nm, "method": method,
@@ -80,7 +80,7 @@ def test_one_slider_drag_uses_its_window_and_a_release_prepares_the_next(ptycho,
 
 def test_a_rotation_drag_never_touches_the_drag_windows(ptycho, tmp_path, monkeypatch):
     viewer = ShowPtycho(ptycho, save_dir=tmp_path, restore=False)
-    viewer.upsampling_factor = 3
+    viewer.upsampling = 3
 
     def request(index, rotation, C10_nm=12.0, committed=False):
         viewer._on_request({"new": json.dumps({"id": index, **ABERRATIONS, "C10_nm": C10_nm,
@@ -93,7 +93,7 @@ def test_a_rotation_drag_never_touches_the_drag_windows(ptycho, tmp_path, monkey
         monkeypatch.setattr(viewer._ssb, name, lambda *args, _name=name, **kwargs: calls.append(_name))
     for index, rotation in enumerate((0.5, 1.0, 1.5), start=3):            # then the rotation slider
         request(index, rotation, C10_nm=12.05)
-        expected = ptycho.preview({**ABERRATIONS, "C10_nm": 12.05}, upsampling_factor=3, compute_loss=False)[0]
+        expected = ptycho.preview({**ABERRATIONS, "C10_nm": 12.05}, upsampling=3, compute_loss=False)[0]
         np.testing.assert_array_equal(_shown(viewer), expected)
     assert calls == []
     request(6, 1.5, C10_nm=12.05, committed=True)                          # its release prepares the next grab

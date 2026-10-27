@@ -55,7 +55,7 @@ def pytest_collection_modifyitems(config, items):
         return
     skip = pytest.mark.skip(reason="opt-in: set QUANTEM_WIDGET_BROWSER=1 (headed Chrome and a GPU)")
     for item in items:
-        if "browser" in item.keywords:
+        if item.get_closest_marker("browser") is not None:
             item.add_marker(skip)
 
 

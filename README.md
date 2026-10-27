@@ -138,6 +138,7 @@ require a source build containing them. The guide includes setup and browser req
 | `ShowDiffraction` | Measure diffraction spots, rings, spacing, and angles | [tutorial](https://electronmicroscopy.github.io/quantem.widget/tutorials/showdiffraction.html) · [API](https://electronmicroscopy.github.io/quantem.widget/api/showdiffraction.html) |
 | `ShowPDF` | Pair distribution function analysis of 4D-STEM data by scan region | [API](https://electronmicroscopy.github.io/quantem.widget/api/showpdf.html) |
 | `ChooseLattice` | Select an origin and lattice vectors | [API](https://electronmicroscopy.github.io/quantem.widget/api/choose-lattice.html) |
+| `ScanControl` | Connect, set up and run scans; detector files | [API](docs/api/scan-control.md) |
 | `ShowCIF` | Crystal repeats, columns, tilt, and projected potential/phase previews | [tutorial](docs/tutorials/showcif.ipynb) · [API](docs/api/showcif.md) |
 
 ## Documentation

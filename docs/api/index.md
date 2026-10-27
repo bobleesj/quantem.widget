@@ -40,6 +40,7 @@ readers and test agents.
 
 | Widget | Class | Offline export |
 |---|---|---|
+| [ShowGPU](showgpu) | `quantem.widget.ShowGPU` | Live kernel telemetry only |
 | [Plot2D](plot2d) | `quantem.widget.Plot2D` | PNG from browser; Matplotlib figures via Python; no standalone HTML API |
 | [Show1D](show1d) | `quantem.widget.show1d.Show1D` | state JSON, CSV, PNG/PDF via Python, interactive HTML |
 | [Show2D](show2d) | `quantem.widget.show2d.Show2D` | state JSON, PNG, interactive HTML (`encoding="full"` / `encoding="uint8"`) |
@@ -50,6 +51,7 @@ readers and test agents.
 | [ShowDiffraction](showdiffraction) | `quantem.widget.showdiffraction.ShowDiffraction` | state JSON, PNG, interactive HTML |
 | [ShowPDF](showpdf) | `quantem.widget.showpdf.ShowPDF` | state JSON, results zip (CSV), PNG/PDF/TIFF curves, interactive HTML (`encoding="full"` / `encoding="uint8"`) |
 | [ChooseLattice](choose-lattice) | `quantem.widget.choose_lattice.ChooseLattice` | state JSON (`save_state=True`) |
+| [ScanControl](scan-control) | `quantem.widget.ScanControl` | Live acquisition control only |
 | [ShowCIF](showcif) | `quantem.widget.ShowCIF` | Interactive HTML with embedded coordinates |
 
 All widget-level HTML exports follow the [HTML export](html-export) protocol.

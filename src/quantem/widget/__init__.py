@@ -24,7 +24,9 @@ warnings.filterwarnings("ignore", message=r"anywidget: Live-reloading feature is
 
 _LAZY_EXPORTS: dict[str, tuple[str, str | None]] = {
     "ChooseLattice": ("quantem.widget.choose_lattice", "ChooseLattice"),
+    "ScanControl": ("quantem.widget.scan_control", "ScanControl"),
     "ShowCIF": ("quantem.widget.showcif", "ShowCIF"),
+    "ShowGPU": ("quantem.widget.showgpu", "ShowGPU"),
     "Show1D": ("quantem.widget.show1d", "Show1D"),
     "Plot2D": ("quantem.widget.plot2d", "Plot2D"),
     "Show2D": ("quantem.widget.show2d", "Show2D"),
@@ -126,6 +128,8 @@ def free_gpu(verbose: bool = True) -> float:
 
 __all__ = [
     "ChooseLattice",
+    "ScanControl",
+    "ShowGPU",
     "Show1D",
     "Plot2D",
     "Show2D",

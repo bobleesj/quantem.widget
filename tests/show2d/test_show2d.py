@@ -146,6 +146,26 @@ def test_set_image_replaces_the_stack_in_place():
         widget.set_image(_frame(), labels=["a", "b"])
 
 
+def test_set_image_with_the_same_layout_keeps_what_the_user_drew():
+    # A live acquisition replaces the frame several times a second; a profile or ROI the user drew
+    # on the frame must survive each update, and only a change of panel count or shape resets it.
+    widget = Show2D([_frame(1, (32, 32)), _frame(2, (32, 32))], labels=["live", "sum"], verbose=False)
+    widget.profile_line = [{"row": 2.0, "col": 3.0}, {"row": 20.0, "col": 25.0}]
+    widget.roi_list = [{"row": 10, "col": 12, "radius": 4}]
+    widget.roi_selected_idx = 0
+    widget.starred = [1, 0]
+    widget.vmins, widget.vmaxs = [0.1, None], [0.6, None]
+    widget.zoom_row, widget.zoom_col = 8.0, 9.0
+    widget.set_image([_frame(3, (32, 32)), _frame(4, (32, 32))])
+    assert widget.labels == ["live", "sum"]
+    assert widget.profile_line == [{"row": 2.0, "col": 3.0}, {"row": 20.0, "col": 25.0}]
+    assert widget.roi_list == [{"row": 10, "col": 12, "radius": 4}] and widget.roi_selected_idx == 0
+    assert widget.starred == [1, 0] and widget.vmins == [0.1, None] and widget.vmaxs == [0.6, None]
+    assert (widget.zoom_row, widget.zoom_col) == (8.0, 9.0)
+    widget.set_image([_frame(3, (16, 16)), _frame(4, (16, 16))])
+    assert widget.profile_line == [] and widget.roi_list == [] and widget.vmins is None
+
+
 def test_set_image_owns_its_pixels_like_the_constructor():
     image = _frame(5, (16, 16))
     widget = Show2D(_frame(), verbose=False)

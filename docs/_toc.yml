@@ -72,6 +72,7 @@ parts:
           - file: api/datasets
           - file: api/viewer-ui
           - file: api/show1d
+          - file: api/showgpu
           - file: api/plot2d
           - file: api/show2d
           - file: api/show3d
@@ -81,6 +82,7 @@ parts:
           - file: api/showdiffraction
           - file: api/showpdf
           - file: api/choose-lattice
+          - file: api/scan-control
           - file: api/showcif
           - file: api/html-export
           - file: api/io

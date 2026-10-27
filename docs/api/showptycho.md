@@ -29,7 +29,7 @@ largest change. `angle` and `abs` run on the tensor's own device.
 `quantem.widget` owns presentation, project layout, and browser export. It does
 not implement CUDA, MPS, or WebGPU SSB kernels. Exact fitting and final
 reconstruction enter through the shared `quantem.gpu.DirectPtycho` API and return one
-`DirectPtychoResult`, regardless of compute backend. `ShowPtycho` consumes the prepared
+`SSBResult`, regardless of compute backend. `ShowPtycho` consumes the prepared
 `DirectPtycho` session so it can reuse resident buffers for notebook interaction; the
 returned result remains the compact analysis output.
 
@@ -52,7 +52,7 @@ recorded one, else estimated from the centre-of-mass curl:
 
 ```python
 ptycho = DirectPtycho(data)
-ptycho.run()
+ptycho.reconstruct()
 viewer = ptycho.show(local_tilt=True, show_fft=True, save_dir="ssb-results")
 viewer
 ```
@@ -95,7 +95,7 @@ reconstruction and is retained by Save.
 **Save** (or `viewer.save_calibration()`, which returns the path) writes
 `calibration.json` in `save_dir`. Restart the kernel and run
 the same cells: ShowPtycho restores the saved optics, tilt, depth and display
-settings before reconstructing, also over a session that `ptycho.run()`
+settings before reconstructing, also over a session that `ptycho.reconstruct()`
 has just fitted, and prints one line naming the restored values and the
 session values they replaced. The toolbar says **Restored saved full-field
 fit**.
@@ -153,7 +153,7 @@ also supports two experimental regularized direct reconstructions:
 viewer = ShowPtycho(
     ptycho,
     method="phase",
-    phase_regularization=0.03,
+    phase_damping=0.03,
     smoothness_inv_A=1.0,
     restore=False,
 )
@@ -161,8 +161,8 @@ viewer
 ```
 
 The **Reconstruction** control selects **SSB**, **Phase**, or **Amplitude + phase**.
-For phase, the **Phase regularization** slider stabilizes weakly constrained
-frequencies. Amplitude + phase adds a separate **Amplitude regularization**
+For phase, the **Phase damping** slider stabilizes weakly constrained
+frequencies. Amplitude + phase adds a separate **Amplitude damping**
 slider. Each slider is a direct strength, not a multiplier of another control.
 The image shown is phase; the complex method also estimates log-amplitude in
 the computational result. Higher-order aberrations, tilt, effective depth and
@@ -175,13 +175,13 @@ switch to the browser's conventional SSB solver. Changing optics requires
 rebuilding the corresponding system. The achievable display rate depends on
 image size and the notebook/browser connection; no fixed frame rate is promised.
 
-`phase_regularization=0.03` and `amplitude_regularization=0.03` are independent
-strengths. `smoothness_inv_A=1.0` sets the prior's frequency scale in inverse
+`phase_damping=0.03` and `amplitude_damping=0.03` are independent
+Tikhonov damping strengths of the direct least-squares solve. `smoothness_inv_A=1.0` sets the prior's frequency scale in inverse
 angstroms; use `0` for a flat regularizer. Save records the method and all active
 strengths and detector weighting. With the default `method=None`, a compatible
 saved method is restored automatically; without a save, SSB is used. An explicit
 `method="ssb"` keeps SSB and does not restore a different saved method.
-A `DirectPtycho.run(...).save_calibration("review/calibration.json")` result can
+A `DirectPtycho.reconstruct(...).save_calibration("review/calibration.json")` result can
 be reopened with `ShowPtycho(ptycho, save_dir="review")`, including its sampling,
 strengths, smoothness, and `detector_weighting` choice. Explicit strength,
 smoothness, or weighting arguments override those saved values. These methods use a weak-object model and effective depth is not a
@@ -193,12 +193,12 @@ combinations explicitly. `save_calibration()` still saves a regularized review,
 including its reproducible method settings. To save scientific output arrays:
 
 ```python
-result = ptycho.run(
+result = ptycho.reconstruct(
     method="complex",
-    phase_regularization=0.03,
-    amplitude_regularization=0.03,
+    phase_damping=0.03,
+    amplitude_damping=0.03,
     smoothness_inv_A=1.0,
-    upsampling_factor="auto",
+    upsampling="auto",
     save_dir="direct-result",
 )
 ```
@@ -207,7 +207,7 @@ result = ptycho.run(
 
 The default on CUDA and MPS uses 200 initial TPE trials, then jointly
 refines aberrations through fifth order with sample tilt and depth.
-`ptycho.find_aberrations(search="broad")` adds broader exploration.
+`ptycho.fit_aberrations(search="broad")` adds broader exploration.
 The initial result is provisional; final refinement can change its phase.
 
 
@@ -218,22 +218,22 @@ model-based, tilt-corrected fit is the default everywhere, and it is where SSB i
 
 | Call | Method | Use it for |
 |---|---|---|
-| `find_aberrations()` | model-based, tilt-corrected | the default: every fit |
-| `find_aberrations(search="primary", tilt=False)` | model-based, tilt held at 0 | thin, untilted samples, or to see what tilt correction changes |
+| `fit_aberrations()` | model-based, tilt-corrected | the default: every fit |
+| `fit_aberrations(search="primary", tilt=False)` | model-based, tilt held at 0 | thin, untilted samples, or to see what tilt correction changes |
 
 ## Tilt correction
 
-The fit is tilt-corrected by default: `ptycho.find_aberrations()` fits the SSB
+The fit is tilt-corrected by default: `ptycho.fit_aberrations()` fits the SSB
 model with the sample tilt and depth spread, and the viewer opens on that fit:
 
 ```python
-ptycho.find_aberrations(check_rotation=False)
+ptycho.fit_aberrations(check_rotation=False)
 viewer = ShowPtycho(ptycho, show_fft=True)
 viewer
 ```
 
 The other method is explicit, with quantem.gpu's names:
-`ptycho.find_aberrations(search="primary", tilt=False)` fits the primary optics model
+`ptycho.fit_aberrations(search="primary", tilt=False)` fits the primary optics model
 with tilt and depth held at zero. Use `search="primary", tilt=True` for a
 comparison at the same aberration order. Joint fit, Refit SSB and Fit Regions
 all run the model-based, tilt-corrected fit.
@@ -299,7 +299,7 @@ beside `Export` and `Reset`. Enable `Crop`, drag a rectangle on the phase panel,
 inspect the live row/column region readout, then use `Refit SSB`.
 The widget loads the original HDF5 source into encoded GPU storage, decodes
 only that scan region, runs the tilt-corrected fit (200 trials followed by
-refinement, `DirectPtycho(...).find_aberrations(...)`), and replaces the phase/FFT and their
+refinement, `DirectPtycho(...).fit_aberrations(...)`), and replaces the phase/FFT and their
 calibration with the result.
 
 ```python
@@ -313,7 +313,7 @@ ptycho = DirectPtycho(
     scan_sampling_A=(0.276, 0.276),
     voltage_kV=300.0,
 )
-result = ptycho.find_aberrations()     # 200 initial trials, then joint fifth-order refinement
+result = ptycho.fit_aberrations()     # 200 initial trials, then joint fifth-order refinement
 w = ShowPtycho(ptycho, show_fft=True)   # the session names its master (ptycho.source_path)
 ```
 
@@ -355,9 +355,9 @@ from quantem.widget import ShowPtycho
 
 ptycho = DirectPtycho.open(path, voltage_kV=300.0, semiangle_mrad=30.0, scan_sampling_A=(0.495, 0.495),
                detector_sampling_mrad=(0.5554, 0.5554), scan_detector_rotation_deg=-8.6)
-ordinary = ptycho.find_aberrations(search="primary", tilt=False)  # primary optics, no tilt/depth
+ordinary = ptycho.fit_aberrations(search="primary", tilt=False)  # primary optics, no tilt/depth
 ShowPtycho(ptycho)                                 # the tilt-0 control
-tilted = ptycho.find_aberrations(search="primary", tilt=True)    # same optics order, joint tilt/depth
+tilted = ptycho.fit_aberrations(search="primary", tilt=True)    # same optics order, joint tilt/depth
 ShowPtycho(ptycho)                                 # opens on the fitted tilt
 pd.concat([ordinary.report(), tilted.report()])
 ```
@@ -385,9 +385,10 @@ angle in [0, 360), beside `scan_detector_rotation_flipped`; `scan_sampling_A` an
 `detector_sampling_mrad` are `[row, col]`. `calibration.json`,
 `showptycho_stars.json`, the exported `snapshots/cal.json` and the widget's
 messages use these names, and each file names its layout in a `schema` string
-(`quantem.ssb-calibration/6`, `quantem.ssb-stars/3`,
+(`quantem.ssb-calibration/7`, `quantem.ssb-stars/4`,
 `quantem.ssb-browser-calibration/3`, `quantem.ssb-browser-folder/3`,
-`quantem.ssb-snapshots/2`). No file holds an absolute path: `calibration.json`
+`quantem.ssb-snapshots/2`). An earlier `quantem.ssb-calibration/6` file is
+rewritten once with `scripts/rewrite_ssb_calibration.py`. No file holds an absolute path: `calibration.json`
 and each star name the acquisition as `source`, its file name and, when the
 data lives under the save folder, its path relative to it; the session
 identity a restore compares is quantem.gpu's portable `source_identity` (file
@@ -614,8 +615,8 @@ Opening and adjusting the widget does not save result files. Save and Star are
 explicit actions; `save_dir` only chooses their destination.
 
 ```python
-fit = ptycho.find_aberrations(compute_loss=False)
-result = ptycho.run(fit, upsampling_factor="auto", compute_loss=False)
+fit = ptycho.fit_aberrations(compute_loss=False)
+result = ptycho.reconstruct(fit, upsampling="auto", compute_loss=False)
 viewer = ptycho.show(show_fft=True)  # compute_loss=False by default
 ```
 
@@ -629,7 +630,7 @@ not rerun fitting. Call `viewer.save_calibration()` or click Save when ready.
 Auto chooses 1×, 2×, 3× or 4× from the acquisition calibration, with a
 maximum of 4×. Select 8× explicitly with `ptycho.show(upsampling=8)` or the
 ShowPtycho Upsampling menu. For a standalone reconstruction, use
-`ptycho.run(fit, upsampling_factor=8)`.
+`ptycho.reconstruct(fit, upsampling=8)`.
 
 The nominal bandwidth requirement remains separate from the selected grid.
 When Auto is capped, the fit report and viewer settings identify the larger

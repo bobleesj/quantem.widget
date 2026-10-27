@@ -55,6 +55,8 @@ import { createResidentHoverReader } from "./residentHover";
 import type { Uint32ImageView } from "../display/borrowedImage";
 import { latestRegion } from "./latestRegion";
 import { detectorChannel, detectorViewId } from "./detectorChannel";
+import { connectStreamDisplay, initialStreamPanels, streamPanelChanges } from "./streamDisplay";
+import { comparisonPanelKey, interactionContext, selectStreamFrame } from "./streamSelection";
 import { drawScaleBarHiDPI, drawColorbar, roundToNiceValue } from "../figure";
 import { angstromsPerUnit, unitSymbol } from "../units";
 import { findDataRange, sliderRange, computeStats, percentileClip } from "../display/stats";
@@ -1228,6 +1230,7 @@ interface CompareVirtualGridProps {
   gpuVersion?: number;
   gpuEngine?: GPUColormapEngine | null;
   labels: string[];
+  sourceIds?: string[];
   activeIdx: number;
   shapeRows: number;
   shapeCols: number;
@@ -1255,6 +1258,7 @@ interface CompareVirtualGridProps {
   draggingFrame: number | null;
   pendingMoveFrame: number | null;
   maxWidthPx: number;
+  preferredPanelWidthPx?: number;
   panelGapPx: number;
   onResizeStart?: (event: React.PointerEvent<HTMLElement>, panelScale?: number) => void;
   onSelect: (idx: number) => void;
@@ -1278,6 +1282,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   gpuVersion,
   gpuEngine,
   labels,
+  sourceIds = [],
   activeIdx,
   shapeRows,
   shapeCols,
@@ -1305,6 +1310,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   draggingFrame,
   pendingMoveFrame,
   maxWidthPx,
+  preferredPanelWidthPx = 0,
   panelGapPx,
   onResizeStart,
   onSelect,
@@ -1319,10 +1325,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   gpuBytesCurrent = false,
   sourceLoading = false,
 }: CompareVirtualGridProps) {
-  const positionRafRef = React.useRef(0);
   const panDragRef = React.useRef<{ clientX: number; clientY: number; panX: number; panY: number } | null>(null);
-  const pendingPositionRef = React.useRef<[number, number]>([0, 0]);
-  React.useEffect(() => () => cancelAnimationFrame(positionRafRef.current), []);
   const batchModel = useModel();
   const canvasRefs = React.useRef<(HTMLCanvasElement | null)[]>([]);
   const gpuCanvasRefs = React.useRef<(HTMLCanvasElement | null)[]>([]);
@@ -1341,6 +1344,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   const overlayRefs = React.useRef<(HTMLCanvasElement | null)[]>([]);
   const tileRefs = React.useRef<(HTMLDivElement | null)[]>([]);
   const isDraggingPositionRef = React.useRef(false);
+  const positionDragKeyRef = React.useRef<string | number | null>(null);
   const [isDraggingPosition, setIsDraggingPosition] = React.useState(false);
   const [overlayVersion, setOverlayVersion] = React.useState(0);
   const [compareZoom, setCompareZoom] = React.useState(1);
@@ -1402,13 +1406,14 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       .map((frame) => ({
         frame,
         panel: panelByFrame.get(frame),
-        gpuLoaded: Boolean(gpuSlots?.has(frame) && gpuEngine && gpuRanges?.has(frame)),
+        gpuLoaded: Boolean(gpuSlots?.has(frame) && gpuEngine && (gpuBytesCurrent || gpuRanges?.has(frame))),
       }))
       .filter((entry) => sourceLoading || entry.panel !== undefined || entry.gpuLoaded);
-  }, [gpuEngine, gpuRanges, gpuSlots, gpuVersion, panelByFrame, renderIndices, sourceLoading]);
+  }, [gpuBytesCurrent, gpuEngine, gpuRanges, gpuSlots, gpuVersion, panelByFrame, renderIndices, sourceLoading]);
 
   const renderGpuSlotsNow = React.useCallback((): number => {
     if (!gpuEngine || !gpuSlots) return 0;
+    const liveRange = gpuBytesCurrent && !autoContrast && !(absoluteMin != null && absoluteMax != null);
     const lut = COLORMAPS[colormap] || COLORMAPS.inferno;
     gpuEngine.uploadLUT(colormap, lut);
     const panels: {
@@ -1418,7 +1423,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     }[] = [];
     renderEntries.forEach((entry, localIdx) => {
       const slot = gpuSlots.get(entry.frame);
-      const rawRange = gpuRanges?.get(entry.frame);
+      const rawRange = gpuRanges?.get(entry.frame) ?? (gpuBytesCurrent ? {min: 0, max: 1} : undefined);
       const canvas = gpuCanvasRefs.current[localIdx];
       if (slot === undefined || !rawRange || !canvas) return;
       const transformRangeValue = (value: number) => scaleMode === "log" ? displayLog(value) : value;
@@ -1444,6 +1449,8 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
         gpuContextsRef.current.delete(canvas);
       }
     }
+    const contexts: GPUCanvasContext[] = [];
+    const slots: number[] = [];
     for (const panel of panels) {
       let target = gpuContextsRef.current.get(panel.canvas);
       if (!target || panel.canvas.width !== shapeCols || panel.canvas.height !== shapeRows) {
@@ -1453,14 +1460,27 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
         target = {engine: gpuEngine, context};
         gpuContextsRef.current.set(panel.canvas, target);
       }
+      if (liveRange) {
+        contexts.push(target.context);
+        slots.push(panel.slot);
+        continue;
+      }
       gpuEngine.renderPanelSlotsDirectToCanvas(
         [panel.slot], panel.range, scaleMode === "log", target.context,
         {width: shapeCols, height: shapeRows, panelCount: 1, cols: 1, rows: 1,
           gap: 0, bgRgb: 0, transforms: [{zoom: 1, panX: 0, panY: 0}], smooth},
       );
     }
+    if (liveRange) {
+      // Reduce the current images and color them in one submission. A dark-
+      // field drag must not display new counts through the old bright range.
+      return gpuEngine.renderSlotsDirectWithGpuRangeToCanvases(
+        slots, contexts, vminPct, vmaxPct, scaleMode === "log",
+        {width: shapeCols, height: shapeRows, bgRgb: 0, smooth},
+      );
+    }
     return panels.length;
-  }, [absoluteMin, absoluteMax, autoContrast, colormap, gpuEngine, gpuRanges, gpuSlots, renderEntries, scaleMode, shapeCols, shapeRows, smooth, vmaxPct, vminPct]);
+  }, [absoluteMin, absoluteMax, autoContrast, colormap, gpuBytesCurrent, gpuEngine, gpuRanges, gpuSlots, renderEntries, scaleMode, shapeCols, shapeRows, smooth, vmaxPct, vminPct]);
 
   const gpuRenderRef = React.useRef(renderGpuSlotsNow);
   gpuRenderRef.current = renderGpuSlotsNow;
@@ -1563,11 +1583,16 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   }, [absoluteMin, absoluteMax, autoContrast, colormap, gpuEngine, gpuSlots, gpuVersion, renderEntries, scaleMode, shapeCols, shapeRows, smooth, vmaxPct, vminPct]);
 
   const displayCount = Math.max(1, renderEntries.length);
-  const autoCols = displayCount >= 8 ? 4 : displayCount >= 5 ? 3 : displayCount >= 2 ? 2 : 1;
+  const autoCols = preferredPanelWidthPx > 0
+    ? Math.max(1, Math.floor(maxWidthPx / preferredPanelWidthPx))
+    : displayCount >= 8 ? 4 : displayCount >= 5 ? 3 : displayCount >= 2 ? 2 : 1;
   const requestedMaxCols = cols > 0 ? Math.max(1, Math.floor(cols)) : autoCols;
   const gridCols = Math.max(1, Math.min(displayCount, requestedMaxCols));
   const mobileGridCols = Math.max(1, Math.min(gridCols, 2));
   const gridGapPx = Math.max(0, Math.floor(Number.isFinite(panelGapPx) ? panelGapPx : 0));
+  const gridWidth = preferredPanelWidthPx > 0 && cols <= 0
+    ? Math.min(maxWidthPx, gridCols * preferredPanelWidthPx + (gridCols - 1) * gridGapPx)
+    : maxWidthPx;
 
   const resizeGripSx = React.useMemo(() => ({
     position: "absolute",
@@ -1673,17 +1698,9 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     const tileY = ((clientY - rect.top) / rect.height) * shapeRows;
     const col = Math.round(Math.max(0, Math.min(shapeCols - 1, canvasToMask(tileX, compareZoom, comparePanX))));
     const row = Math.round(Math.max(0, Math.min(shapeRows - 1, canvasToMask(tileY, compareZoom, comparePanY))));
-    pendingPositionRef.current = [row, col];
-    if (commit) {
-      cancelAnimationFrame(positionRafRef.current);
-      positionRafRef.current = 0;
-      onPositionChange(row, col, true);
-    } else if (!positionRafRef.current) {
-      positionRafRef.current = requestAnimationFrame(() => {
-        positionRafRef.current = 0;
-        onPositionChange(...pendingPositionRef.current, false);
-      });
-    }
+    // The parent coalesces scan/detector requests once per animation frame.
+    // A second rAF here adds a full display frame to every pointer move.
+    onPositionChange(row, col, commit);
   }, [comparePanX, comparePanY, compareZoom, onPositionChange, shapeCols, shapeRows]);
 
   React.useLayoutEffect(() => {
@@ -1723,8 +1740,8 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
         drawViPositionMarker(
           overlay,
           dpr,
-          kind === "diffraction" ? cursorRow : Number(batchModel.get("pos_row")),
-          kind === "diffraction" ? cursorCol : Number(batchModel.get("pos_col")),
+          cursorRow,
+          cursorCol,
           compareZoom,
           comparePanX,
           comparePanY,
@@ -1775,6 +1792,15 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     const node = readoutRefs.current[localIdx];
     if (node) node.style.opacity = "0";
   }, []);
+  React.useEffect(() => {
+    const key = positionDragKeyRef.current;
+    if (key === null || renderEntries.some(({frame}) => comparisonPanelKey(frame, sourceIds) === key)) return;
+    // An evicted scan ends its gesture; it must not continue on a reused slot.
+    positionDragKeyRef.current = null;
+    panDragRef.current = null;
+    isDraggingPositionRef.current = false;
+    setIsDraggingPosition(false);
+  }, [renderEntries, sourceIds]);
   const panelTiles = React.useMemo(() => renderEntries.map(({ frame, panel, gpuLoaded }, localIdx) => {
           const loaded = gpuLoaded || panel !== undefined;
           // Tests and screenshot tools read the canvas on screen: the WebGPU tile
@@ -1787,6 +1813,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
           const isPendingMove = pendingMoveFrame === frame;
           // A release (or a cancelled pointer) ends a pan, or commits the dragged position.
           const finishPointer = (event: React.PointerEvent<HTMLDivElement>) => {
+            positionDragKeyRef.current = null;
             if (panDragRef.current) {
               panDragRef.current = null;
               return;
@@ -1803,7 +1830,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
               : "none";
           return (
             <Box
-              key={`${frame}-${localIdx}`}
+              key={comparisonPanelKey(frame, sourceIds)}
               ref={(node: HTMLDivElement | null) => { tileRefs.current[localIdx] = node; }}
               role="button"
               aria-label={`Show4DSTEM ${kind === "diffraction" ? "diffraction" : "multiple"} panel ${frame + 1}`}
@@ -1815,6 +1842,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
               onPointerDown={(event) => {
                 const target = event.target instanceof Element ? event.target : null;
                 if (!loaded || reorderMode || target?.closest("button")) return;
+                positionDragKeyRef.current = comparisonPanelKey(frame, sourceIds);
                 event.currentTarget.setPointerCapture(event.pointerId);
                 if (event.shiftKey) {
                   panDragRef.current = { clientX: event.clientX, clientY: event.clientY, panX: comparePanX, panY: comparePanY };
@@ -1822,8 +1850,8 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                 }
                 isDraggingPositionRef.current = true;
                 setIsDraggingPosition(true);
-                updatePositionFromPointer(event.currentTarget, event.clientX, event.clientY);
                 onSelect(frame);
+                updatePositionFromPointer(event.currentTarget, event.clientX, event.clientY);
               }}
               onPointerMove={(event) => {
                 if (kind !== "diffraction") updateReadout(localIdx, frame, gpuLoaded, event.currentTarget, event.clientX, event.clientY);
@@ -1850,6 +1878,12 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
               onPointerLeave={() => hideReadout(localIdx)}
               onPointerUp={finishPointer}
               onPointerCancel={finishPointer}
+              onLostPointerCapture={() => {
+                positionDragKeyRef.current = null;
+                panDragRef.current = null;
+                isDraggingPositionRef.current = false;
+                setIsDraggingPosition(false);
+              }}
               onClick={() => {
                 if (!reorderMode) {
                   onSelect(frame);
@@ -2139,7 +2173,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
             </Box>
           );
         }), [
-    renderEntries, activeIdx, labels, starred, draggingFrame,
+    renderEntries, activeIdx, labels, sourceIds, starred, draggingFrame,
     pendingMoveFrame, themeColors, reorderMode, handleCompareDoubleClick,
     updatePositionFromPointer, updateReadout, hideReadout, onSelect, onPendingMoveFrameChange, onReorderFrame,
     displayIndices, onDragFrameChange, movePreviewFrame, shapeCols, shapeRows,
@@ -2158,7 +2192,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   }
 
   return (
-    <Box sx={{ width: "100%", maxWidth: maxWidthPx > 0 ? `${maxWidthPx}px` : "100%", position: "relative", "@media (max-width: 700px)": { maxWidth: "100%" } }}>
+    <Box sx={{ width: "100%", maxWidth: gridWidth > 0 ? `${gridWidth}px` : "100%", position: "relative", "@media (max-width: 700px)": { maxWidth: "100%" } }}>
       <Box sx={{ display: "flex", alignItems: "center", gap: 1, color: themeColors.textMuted, fontSize: 10 }}>
         <span>Scroll to zoom · Shift-drag to pan</span>
         <Button size="small" sx={{ fontSize: 10, minWidth: 0 }} onClick={resetCompareView}>Reset</Button>
@@ -2256,8 +2290,12 @@ function Show4DSTEM() {
   const [ssbComputeCalibrationFilename] = useModelState<string>("ssb_compute_calibration_filename");
 
   // ROI state
-  const [roiRadius, setRoiRadius] = useModelState<number>("roi_radius");
-  const [roiRadiusInner, setRoiRadiusInner] = useModelState<number>("roi_radius_inner");
+  const [storedRoiRadius, setRoiRadius] = useModelState<number>("roi_radius");
+  const [storedRoiRadiusInner, setRoiRadiusInner] = useModelState<number>("roi_radius_inner");
+  const [localRadii, setLocalRadii] = React.useState<[number, number] | null>(null);
+  const localRadiiRef = React.useRef<[number, number] | null>(null);
+  const roiRadius = localRadii?.[0] ?? storedRoiRadius;
+  const roiRadiusInner = localRadii?.[1] ?? storedRoiRadiusInner;
   const [roiMode, setRoiMode] = useModelState<string>("roi_mode");
   const [roiWidth, setRoiWidth] = useModelState<number>("roi_width");
   const [roiHeight, setRoiHeight] = useModelState<number>("roi_height");
@@ -2271,7 +2309,12 @@ function Show4DSTEM() {
   const [brightFieldCenterRowPx] = useModelState<number>("bright_field_center_row_px");
 
   // Frame animation state (5D time/tilt series)
-  const [frameIdx, setFrameIdx] = useModelState<number>("frame_idx");
+  const [frameIdx, setFrameIdxState] = useModelState<number>("frame_idx");
+  const [streamSourceIds = []] = useModelState<string[]>("_stream_source_ids");
+  const setFrameIdx = React.useCallback((value: React.SetStateAction<number>) => {
+    const index = typeof value === "function" ? value(frameIdx) : value;
+    selectStreamFrame(model, index, streamSourceIds, () => setFrameIdxState(value));
+  }, [frameIdx, model, setFrameIdxState, streamSourceIds]);
   const [nFrames] = useModelState<number>("n_frames");
   const [frameDimLabel] = useModelState<string>("frame_dim_label");
   const [frameLabels] = useModelState<string[]>("frame_labels");
@@ -2283,8 +2326,13 @@ function Show4DSTEM() {
   const [viewMode, setViewMode] = useModelState<string>("view_mode");
   const [compareCols, setCompareCols] = useModelState<number>("compare_cols");
   const [compareVirtualImageBytes] = useModelState<DataView>("compare_virtual_image_bytes");
-  const [comparePanelCount] = useModelState<number>("compare_panel_count");
-  const [comparePanelIndices] = useModelState<number[]>("compare_panel_indices");
+  const [streamCompareImages, setStreamCompareImages] = React.useState<DataView | null | undefined>(
+    () => initialStreamPanels(model));
+  const [comparePanelCountState] = useModelState<number>("compare_panel_count");
+  const [comparePanelIndicesState] = useModelState<number[]>("compare_panel_indices");
+  // A new view of an existing live model waits for its canonical full snapshot.
+  const comparePanelCount = streamCompareImages === undefined ? 0 : comparePanelCountState;
+  const comparePanelIndices = streamCompareImages === undefined ? [] : comparePanelIndicesState;
   const [compareStatus] = useModelState<string>("compare_status");
   const [compareDpMode, setCompareDpMode] = useModelState<string>("compare_dp_mode");
   const [compareDiffractionBytes] = useModelState<DataView>("compare_diffraction_bytes");
@@ -2297,9 +2345,7 @@ function Show4DSTEM() {
   const [compareHiddenPanels, setCompareHiddenPanels] = useModelState<number[]>("compare_hidden_panels");
   const [compareStarredPanels, setCompareStarredPanels] = useModelState<number[]>("compare_starred_panels");
 
-  React.useEffect(() => {
-    model.send({ type: "show4dstem_frontend_ready", version: 1 });
-  }, [model]);
+  React.useEffect(() => connectStreamDisplay(model, setStreamCompareImages), [model]);
 
   // Profile line state (synced with Python)
   const [profileLine, setProfileLine] = useModelState<{row: number; col: number}[]>("profile_line");
@@ -2316,6 +2362,40 @@ function Show4DSTEM() {
   const scanPositionRafRef = React.useRef<number | null>(null);
   const scanPositionOptimisticRef = React.useRef<[number, number] | null>(null);
   const scanPositionCurrentRef = React.useRef<[number, number]>([Math.round(posRow), Math.round(posCol)]);
+  const positionRequests = React.useMemo(() => detectorChannel(detectorViewId(), request => {
+    model.send({type: "show4dstem_position", version: 1, ...request,
+      context: interactionContext(model, "frame_idx vi_roi_mode compare_dp_mode")});
+  }, reply => {
+    if (reply.status !== "rejected") return;
+    scanPositionOptimisticRef.current = null;
+    scanPositionCurrentRef.current = [Number(model.get("pos_row")), Number(model.get("pos_col"))];
+    setLocalPosRow(scanPositionCurrentRef.current[0]);
+    setLocalPosCol(scanPositionCurrentRef.current[1]);
+  }, "show4dstem_position_receipt", 2), [model]);
+  React.useEffect(() => {
+    const clear = () => {
+      positionRequests.clear();
+      scanPositionOptimisticRef.current = null;
+      scanPositionPendingRef.current = null;
+      if (scanPositionRafRef.current !== null) cancelAnimationFrame(scanPositionRafRef.current);
+      scanPositionRafRef.current = null;
+      scanPositionCurrentRef.current = [Number(model.get("pos_row")), Number(model.get("pos_col"))];
+      setLocalPosRow(scanPositionCurrentRef.current[0]);
+      setLocalPosCol(scanPositionCurrentRef.current[1]);
+    };
+    const onFrame = () => { if (!model.get("_stream_selected_source")) clear(); };
+    const stop = () => positionRequests.stop();
+    model.on("msg:custom", positionRequests.receive);
+    model.on("change:frame_idx", onFrame);
+    model.on("change:_stream_selected_source change:vi_roi_mode change:compare_dp_mode", clear);
+    model.on("comm_live_update comm:close destroy", stop);
+    return () => {
+      stop(); model.off("msg:custom", positionRequests.receive);
+      model.off("change:frame_idx", onFrame);
+      model.off("change:_stream_selected_source change:vi_roi_mode change:compare_dp_mode", clear);
+      model.off("comm_live_update comm:close destroy", stop);
+    };
+  }, [model, positionRequests]);
   const writeQueuedScanPosition = React.useCallback(() => {
     const pending = scanPositionPendingRef.current;
     if (!pending) return;
@@ -2324,14 +2404,15 @@ function Show4DSTEM() {
     scanPositionCurrentRef.current = [row, col];
     setLocalPosRow(row);
     setLocalPosCol(col);
+    if (!model.get("offline") && positionRequests.request(row, col)) return;
     model.set("pos_row", row);
     model.set("pos_col", col);
     model.save_changes();
-  }, [model]);
+  }, [model, positionRequests]);
   const detectorContext = "frame_idx vi_source view_mode compare_page_idx roi_mode roi_radius roi_radius_inner roi_width roi_height";
   const centerRequests = React.useMemo(() => detectorChannel(detectorViewId(), request => {
     model.send({ type: "show4dstem_detector", version: 1, ...request,
-      context: detectorContext.split(" ").map(name => model.get(name)) });
+      context: interactionContext(model, detectorContext) });
   }, () => {
     if (dpRoiInteractiveRef.current || roiCenterPendingRef.current) return;
     setLocalKRow(Number(model.get("roi_center_row")));
@@ -2343,12 +2424,14 @@ function Show4DSTEM() {
       if (roiCenterRafRef.current !== null) cancelAnimationFrame(roiCenterRafRef.current);
       roiCenterRafRef.current = null;
     };
-    const changes = `${detectorContext} _preset_request offline`.split(" ").map(name => `change:${name}`).join(" ");
+    const onFrame = () => { if (!model.get("_stream_selected_source")) cancel(); };
+    const changes = `${detectorContext.replace("frame_idx", "_stream_selected_source")} _preset_request offline`.split(" ").map(name => `change:${name}`).join(" ");
+    model.on("change:frame_idx", onFrame);
     const disconnect = () => { cancel(); centerRequests.stop(); };
     model.on("msg:custom", centerRequests.receive);
     model.on(changes, cancel);
     model.on("comm_live_update comm:close destroy", disconnect);
-    return () => { disconnect(); model.off("msg:custom", centerRequests.receive);
+    return () => { disconnect(); model.off("change:frame_idx", onFrame); model.off("msg:custom", centerRequests.receive);
       model.off(changes, cancel); model.off("comm_live_update comm:close destroy", disconnect); };
   }, [model, centerRequests]);
   // Offline rendering still uses canonical local traits; live requests pipeline one computation.
@@ -2419,6 +2502,45 @@ function Show4DSTEM() {
   const roiRadiusPendingRef = React.useRef<number | null>(null);
   const roiRadiusInnerPendingRef = React.useRef<number | null>(null);
   const roiRadiusRafRef = React.useRef<number | null>(null);
+  const radiusContext = "frame_idx vi_source view_mode compare_page_idx roi_mode roi_center_row roi_center_col";
+  const clearLocalRadii = React.useCallback(() => {
+    localRadiiRef.current = null;
+    setLocalRadii(null);
+  }, []);
+  const radiusRequests = React.useMemo(() => detectorChannel(detectorViewId(), request => {
+    const {center, ...identity} = request;
+    const radii = [center[0], model.get("roi_mode") === "annular" ? center[1] : 0];
+    model.send({type: "show4dstem_detector_radius", version: 1, ...identity, radii,
+      context: interactionContext(model, radiusContext)});
+  }, () => {
+    if (!dpRoiInteractiveRef.current && !roiRadiusPendingRef.current
+        && roiRadiusInnerPendingRef.current === null) clearLocalRadii();
+  }, "show4dstem_detector_radius_receipt", 2), [model, clearLocalRadii]);
+  React.useEffect(() => {
+    const clear = () => {
+      radiusRequests.clear();
+      if (roiRadiusRafRef.current !== null) cancelAnimationFrame(roiRadiusRafRef.current);
+      roiRadiusRafRef.current = null;
+      roiRadiusPendingRef.current = null;
+      roiRadiusInnerPendingRef.current = null;
+      clearLocalRadii();
+    };
+    const stop = () => { clear(); radiusRequests.stop(); };
+    const onFrame = () => { if (!model.get("_stream_selected_source")) clear(); };
+    const changes = `${radiusContext.replace("frame_idx", "_stream_selected_source")} _preset_request offline`.split(" ").map(name => `change:${name}`).join(" ");
+    model.on("change:frame_idx", onFrame);
+    model.on("msg:custom", radiusRequests.receive);
+    model.on(changes, clear);
+    model.on("comm_live_update comm:close destroy", stop);
+    return () => {
+      // React may replay effect setup, so cleanup must leave the channel reusable.
+      clear();
+      model.off("change:frame_idx", onFrame);
+      model.off("msg:custom", radiusRequests.receive);
+      model.off(changes, clear);
+      model.off("comm_live_update comm:close destroy", stop);
+    };
+  }, [model, radiusRequests, clearLocalRadii]);
   const flushRoiRadius = React.useCallback((paint = true) => {
     if (paint && roiRadiusRafRef.current !== null) cancelAnimationFrame(roiRadiusRafRef.current);
     const updates: Record<string, number> = {};
@@ -2427,11 +2549,20 @@ function Show4DSTEM() {
     roiRadiusPendingRef.current = null;
     roiRadiusInnerPendingRef.current = null;
     if (Object.keys(updates).length) {
-      for (const [name, radius] of Object.entries(updates)) model.set(name, radius);
-      model.save_changes();
+      const outer = updates.roi_radius ?? localRadiiRef.current?.[0] ?? Number(model.get("roi_radius"));
+      const inner = updates.roi_radius_inner ?? localRadiiRef.current?.[1] ?? Number(model.get("roi_radius_inner"));
+      if (!model.get("offline") && folderWatchLive && model.get("vi_source") === "roi"
+          && radiusRequests.request(outer, inner)) {
+        localRadiiRef.current = [outer, inner];
+        setLocalRadii([outer, inner]);
+      } else {
+        for (const [name, radius] of Object.entries(updates)) model.set(name, radius);
+        model.save_changes();
+      }
     }
+    if (!dpRoiInteractiveRef.current && !radiusRequests.isPending()) clearLocalRadii();
     if (paint) roiRadiusRafRef.current = null;
-  }, [model]);
+  }, [model, folderWatchLive, radiusRequests, clearLocalRadii]);
   const sendRoiRadius = React.useCallback((radius: number, boundary: "inner" | "outer" = "outer") => {
     if (boundary === "inner") roiRadiusInnerPendingRef.current = radius;
     else roiRadiusPendingRef.current = radius;
@@ -2569,6 +2700,7 @@ function Show4DSTEM() {
   // the interactive compare recompute (no readback), consumed by the grid painter.
   const [compareGpuVersion, setCompareGpuVersion] = React.useState(0);
   const compareGpuSlotsRef = React.useRef(new Map<number, number>());
+  const compareGpuSnapshotRef = React.useRef<DataView | null>(null);
   const compareGpuRangesRef = React.useRef(new Map<number, { min: number; max: number }>());
   const compareGpuHistogramGenRef = React.useRef(0);
   const compareHistogramPendingSettleRef = React.useRef(false);
@@ -4364,13 +4496,14 @@ function Show4DSTEM() {
   const activeComparePageIdx = Math.max(0, Math.min(activeComparePageCount - 1, Math.round(Number(comparePageIdx || 0))));
   const comparePageStatus = compareAllGroups ? "All groups" : `${activeComparePageIdx + 1}/${activeComparePageCount}`;
   const displayedCompareVirtualImageBytes = React.useMemo(() => {
-    if (activeViSource === "roi") return compareVirtualImageBytes;
+    if (activeViSource === "roi") return streamCompareImages ?? compareVirtualImageBytes;
     const indices = Array.isArray(comparePanelIndices) ? comparePanelIndices : [];
     return viProductStackForIndices(model, indices, shapeRows, shapeCols) ?? compareVirtualImageBytes;
   }, [
     activeViSource,
     comparePanelIndices,
     compareVirtualImageBytes,
+    streamCompareImages,
     model,
     shapeCols,
     shapeRows,
@@ -5265,7 +5398,7 @@ function Show4DSTEM() {
     // panel on WebGPU, just as for a single notebook image. A detector drag
     // must not recolor and histogram every panel on the main thread.
     if (!offline && activeViSource === "roi") {
-      void getGPUDevice().then(async device => {
+      void getGPUDevice().then(device => {
         if (cancelled) return;
         if (!device) {
           updateHostStats();
@@ -5275,14 +5408,19 @@ function Show4DSTEM() {
         }
         const engine = ensureViGpuColormap(device);
         const frames = (comparePanelIndices || []).slice(0, comparePanelCount);
-        const slots = frames.map((frame, index) => {
+        const changes = streamPanelChanges(displayedCompareVirtualImageBytes);
+        const incremental = changes?.base.deref() === compareGpuSnapshotRef.current
+          && frames.every((frame, index) => compareGpuSlotsRef.current.get(frame) === COMPARE_GPU_SLOT_BASE + index);
+        frames.forEach((frame, index) => {
           const slot = COMPARE_GPU_SLOT_BASE + index;
           const start = index * shapeRows * shapeCols;
-          engine.uploadData(slot, rawData.subarray(start, start + shapeRows * shapeCols),
-            shapeCols, shapeRows, undefined, true);
+          if (!incremental || changes!.slots.has(index)) {
+            engine.uploadData(slot, rawData.subarray(start, start + shapeRows * shapeCols),
+              shapeCols, shapeRows, undefined, true);
+          }
           compareGpuSlotsRef.current.set(frame, slot);
-          return slot;
         });
+        compareGpuSnapshotRef.current = displayedCompareVirtualImageBytes;
         const visible = new Set(frames);
         for (const frame of compareGpuSlotsRef.current.keys()) {
           if (!visible.has(frame)) {
@@ -5290,17 +5428,14 @@ function Show4DSTEM() {
             compareGpuRangesRef.current.delete(frame);
           }
         }
-        if (!dpRoiInteractiveRef.current || frames.some(frame => !compareGpuRangesRef.current.has(frame))) {
-          const ranges = await engine.computeRangeBatch(slots);
-          if (cancelled) return;
-          frames.forEach((frame, index) => compareGpuRangesRef.current.set(frame, ranges[index]));
-        }
-        if (cancelled) return;
         if (!dpRoiInteractiveRef.current) {
           compareHistogramPendingSettleRef.current = false;
           updateHostStats();
         }
         setViHistogramData(null);
+        // Present the uploaded slots without waiting for another React commit.
+        // The version still handles initialization and changes to the layout.
+        compareGpuRenderNowRef.current?.();
         setCompareGpuVersion(version => version + 1);
       }).catch(error => {
         if (!cancelled) console.warn("Comparison image GPU upload failed", error);
@@ -6334,8 +6469,8 @@ function Show4DSTEM() {
     const pressed = {
       pointerRow: maskRow,
       pointerCol: maskCol,
-      radius: roiRadiusPendingRef.current ?? Number(model.get("roi_radius")),
-      radiusInner: roiRadiusInnerPendingRef.current ?? Number(model.get("roi_radius_inner") || 0),
+      radius: roiRadiusPendingRef.current ?? roiRadius,
+      radiusInner: roiRadiusInnerPendingRef.current ?? roiRadiusInner,
       width: Number(roiWidth) || 0,
       height: Number(roiHeight) || 0,
     };
@@ -8065,6 +8200,16 @@ function Show4DSTEM() {
     themeColors, themedMenuProps, themedSelect, themedTypography, viColormap, viRoiMode, viRoiRadius,
     viRoiReduce, viScaleMode
   ]);
+  if (nFrames === 0) {
+    return (
+      <Box ref={rootRef} className="show4dstem-root" sx={{ p: 2, bgcolor: themeColors.bg, color: themeColors.text }}>
+        {titleHeading}
+        <Typography role="status" sx={themedTypography.label}>
+          No acquired patterns. Images appear when the detector starts sending data.
+        </Typography>
+      </Box>
+    );
+  }
   return (
     <Box
       ref={rootRef}
@@ -8449,7 +8594,7 @@ function Show4DSTEM() {
             renderGrid={({engine, slots, ranges}) => <CompareVirtualGrid
               kind="diffraction" bytes={undefined} count={compareDiffractionIndices.length}
               indices={compareDiffractionIndices} gpuSlots={slots} gpuRanges={ranges}
-              gpuEngine={engine} labels={frameLabels || []} activeIdx={frameIdx}
+              gpuEngine={engine} labels={frameLabels || []} sourceIds={streamSourceIds} activeIdx={frameIdx}
               shapeRows={detRows} shapeCols={detCols} cols={compareCols || 0}
               colormap={dpColormap} scaleMode={dpScaleMode} vminPct={dpVminPct}
               vmaxPct={dpVmaxPct} autoContrast={false} smooth={false}
@@ -8462,6 +8607,7 @@ function Show4DSTEM() {
               starred={compareStarredPanels || []} reorderMode={compareReorderMode}
               draggingFrame={compareDraggingFrame} pendingMoveFrame={comparePendingMoveFrame}
               maxWidthPx={compareGridWidth} panelGapPx={0}
+              preferredPanelWidthPx={dpPanelWidthPx || panelWidthPx}
               onResizeStart={handleCompareGridResizeStart} onSelect={setFrameIdx}
               onToggleStar={toggleCompareStar} onHide={hideCompareFrame}
               onReorderFrame={moveCompareFrame} onDragFrameChange={setCompareDraggingFrame}
@@ -8470,8 +8616,7 @@ function Show4DSTEM() {
                 setLocalKRow(row);
                 setLocalKCol(col);
                 // All diffraction panels edit the same live virtual detector.
-                // CompareVirtualGrid already coalesces pointer moves with rAF;
-                // use the primary detector's preview and finalization paths.
+                // Use the primary detector's coalesced preview and finalization paths.
                 beginDpRoiInteraction();
                 model.set("roi_active", true);
                 queueRoiCenter(row, col);
@@ -8497,6 +8642,7 @@ function Show4DSTEM() {
               gpuVersion={compareGpuVersion}
               gpuEngine={viGpuColormapRef.current}
               labels={frameLabels || []}
+              sourceIds={streamSourceIds}
               activeIdx={frameIdx}
               shapeRows={shapeRows}
               shapeCols={shapeCols}
@@ -8524,6 +8670,7 @@ function Show4DSTEM() {
               draggingFrame={compareDraggingFrame}
               pendingMoveFrame={comparePendingMoveFrame}
               maxWidthPx={compareGridWidth}
+              preferredPanelWidthPx={viPanelWidthPx || panelWidthPx}
               panelGapPx={0}
               onResizeStart={handleCompareGridResizeStart}
               onSelect={selectCompareFrame}

@@ -6,6 +6,7 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- ShowPtycho takes `phase_damping` and `amplitude_damping` (were `phase_regularization` and `amplitude_regularization`), the Tikhonov damping strengths of quantem.gpu's direct solve; the sliders read **Phase damping** and **Amplitude damping**. The synced traits are `phase_damping`, `amplitude_damping`, `upsampling` and `auto_upsampling` (were `phase_regularization`, `amplitude_regularization`, `upsampling_factor`, `auto_upsampling_factor`). The old keywords keep working with a `DeprecationWarning`; both spellings raise `TypeError`. `calibration.json` is `quantem.ssb-calibration/7` (key `upsampling`, damping strengths) and stars `quantem.ssb-stars/4`; a `/6` calibration still restores, and `scripts/rewrite_ssb_calibration.py` carries `/6` and stars `/3` over.
 - Removed dead code: ShowPtycho's legacy `num_drag_bright_field_pixels` trait (always the full bright-field count), and the adapter's unused `preview_context`, `reconstruct` alias and `SsbSession` alias (use `DirectSession`). Tests call quantem.gpu's `run()` instead of the deprecated `reconstruct()`.
 - Show4DSTEM Compute SSB retires the phase-variance fit and the optimizer choice: the **Fit** menu loses **Phase variance (backup)** (Tilt-corrected and Tilt 0 remain), the `ssb_compute_objective` trait is removed, and `ssb_compute_refinement` is `"auto"` or None. `compute_ssb(objective=...)` and `compute_ssb(refinement="newton" | "nelder-mead")` print one line and run the model fit with quantem.gpu's exact-derivative refinement.
 - ShowPtycho retires its last SSB choices: `phase_estimator="phase_of_mean"` and `fit_regions(refinement=...)` print one line ("... is retired; ...") and change nothing; the retired estimators still raise. Fit Regions now runs quantem.gpu's default exact-gradient fifth-order refinement; it asked for the finite-difference Newton. Its progress reads "200 trials + refinement" instead of "+ Newton". Browser export accepts a review opened with `phase_estimator="phase_of_mean"`. `calibration.json` keeps `"phase_estimator": "phase_of_mean"`; its `reconstruction` for SSB is `{"method": "ssb"}`. Removed the unused `has_higher_order`.
@@ -208,8 +209,8 @@ Changed:
   `[mps]` pins still name rc17, which predates it, until that release;
   `gpu-ref.txt` names the quantem.gpu main commit the bundles build against.
   `SsbSession.open(source, **parameters)` and
-  `SsbSession.find_aberrations(**options)` take quantem.gpu's keywords;
-  `find_aberrations` keywords `refine` to `refinement` (`"nelder-mead"` or
+  `SsbSession.fit_aberrations(**options)` take quantem.gpu's keywords;
+  `fit_aberrations` keywords `refine` to `refinement` (`"nelder-mead"` or
   None), `locked` to `refine_lock`, `sample_tilt` to `tilt`.
   `SsbSession.engine_aberrations`, `SsbSession.vocabulary_aberrations` and
   `adapters.gpu.HIGHER_ORDER_LAYOUT` are removed. In TypeScript,
