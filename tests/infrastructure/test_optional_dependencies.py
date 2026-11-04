@@ -147,7 +147,6 @@ def test_every_widget_imports_and_constructs_without_quantem_or_quantem_gpu(tmp_
 DISTRIBUTION = {"PIL": "pillow", "skimage": "scikit_image", "yaml": "pyyaml", "IPython": "ipython"}
 # Imported only inside the function that needs them, with an install message or a fallback.
 OPTIONAL = {
-    "abtem": "ShowCIF potential preview, the [crystal] extra",
     "cupy": "gpu_info and vram_status on CUDA, brought by quantem.gpu[cuda]",
     "quantem": "quantem.gpu, and quantem core where it installs, guarded at the top of their adapter modules",
     "ipyfilechooser": "FolderPicker, used by quantem.live",

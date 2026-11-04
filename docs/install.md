@@ -120,18 +120,18 @@ pip install -i https://test.pypi.org/simple/ \
 ## Crystal and volume demos
 
 Follow the [interactive demo route](tutorials/demo.md) for ShowCIF, Show3D, and
-Show3DSlices. The ShowCIF potential preview requires abTEM through the `crystal`
-extra:
+Show3DSlices. The ShowCIF potential preview takes its Lobato scattering factors
+from quantem, a base dependency:
 
 ```bash
 python -m pip install -i https://test.pypi.org/simple/ \
-    --extra-index-url https://pypi.org/simple/ 'quantem.widget[crystal]'
+    --extra-index-url https://pypi.org/simple/ quantem.widget
 ```
 
 Check that the installed build includes the API you want to demonstrate; the
 new ShowCIF notebook requires a revision containing ShowCIF. For an unpublished
 source revision, use the [developer setup](https://github.com/electronmicroscopy/quantem.widget/blob/main/CONTRIBUTING.md)
-and install `'.[crystal]'`, then build the JavaScript with `npm run build`.
+and install `'.'`, then build the JavaScript with `npm run build`.
 Use the same Python environment for installation and the notebook kernel.
 
 ## Google Colab

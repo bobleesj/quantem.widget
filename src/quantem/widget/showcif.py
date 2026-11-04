@@ -48,7 +48,8 @@ class ShowCIF(anywidget.AnyWidget):
     num_slices : int, default 16
         Equal-width preview slabs along the selected beam, from 1 to 64.
     potential : bool, default False
-        Enable WebGPU independent-atom potential preview (requires abTEM).
+        Enable WebGPU independent-atom potential preview (Lobato scattering
+        factors from quantem 0.1.10 or later).
         At most 8,192 atoms can contribute to this preview; the atom viewer
         supports up to 250,000. Reduce repeats if the preview is unavailable.
 
@@ -296,8 +297,8 @@ class ShowCIF(anywidget.AnyWidget):
 def projected_atom_table(symbol: str, sigma: float = 0.08) -> np.ndarray:
     """Return a Lobato projected potential table in V Å.
 
-    The radial table is the inverse Hankel transform of abTEM's Lobato
-    projected scattering factor times a Gaussian ``exp(-2 pi² sigma² k²)``:
+    The radial table is the inverse Hankel transform of the Lobato & Van Dyck
+    (2014) projected scattering factor (from quantem) times a Gaussian ``exp(-2 pi² sigma² k²)``:
     ``V(r) = ∫ f(k) exp(-2 pi² sigma² k²) J0(2 pi k r) 2 pi k dk``. The
     Gaussian is an explicit transverse preview filter (``sigma`` in Å, 0.04 to
     0.5), not thermal displacement or a fitted resolution. Samples run every
@@ -310,21 +311,24 @@ def projected_atom_table(symbol: str, sigma: float = 0.08) -> np.ndarray:
     """
     if not np.isfinite(sigma) or not 0.04 <= sigma <= 0.5:
         raise ValueError("potential_sigma_A must be between 0.04 and 0.5 Å.")
+    from ase.data import atomic_numbers
+
+    from quantem.widget._lobato import projected_scattering_factor, require_scattering_factors
+
     try:
-        from abtem.parametrizations import LobatoParametrization
+        require_scattering_factors("The ShowCIF potential preview")
     except ImportError as exc:
-        raise ImportError(
-            'Potential previews require abTEM: pip install "quantem.widget[crystal]", '
-            "or use ShowCIF(..., potential=False) for atoms only."
-        ) from exc
+        raise ImportError(f"{exc} Use ShowCIF(..., potential=False) for atoms only.") from exc
+    if symbol not in atomic_numbers:
+        raise ValueError(f"Unknown element symbol {symbol!r}.")
     # k_max gives exp(-32) Gaussian attenuation. dk resolves the full 8 Å table.
     k = np.linspace(0, 4 / (np.pi * sigma), 2049)
     radius = np.arange(1601, dtype=np.float64) * 0.005
-    spectrum = LobatoParametrization().projected_scattering_factor(symbol)(k * k)
+    spectrum = projected_scattering_factor([atomic_numbers[symbol]], k)[0]
     spectrum = spectrum * np.exp(-2 * np.pi**2 * sigma**2 * k**2) * (2 * np.pi * k)
     table = simpson(j0(2 * np.pi * radius[:, None] * k) * spectrum, x=k, axis=1)
     if not np.all(np.isfinite(table)) or np.min(table) < -1e-3:
-        raise ValueError(f"Invalid projected potential for {symbol}; check the abTEM parameters.")
+        raise ValueError(f"Invalid projected potential for {symbol}; check the Lobato parameters.")
     result = np.maximum(table, 0).astype(np.float32)
     result.flags.writeable = False
     return result

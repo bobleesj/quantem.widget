@@ -1,4 +1,4 @@
-"""Regression shield for the ``save_state`` contract (Plot2D / Show1D / Show2D / Show3D / Show4DSTEM / ShowPDF).
+"""Regression shield for the ``save_state`` contract (Plot2D / Show1D / Show2D / Show3D / Show4DSTEM / ShowPDF / DiffractionSim).
 
 Background: an anywidget syncs its pixel buffers as ``sync=True`` traits. On
 notebook save, ipywidgets serializes those buffers into ``metadata.widgets`` -
@@ -20,6 +20,7 @@ import base64
 
 
 import io
+import json
 
 
 
@@ -33,7 +34,8 @@ import pytest
 from PIL import Image
 
 
-from quantem.widget import Plot2D, Show1D, Show2D, Show3D, Show4DSTEM
+from quantem.widget import DiffractionSim, Plot2D, Show1D, Show2D, Show3D, Show4DSTEM
+from quantem.widget._diffraction_sim_crystal import require_crystal_tools
 
 
 from quantem.widget.show4dstem.export import export_clone
@@ -45,6 +47,21 @@ try:  # ShowPDF needs quantem's PairDistributionFunction API (quantem pull reque
     _pdf_class()
 except ImportError:
     ShowPDF = None
+
+try:  # DiffractionSim needs quantem.diffraction (not installed on Intel Macs and Windows on ARM)
+    require_crystal_tools()
+    _DIFFRACTION_SIM_MISSING = ""
+except ImportError as exc:
+    _DIFFRACTION_SIM_MISSING = str(exc)
+
+
+def _frontend_png_b64() -> str:
+    """A PNG like the one the DiffractionSim frontend captures of its panels."""
+    rng = np.random.default_rng(0)
+    rgb = (rng.random((96, 192, 3)) * 255).astype(np.uint8)
+    buf = io.BytesIO()
+    Image.fromarray(rgb, mode="RGB").save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
 IMAGE_MIME_KEYS = ("image/jpeg", "image/webp", "image/png")
@@ -92,6 +109,15 @@ def _mos2_like_stack(frames: int, rows: int, cols: int) -> np.ndarray:
 def _make(widget, **options):
     """Construct a small instance of each widget plus the trait key that carries
     its live-render pixels (the one that must survive the targeted send path)."""
+    if widget is DiffractionSim:
+        # The pattern is simulated in the browser, so the preview PNG comes
+        # from the frontend; set it here as the frontend would after a redraw.
+        # kossel_json (the Kikuchi reference) is the heavy key.
+        w = DiffractionSim("Al (fcc)", **options)
+        w.kossel_json = json.dumps({"shape": [8, 8], "data": "A" * 344})
+        if not options.get("save_state"):
+            w._static_fallback_jpeg = _frontend_png_b64()
+        return w, "kossel_json"
     if widget is Plot2D:
         data = np.arange(24, dtype=float).reshape(4, 6)
         return Plot2D(data, x=np.arange(6), y=np.arange(4), **options), "data_bytes"
@@ -112,9 +138,13 @@ def _make(widget, **options):
     return Show4DSTEM(np.random.rand(8, 8, 16, 16).astype("float32"), **options), "virtual_image_bytes"
 
 
-WIDGETS = [Plot2D, Show1D, Show2D, Show3D, Show4DSTEM] + ([ShowPDF] if ShowPDF is not None else [])
-# Line plots keep a lossless PNG preview; the image viewers a JPEG.
-PNG_PREVIEW_WIDGETS = (Plot2D, ShowPDF)
+WIDGETS = (
+    [Plot2D, Show1D, Show2D, Show3D, Show4DSTEM]
+    + ([ShowPDF] if ShowPDF is not None else [])
+    + ([] if _DIFFRACTION_SIM_MISSING else [DiffractionSim])
+)
+# Line plots and the browser-drawn DiffractionSim panels keep a lossless PNG preview; the image viewers a JPEG.
+PNG_PREVIEW_WIDGETS = (Plot2D, ShowPDF, DiffractionSim)
 
 
 @pytest.mark.parametrize("widget", WIDGETS)
@@ -767,3 +797,15 @@ def test_show1d_save_state_true_keeps_buffers():
     full = w.get_state()
     assert "snapshot_bytes" in full
     assert "export_payload" in full
+
+
+@pytest.mark.skipif(bool(_DIFFRACTION_SIM_MISSING), reason=_DIFFRACTION_SIM_MISSING)
+def test_diffractionsim_frontend_capture_refreshes_saved_sibling():
+    """The DiffractionSim preview arrives from the frontend after the cell has
+    run, so each new capture must refill the saved-notebook sibling."""
+    w = DiffractionSim("Al (fcc)")
+    calls = []
+    w._static_fallback_fill = lambda: calls.append(w._static_png_b64())
+    png = _frontend_png_b64()
+    w._static_fallback_jpeg = png
+    assert calls == [png]

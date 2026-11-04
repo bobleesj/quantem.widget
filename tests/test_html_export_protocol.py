@@ -6,6 +6,8 @@ import numpy as np
 import pytest
 from ipywidgets.widgets.widget import _instances
 
+from quantem.widget._diffraction_sim_crystal import require_crystal_tools
+from quantem.widget.diffraction_sim import DiffractionSim
 from quantem.widget.show1d import Show1D
 from quantem.widget.show2d import Show2D
 from quantem.widget.show3d import Show3D
@@ -23,6 +25,13 @@ except ImportError:
 EXPORT_WIDGET_CLASSES = (Show1D, Show2D, Show3D, Show3DSlices, Show4DSTEM, ShowDiffraction) + (
     (ShowPDF,) if ShowPDF is not None else ()
 )
+
+try:  # DiffractionSim needs quantem.diffraction (not installed on Intel Macs and Windows on ARM)
+    require_crystal_tools()
+    EXPORT_WIDGET_CLASSES += (DiffractionSim,)
+    _DIFFRACTION_SIM_MISSING = ""
+except ImportError as exc:
+    _DIFFRACTION_SIM_MISSING = str(exc)
 
 
 def _show1d() -> Show1D:
@@ -81,6 +90,10 @@ def _showdiffraction() -> ShowDiffraction:
     return ShowDiffraction(data, title="Protocol ShowDiffraction", verbose=False)
 
 
+def _diffractionsim() -> DiffractionSim:
+    return DiffractionSim("Al (fcc)", zone_axis=[0, 0, 1], title="Protocol DiffractionSim")
+
+
 def _showpdf():
     rr, cc = np.mgrid[0:16, 0:16]
     rad = np.hypot(rr - 7.5, cc - 7.5)
@@ -103,6 +116,9 @@ EXPORT_WIDGET_CASES = (
                   "exact float32 curves + quantized uint8 profiles", "Protocol ShowPDF", id="showpdf"),)
     if ShowPDF is not None
     else ()
+) + (
+    pytest.param(_diffractionsim, {}, {}, "1 crystal, no image data", "Protocol DiffractionSim", id="diffractionsim",
+                 marks=pytest.mark.skipif(bool(_DIFFRACTION_SIM_MISSING), reason=_DIFFRACTION_SIM_MISSING)),
 )
 
 

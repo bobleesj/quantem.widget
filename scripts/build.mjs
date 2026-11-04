@@ -4,6 +4,7 @@
 //
 //   npm run build                     all bundles
 //   npm run build -- show2d show3d    only the named bundles
+//   npm run build:web                 only the web-page bundles (WEB_BUNDLES below)
 //
 // Every build first syncs js/.generated/engine from quantem.gpu (QUANTEM_GPU_SRC
 // or an installed quantem.gpu; CI checks out the ref in gpu-ref.txt): show4dstem
@@ -15,6 +16,16 @@ import { copyFileSync, mkdirSync, rmSync } from "fs";
 import { syncGpuWebgpuSources } from "./sync-gpu-webgpu.mjs";
 
 const watch = process.argv.includes("--watch");
+const baseOpts = {
+  bundle: true,
+  format: "esm",
+  jsx: "automatic",
+  target: "es2022",
+  define: { "process.env.NODE_ENV": '"production"' },
+  minify: true,
+  sourcemap: false,
+  legalComments: "none",
+};
 const widgets = [
   "plot2d",
   "show1d",
@@ -27,11 +38,31 @@ const widgets = [
   "showptycho",
   "chooselattice",
   "showcif",
+  "diffractionsim",
 ];
+// Framework-free bundles for web pages, built only by `npm run build:web`: one self-contained ESM
+// file each, with `export default { render }`, written into the quantem.diffsim package (PyPI),
+// which serves them to web pages and Dash apps. The MyST `anywidget` directive loads the same file.
+const WEB_BUNDLES = [
+  {
+    entry: "js/diffractionsim-web/index.ts",
+    outfile: "packages/quantem.diffsim/src/quantem/diffsim/static/diffraction-sim.js",
+  },
+];
+const webOnly = process.argv.includes("--web-only");
 const requested = process.argv.slice(2).filter((arg) => !arg.startsWith("--"));
 const unknown = requested.filter((name) => !widgets.includes(name));
 if (unknown.length) throw new Error(`unknown bundle(s): ${unknown.join(", ")}`);
 const selected = requested.length ? widgets.filter((name) => requested.includes(name)) : widgets;
+
+if (webOnly) {
+  for (const web of WEB_BUNDLES) {
+    const start = Date.now();
+    await build({ ...baseOpts, entryPoints: [web.entry], outfile: web.outfile });
+    console.log(`built ${web.outfile} (${Date.now() - start}ms)`);
+  }
+  process.exit(0);
+}
 
 try {
   syncGpuWebgpuSources();
@@ -45,17 +76,6 @@ if (!requested.length) rmSync("src/quantem/widget/static", { recursive: true, fo
 mkdirSync("src/quantem/widget/static", { recursive: true });
 // The wheel names the quantem.gpu sources its bundles carry; quantem.widget.profile() prints it.
 copyFileSync("js/.generated/engine/MANIFEST.json", "src/quantem/widget/static/engine-manifest.json");
-
-const baseOpts = {
-  bundle: true,
-  format: "esm",
-  jsx: "automatic",
-  target: "es2022",
-  define: { "process.env.NODE_ENV": '"production"' },
-  minify: true,
-  sourcemap: false,
-  legalComments: "none",
-};
 
 for (const name of selected) {
   const opts = {

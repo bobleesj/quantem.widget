@@ -88,6 +88,7 @@ the kernel's working directory instead, as `export_html()` does.
 | Show4DSTEM | `dtype="uint8"`, `"uint16"` | `detector_bin`, `scan_bin`: `1`, `2`, `4`, `8` | mean bin; `uint8` clips counts above 255 and says how many; `export_kind="interactive"` packs the counts into the page and refuses above 2 GiB, naming the least binning that fits; `export_kind="report"` writes static PNG virtual-image pages with no raw 4D |
 | ShowDiffraction | `full` (float32) | none | exact float32 frames |
 | ShowPDF | `full`, `uint8` | none | `full` stores the float32 curves; `uint8` adds every scan position's radial profile (8 bits per k bin) so mask, probe and line selections recompute in the browser |
+| DiffractionSim | `full` | none | no image data; embeds the crystal reflection list, the settings and the Kikuchi reference when computed; `presets=` embeds more structures for the crystal menu |
 
 ## Single-file exports
 

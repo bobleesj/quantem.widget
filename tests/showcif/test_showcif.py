@@ -8,6 +8,7 @@ Atoms = pytest.importorskip("ase").Atoms
 from ase.io import write
 
 from quantem.widget import ShowCIF
+from quantem.widget._lobato import QUANTEM_REQUIREMENT, scattering_factors_available
 from quantem.widget.showcif import projected_atom_table
 
 
@@ -158,35 +159,36 @@ def test_specimen_tilt_is_display_state_only():
 # --- potential preview ----------------------------------------------------------------
 
 
-@pytest.mark.parametrize("symbol", ["O", "Ti"])
-def test_projected_table_matches_abtem_potential_blurred_in_real_space(symbol):
-    """The radial Fourier table equals abTEM's Lobato projected potential convolved with the Gaussian.
+needs_lobato = pytest.mark.skipif(not scattering_factors_available(), reason=f"needs {QUANTEM_REQUIREMENT}")
 
-    The reference is computed the other way round, in real space: a 2D Gaussian
-    convolution of a radial function reduces to ``∫ V(t) t/σ² exp(-(r-t)²/2σ²) I0e(rt/σ²) dt``.
-    """
-    pytest.importorskip("abtem")
-    from abtem.parametrizations import LobatoParametrization
-    from scipy.integrate import quad, simpson
-    from scipy.special import i0e
+# Reference values from abTEM 1.0.10 (LobatoParametrization, which the preview used before): the projected
+# scattering factor in V Å^3 at k = 0, and the radial table in V Å at r = 0, 0.1, 0.3, 1 and 2 Å.
+ABTEM_F0 = {"O": 97.1497, "Ti": 420.352, "Ba": 874.706, "Au": 506.344}
+ABTEM_TABLE = {
+    ("O", 0.08): [292.311, 232.467, 83.7375, 2.97188, 0.0367903],
+    ("Ti", 0.08): [722.101, 572.234, 219.441, 27.1521, 3.66128],
+    ("Ba", 0.08): [1514.61, 1172.97, 411.173, 52.5606, 9.52267],
+    ("Au", 0.2): [744.532, 693.886, 411.499, 22.7967, 1.06273],
+}
 
-    sigma = 0.08
-    potential = LobatoParametrization().projected_potential(symbol)
+
+@needs_lobato
+@pytest.mark.parametrize("symbol, sigma", sorted(ABTEM_TABLE))
+def test_projected_table_matches_abtem_and_keeps_the_projected_integral(symbol, sigma):
+    """quantem's Lobato factors give abTEM's tables, and the blur conserves the radial integral (f(k=0))."""
+    from scipy.integrate import simpson
+
     table = projected_atom_table(symbol, sigma)
-    for r in (0, 0.3, 1.0):
-        def integrand(t, r=r):
-            v = float(potential(np.array([t]))[0])
-            return v * t / sigma**2 * np.exp(-((r - t) ** 2) / (2 * sigma**2)) * i0e(r * t / sigma**2)
-        expected = quad(integrand, 0, max(2, r + 1), epsabs=1e-7, points=[r] if r else None)[0]
-        np.testing.assert_allclose(table[round(r / 0.005)], expected, rtol=2e-4, atol=2e-4)
-    # the blur redistributes potential but conserves its radial integral (f(k=0))
+    assert table.dtype == np.float32 and table.shape == (1601,) and not table.flags.writeable
+    for r, expected in zip([0, 0.1, 0.3, 1, 2], ABTEM_TABLE[(symbol, sigma)]):
+        assert table[round(r / 0.005)] == pytest.approx(expected, rel=1e-4, abs=1e-4)
     radius = np.arange(1601) * 0.005
-    expected_integral = LobatoParametrization().projected_scattering_factor(symbol)(np.array([0.0]))[0]
-    np.testing.assert_allclose(simpson(2 * np.pi * radius * table, x=radius), expected_integral, rtol=5e-4)
+    # abTEM evaluates with a float32 pi: agreement to about 1e-5
+    np.testing.assert_allclose(simpson(2 * np.pi * radius * table, x=radius), ABTEM_F0[symbol], rtol=1e-4)
 
 
+@needs_lobato
 def test_potential_tables_follow_the_sigma_control_and_never_touch_atoms():
-    pytest.importorskip("abtem")
     atoms = Atoms("BaO", positions=[[0, 0, 0], [1, 1, 1]], cell=[4, 4, 4], pbc=True)
     plain = ShowCIF(atoms)
     preview = ShowCIF(atoms, potential=True, num_slices=16, energy_keV=300, potential_quantity="phase", potential_colormap="magma")

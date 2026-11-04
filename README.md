@@ -121,8 +121,7 @@ tensors on any device.
 Follow the [crystal-to-volume demo route](docs/tutorials/demo.md): inspect a
 crystal with **ShowCIF**, then explore depth using **Show3D** and **Show3DSlices**.
 The notebooks include runnable models, physical units, and controls to try.
-The ShowCIF potential preview needs the `crystal` extra (abTEM); new APIs
-require a source build containing them. The guide includes setup and browser requirements.
+New APIs require a source build containing them. The guide includes setup and browser requirements.
 
 ## Widgets
 
@@ -139,6 +138,7 @@ require a source build containing them. The guide includes setup and browser req
 | `ShowPDF` | Pair distribution function analysis of 4D-STEM data by scan region | [API](https://electronmicroscopy.github.io/quantem.widget/api/showpdf.html) |
 | `ChooseLattice` | Select an origin and lattice vectors | [API](https://electronmicroscopy.github.io/quantem.widget/api/choose-lattice.html) |
 | `ShowCIF` | Crystal repeats, columns, tilt, and projected potential/phase previews | [tutorial](docs/tutorials/showcif.ipynb) · [API](docs/api/showcif.md) |
+| `DiffractionSim` | Rotate a crystal and see its nanobeam, CBED, or Kikuchi pattern, computed in the browser | [API](docs/api/diffractionsim.md) |
 
 ## Documentation
 

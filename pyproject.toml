@@ -57,8 +57,9 @@ mps = ["quantem.gpu[mps]>=0.0.1rc17,<0.0.1rc18; sys_platform == 'darwin' and pla
 # Uploading new tutorial datasets to the shared Hugging Face hub (downloads need
 # only huggingface_hub). quantem.data is not on PyPI, so it stays an extra.
 hub = ["quantem.data>=0.0.1rc1"]
-# ShowCIF(potential=True) projects atoms with abTEM's Lobato parametrization
-crystal = ["abtem>=1.0"]
+# ShowCIF and DiffractionSim need only the base dependencies (ASE, and quantem for the Lobato and
+# Weickenmeier-Kohl scattering factors). The extra is kept, empty, so existing install lines keep working.
+crystal = []
 test = [
     "ipykernel>=6",
     "pytest>=8",

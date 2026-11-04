@@ -51,5 +51,6 @@ readers and test agents.
 | [ShowPDF](showpdf) | `quantem.widget.showpdf.ShowPDF` | state JSON, results zip (CSV), PNG/PDF/TIFF curves, interactive HTML (`encoding="full"` / `encoding="uint8"`) |
 | [ChooseLattice](choose-lattice) | `quantem.widget.choose_lattice.ChooseLattice` | state JSON (`save_state=True`) |
 | [ShowCIF](showcif) | `quantem.widget.ShowCIF` | Interactive HTML with embedded coordinates |
+| [DiffractionSim](diffractionsim) | `quantem.widget.DiffractionSim` | state JSON, PNG, interactive HTML |
 
 All widget-level HTML exports follow the [HTML export](html-export) protocol.

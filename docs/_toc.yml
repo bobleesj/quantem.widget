@@ -82,6 +82,7 @@ parts:
           - file: api/showpdf
           - file: api/choose-lattice
           - file: api/showcif
+          - file: api/diffractionsim
           - file: api/html-export
           - file: api/io
           - file: api/load

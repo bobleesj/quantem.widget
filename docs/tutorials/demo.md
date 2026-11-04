@@ -17,7 +17,7 @@ experimental BTO reconstruction or a quantitative multislice simulation.
 ## Prepare once
 
 Follow [Installation](../install.md) in the **same environment as the Jupyter
-kernel**. The ShowCIF potential preview needs the `crystal` extra (abTEM). Each notebook calls
+kernel**. Each notebook calls
 `qw.profile()` so a presenter can record the actual environment.
 
 The ShowCIF example requires a source build containing that API. For a clone of this revision:
