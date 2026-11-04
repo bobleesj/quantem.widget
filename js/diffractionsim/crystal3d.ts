@@ -47,9 +47,9 @@ export interface CellGeometry {
 /**
  * Geometry of an na x nb x nc block of cells. Atoms on the block boundary
  * are repeated (the corner atoms of fcc all appear). Polyhedra are drawn
- * around every species except the most numerous one (cations in an oxide;
- * every atom of an elemental crystal), using neighbours within
- * 1.2 (r_i + r_j) of the covalent radii, including atoms outside the block.
+ * around the centres chosen by polyhedronSites that have 4 to 8 bonded
+ * neighbours within 1.2 (r_i + r_j) of the covalent radii, including atoms
+ * outside the block.
  */
 export function cellGeometry(c: CrystalData, nCells: [number, number, number] = [1, 1, 1], polyhedra = false): CellGeometry {
   const cell = c.cell;
@@ -101,31 +101,24 @@ export function cellGeometry(c: CrystalData, nCells: [number, number, number] = 
 
   const faces: Face[] = [];
   if (polyhedra) {
-    const counts = new Map<string, number>();
-    for (const s of c.symbols) counts.set(s, (counts.get(s) || 0) + 1);
-    const species = [...counts.keys()];
-    let centres = new Set(species);
-    if (species.length > 1) {
-      const most = species.reduce((a, b) => ((counts.get(a) || 0) >= (counts.get(b) || 0) ? a : b));
-      centres = new Set(species.filter((s) => s !== most));
-    }
+    const { centre, ligand } = polyhedronSites(c, cart);
     const cutoffMax = 1.2 * 2 * Math.max(...c.radii);
     for (let i = 0; i < halo.length; i++) {
       if (!inBlock[i]) continue;
       const si = halo[i].species;
-      if (!centres.has(c.symbols[si])) continue;
+      if (!centre[si]) continue;
       const pi = halo[i].pos;
       const nbr: Vec3[] = [];
       for (let j = 0; j < halo.length; j++) {
         if (j === i) continue;
         const sj = halo[j].species;
-        if (species.length > 1 && c.symbols[sj] === c.symbols[si]) continue;
+        if (!ligand[sj]) continue;
         const pj = halo[j].pos;
         const d = Math.hypot(pj[0] - pi[0], pj[1] - pi[1], pj[2] - pi[2]);
         if (d > cutoffMax) continue;
         if (d <= 1.2 * (c.radii[si] + c.radii[sj])) nbr.push(pj);
       }
-      if (nbr.length >= 4 && nbr.length <= 14) {
+      if (nbr.length >= 4 && nbr.length <= 8) {
         for (const poly of convexHullFaces(nbr, pi)) faces.push({ verts: poly, color: rgb(c.colors[si]) });
       }
     }
@@ -137,6 +130,60 @@ export function cellGeometry(c: CrystalData, nCells: [number, number, number] = 
     atoms, corners, edges, innerEdges, faces,
     axes: [cell[0] as Vec3, cell[1] as Vec3, cell[2] as Vec3], origin: corners[0], radius: radius + 0.5,
   };
+}
+
+/**
+ * Sites that get a polyhedron (centre) and sites they bond to (ligand). In a
+ * compound the ligands are the most numerous species (the anions of an
+ * oxide) and every other site is a centre, so cations do not bond to each
+ * other (Ti in SrTiO3 gets TiO6, not the Sr cube). In an elemental crystal
+ * polyhedra on every atom interpenetrate, so they are drawn on one set of a
+ * two-set neighbour network (one fcc sublattice of diamond), choosing the set
+ * with fewer sites on the cell boundary so its polyhedra stay inside the
+ * cell. Other elemental crystals (fcc, bcc and hcp metals) get none.
+ */
+function polyhedronSites(c: CrystalData, cart: (f: number[]) => Vec3): { centre: boolean[]; ligand: boolean[] } {
+  const n = c.symbols.length;
+  const counts = new Map<string, number>();
+  for (const s of c.symbols) counts.set(s, (counts.get(s) || 0) + 1);
+  const species = [...counts.keys()];
+  if (species.length > 1) {
+    const most = species.reduce((a, b) => ((counts.get(a) || 0) >= (counts.get(b) || 0) ? a : b));
+    return { centre: c.symbols.map((s) => s !== most), ligand: c.symbols.map((s) => s === most) };
+  }
+  const eps = 1e-4;
+  const frac = c.positions_frac.map((f) => f.map((x) => x - Math.floor(x + eps)));
+  const pos = frac.map(cart);
+  const adj: number[][] = Array.from({ length: n }, () => []);
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+    for (let sx = -2; sx <= 2; sx++) for (let sy = -2; sy <= 2; sy++) for (let sz = -2; sz <= 2; sz++) {
+      const p = cart([frac[j][0] + sx, frac[j][1] + sy, frac[j][2] + sz]);
+      const d = Math.hypot(p[0] - pos[i][0], p[1] - pos[i][1], p[2] - pos[i][2]);
+      if (d > 1e-6 && d <= 1.2 * (c.radii[i] + c.radii[j])) adj[i].push(j);
+    }
+  }
+  const none = { centre: new Array<boolean>(n).fill(false), ligand: new Array<boolean>(n).fill(true) };
+  const colour = new Array<number>(n).fill(-1);
+  for (let s = 0; s < n; s++) {
+    if (colour[s] >= 0) continue;
+    colour[s] = 0;
+    const queue = [s];
+    while (queue.length) {
+      const i = queue.shift()!;
+      for (const j of adj[i]) {
+        if (colour[j] < 0) {
+          colour[j] = 1 - colour[i];
+          queue.push(j);
+        } else if (colour[j] === colour[i]) {
+          return none;
+        }
+      }
+    }
+  }
+  const onBoundary = [0, 0];
+  for (let i = 0; i < n; i++) if (frac[i].some((x) => x < eps)) onBoundary[colour[i]]++;
+  const keep = onBoundary[1] < onBoundary[0] ? 1 : 0;
+  return { centre: colour.map((k) => k === keep), ligand: none.ligand };
 }
 
 /** Faces of the convex hull of a few points (brute force, n <= 14), as outward-ordered polygons. */
