@@ -143,7 +143,7 @@ def _session(scan: int = SCAN):
         pytest.importorskip("quantem.gpu.device").detect()
     except RuntimeError as exc:
         pytest.skip(f"SSB needs CUDA or MPS: {exc}")
-    return gpu.SSB(_counts(scan), voltage_kV=300.0, semiangle_mrad=20.0, scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5.0, 5.0),
+    return gpu.DirectPtycho(_counts(scan), voltage_kV=300.0, semiangle_mrad=20.0, scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5.0, 5.0),
                    aberrations=dict(START), scan_detector_rotation_deg=10.0)
 
 
@@ -173,7 +173,7 @@ def test_small_scan_calibration_and_region_bounds_exclude_fft_padding(tmp_path, 
         r0, r1, c0, c1 = bounds
         return phase[(r0 + top) * factor:(r1 + top) * factor, (c0 + left) * factor:(c1 + left) * factor]
 
-    with gpu.SSB.open(str(source), aberrations=START, **options) as session:
+    with gpu.DirectPtycho.open(str(source), aberrations=START, **options) as session:
         viewer = ShowPtycho(session, save_dir=tmp_path, local_tilt=True)
         factor = viewer.auto_upsampling
         assert session.input_scan_shape == (96, 80) and session.scan_shape == (128, 128)
@@ -207,8 +207,8 @@ def test_small_scan_calibration_and_region_bounds_exclude_fft_padding(tmp_path, 
 
     def no_refit(*args, **kwargs):
         raise AssertionError("Saved regions should reconstruct without another search.")
-    monkeypatch.setattr(gpu.SSB, "fit_aberrations", no_refit)
-    with gpu.SSB.open(str(source), **options) as reopened:
+    monkeypatch.setattr(gpu.DirectPtycho, "fit_aberrations", no_refit)
+    with gpu.DirectPtycho.open(str(source), **options) as reopened:
         viewer = ShowPtycho(reopened, save_dir=tmp_path, local_tilt=True)
         np.testing.assert_array_equal(viewer.region_images["Region 1 · SSB"], expected)
         viewer.close()
@@ -252,7 +252,7 @@ def test_native_regions_fit_joint_models_without_replacing_the_overview(tmp_path
         pytest.skip("Needs CUDA or MPS")
     source = tmp_path / "scan.npy"
     np.save(source, _counts())
-    with gpu.SSB.open(
+    with gpu.DirectPtycho.open(
         str(source), voltage_kV=300, semiangle_mrad=20,
         scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5, 5),
         aberrations=START,
@@ -357,8 +357,8 @@ def test_native_regions_fit_joint_models_without_replacing_the_overview(tmp_path
         viewer.close()
     def no_refit(*args, **kwargs):
         raise AssertionError("Saved regions should reconstruct without another search.")
-    monkeypatch.setattr(gpu.SSB, "fit_aberrations", no_refit)
-    with gpu.SSB.open(str(source), voltage_kV=300, semiangle_mrad=20,
+    monkeypatch.setattr(gpu.DirectPtycho, "fit_aberrations", no_refit)
+    with gpu.DirectPtycho.open(str(source), voltage_kV=300, semiangle_mrad=20,
                       scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5, 5)) as reopened:
         viewer = ShowPtycho(reopened, local_tilt=True, save_dir=tmp_path)
         assert viewer.region_fits == expected_fits
@@ -371,7 +371,7 @@ def test_native_regions_fit_joint_models_without_replacing_the_overview(tmp_path
         viewer.regions = []
         viewer.save_trigger += 1
         viewer.close()
-    with gpu.SSB.open(str(source), voltage_kV=300, semiangle_mrad=20,
+    with gpu.DirectPtycho.open(str(source), voltage_kV=300, semiangle_mrad=20,
                       scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5, 5)) as reopened:
         viewer = ShowPtycho(reopened, local_tilt=True, save_dir=tmp_path)
         assert viewer.regions == [] and viewer.region_images == {}
@@ -757,14 +757,14 @@ def test_export_writes_the_browser_folder_from_exact_bf_counts(widget, ssb, tmp_
 @pytest.mark.parametrize("transposed", [False, True])
 def test_qem_export_reuses_the_acquisition_and_preserves_the_live_phase(ssb, tmp_path, monkeypatch, transposed):
     """A scientist can export an unchanged QEM session without another encode."""
-    from quantem.gpu import SSB, io
+    from quantem.gpu import DirectPtycho, io
 
     acquisition_dir = tmp_path / "acquisition"
     acquisition_dir.mkdir()
     path = acquisition_dir / "measured.qem"
     io.save(path, _counts(), backend="cpu")  # portable synthetic reference file
     original_bytes = path.read_bytes()
-    session = SSB.open(
+    session = DirectPtycho.open(
         str(path), voltage_kV=300.0, semiangle_mrad=20.0,
         scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5.0, 5.0),
         bright_field_radius_px=4.0, bright_field_center_px=(7.5, 7.5),
@@ -851,7 +851,7 @@ def test_replacing_an_export_link_keeps_both_external_sources(tmp_path):
 @pytest.mark.parametrize("replace_when", ["before session", "after session"])
 def test_replaced_qem_header_falls_back_even_when_size_and_mtime_match(ssb, tmp_path, replace_when):
     """A reused pathname must not silently bind a loaded session to another source."""
-    from quantem.gpu import SSB, io
+    from quantem.gpu import DirectPtycho, io
 
     source, replacement = tmp_path / "scan.qem", tmp_path / "replacement.qem"
     counts = _counts()
@@ -868,7 +868,7 @@ def test_replaced_qem_header_falls_back_even_when_size_and_mtime_match(ssb, tmp_
     with io.load(source) as data:
         if replace_when == "before session":
             replace_source()
-        with SSB(data, voltage_kV=300.0, semiangle_mrad=20.0,
+        with DirectPtycho(data, voltage_kV=300.0, semiangle_mrad=20.0,
                  scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5.0, 5.0),
                  aberrations=dict(START), scan_detector_rotation_deg=10.0) as session:
             if replace_when == "after session":
@@ -920,7 +920,7 @@ def test_crop_and_refit_keeps_the_acquisition_and_reopens_as_a_scan_region_sessi
                        scan_detector_rotation_deg=10.0, scan_detector_rotation_flipped=True)
     region = (16, 112, 8, 104)
     with gpu.io.load(str(source)) as data:
-        with gpu.SSB(data, aberrations=START, **calibration) as ssb:
+        with gpu.DirectPtycho(data, aberrations=START, **calibration) as ssb:
             viewer = ShowPtycho(ssb, save_dir=tmp_path)
             assert viewer.crop_refit_available
             viewer.crop_refit_request_json = json.dumps({"scan_region": list(region), "num_trials": 2})
@@ -946,9 +946,9 @@ def test_crop_and_refit_keeps_the_acquisition_and_reopens_as_a_scan_region_sessi
     def no_search(*args, **kwargs):
         raise AssertionError("Restoring a saved model must not run optimization.")
 
-    monkeypatch.setattr(gpu.SSB, "fit_aberrations", no_search)
+    monkeypatch.setattr(gpu.DirectPtycho, "fit_aberrations", no_search)
     with gpu.io.load(str(source)) as data:
-        with gpu.SSB(data, scan_region=region, **calibration) as reopened:
+        with gpu.DirectPtycho(data, scan_region=region, **calibration) as reopened:
             restored = ShowPtycho(reopened, save_dir=tmp_path)
             assert restored.calibration_status == "Restored saved fit of scan region [16, 112, 8, 104]"
             np.testing.assert_array_equal(_shown(restored), expected)
@@ -965,7 +965,7 @@ def test_session_scale_bar_uses_the_column_scan_step():
         pytest.importorskip("quantem.gpu.device").detect()
     except RuntimeError as exc:
         pytest.skip(f"SSB needs CUDA or MPS: {exc}")
-    session = gpu.SSB(_counts(SCAN), voltage_kV=300.0, semiangle_mrad=20.0, scan_sampling_A=(0.5, 0.25), detector_sampling_mrad=(5.0, 5.0),
+    session = gpu.DirectPtycho(_counts(SCAN), voltage_kV=300.0, semiangle_mrad=20.0, scan_sampling_A=(0.5, 0.25), detector_sampling_mrad=(5.0, 5.0),
                       aberrations=dict(START), scan_detector_rotation_deg=10.0)
     # the trait holds both steps; the browser's horizontal bar reads the column one
     assert ShowPtycho(session).scan_sampling_A == [0.5, 0.25]
@@ -1317,7 +1317,7 @@ def test_launch_table_only_repeats_file_values_when_overridden(widget, monkeypat
 def test_automatic_detector_sampling_is_retained_in_saved_calibration(tmp_path):
     """Fit the disk automatically and save the calibration actually used."""
     gpu = pytest.importorskip("quantem.gpu")
-    with gpu.SSB(_counts(), voltage_kV=300.0, semiangle_mrad=20.0,
+    with gpu.DirectPtycho(_counts(), voltage_kV=300.0, semiangle_mrad=20.0,
                  scan_sampling_A=(0.5, 0.5), scan_detector_rotation_deg=0.0) as ssb:
         viewer = ShowPtycho(ssb, save_dir=tmp_path)
         sampling = ssb.detector_sampling_mrad
@@ -1337,7 +1337,7 @@ def test_restart_restores_the_complete_saved_full_field_without_refitting(tmp_pa
     np.save(source, _counts())
     calibration = dict(voltage_kV=300, semiangle_mrad=20,
                        scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5, 5))
-    with gpu.SSB.open(str(source), **calibration) as ssb:
+    with gpu.DirectPtycho.open(str(source), **calibration) as ssb:
         viewer = ShowPtycho(ssb, save_dir=tmp_path)
         viewer.upsampling = 2
         viewer.scan_detector_rotation_deg = 12
@@ -1355,8 +1355,8 @@ def test_restart_restores_the_complete_saved_full_field_without_refitting(tmp_pa
     def no_search(*args, **kwargs):
         raise AssertionError("Restoring a saved model must not run optimization.")
 
-    monkeypatch.setattr(gpu.SSB, "fit_aberrations", no_search)
-    with gpu.SSB.open(str(source), **calibration) as reopened:
+    monkeypatch.setattr(gpu.DirectPtycho, "fit_aberrations", no_search)
+    with gpu.DirectPtycho.open(str(source), **calibration) as reopened:
         factors = []
         preview = reopened.preview
 
@@ -1390,7 +1390,7 @@ def test_restart_restores_the_complete_saved_full_field_without_refitting(tmp_pa
         restored.save_trigger += 1
         restored.close()
     # Saving a restored, rotated model must retain its original launch identity.
-    with gpu.SSB.open(str(source), **calibration) as reopened:
+    with gpu.DirectPtycho.open(str(source), **calibration) as reopened:
         restored = ShowPtycho(reopened, save_dir=tmp_path)
         np.testing.assert_array_equal(_shown(restored), expected)
         restored.close()
@@ -1434,7 +1434,7 @@ def test_a_saved_fit_restores_after_its_data_folder_moves_and_names_no_absolute_
     folder.mkdir()
     np.save(folder / "scan.npy", _counts())
     calibration = dict(voltage_kV=300, semiangle_mrad=20, scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5, 5))
-    with gpu.SSB.open(str(folder / "scan.npy"), **calibration) as ssb:
+    with gpu.DirectPtycho.open(str(folder / "scan.npy"), **calibration) as ssb:
         viewer = ShowPtycho(ssb, save_dir=folder)
         viewer.upsampling = 1
         viewer.request_json = json.dumps({"id": 1, **START, "committed": True})
@@ -1453,13 +1453,13 @@ def test_a_saved_fit_restores_after_its_data_folder_moves_and_names_no_absolute_
     moved = tmp_path / "elsewhere" / "session"
     moved.parent.mkdir()
     shutil.move(folder, moved)
-    with gpu.SSB.open(str(moved / "scan.npy"), **calibration) as reopened:
+    with gpu.DirectPtycho.open(str(moved / "scan.npy"), **calibration) as reopened:
         restored = ShowPtycho(reopened, save_dir=moved)
         assert restored.calibration_status == "Restored saved full-field fit"
         np.testing.assert_array_equal(_shown(restored), expected)
         restored.close()
     np.save(moved / "scan.npy", _counts() + 1)
-    with gpu.SSB.open(str(moved / "scan.npy"), **calibration) as other:
+    with gpu.DirectPtycho.open(str(moved / "scan.npy"), **calibration) as other:
         viewer = ShowPtycho(other, save_dir=moved)
         assert "acquisition or launch calibration has changed" in viewer.calibration_status
         viewer.close()
@@ -1475,7 +1475,7 @@ def test_a_flipped_session_records_its_flip_in_every_file_and_restores(tmp_path,
     calibration = dict(voltage_kV=300, semiangle_mrad=20, scan_sampling_A=(0.5, 0.5),
                        detector_sampling_mrad=(5, 5), scan_detector_rotation_deg=10.0,
                        scan_detector_rotation_flipped=True)
-    with gpu.SSB.open(str(source), aberrations=START, **calibration) as ssb:
+    with gpu.DirectPtycho.open(str(source), aberrations=START, **calibration) as ssb:
         assert ssb.scan_detector_rotation_flipped
         viewer = ShowPtycho(ssb, save_dir=tmp_path)
         viewer.upsampling = 1
@@ -1496,8 +1496,8 @@ def test_a_flipped_session_records_its_flip_in_every_file_and_restores(tmp_path,
     def no_search(*args, **kwargs):
         raise AssertionError("Restoring a saved model must not run optimization.")
 
-    monkeypatch.setattr(gpu.SSB, "fit_aberrations", no_search)
-    with gpu.SSB.open(str(source), **calibration) as reopened:
+    monkeypatch.setattr(gpu.DirectPtycho, "fit_aberrations", no_search)
+    with gpu.DirectPtycho.open(str(source), **calibration) as reopened:
         restored = ShowPtycho(reopened, save_dir=tmp_path)
         assert restored.calibration_status == "Restored saved full-field fit"
         assert reopened.scan_detector_rotation_flipped and restored.scan_detector_rotation_deg == 12
@@ -1505,7 +1505,7 @@ def test_a_flipped_session_records_its_flip_in_every_file_and_restores(tmp_path,
         np.testing.assert_array_equal(_shown(restored), expected)
         restored.close()
     # The same counts opened unflipped are another geometry: the flipped fit is not reused.
-    with gpu.SSB.open(str(source), **{**calibration, "scan_detector_rotation_flipped": False}) as other:
+    with gpu.DirectPtycho.open(str(source), **{**calibration, "scan_detector_rotation_flipped": False}) as other:
         viewer = ShowPtycho(other, save_dir=tmp_path)
         assert "Saved fit not restored" in viewer.calibration_status
         viewer.close()
@@ -1525,7 +1525,7 @@ def test_a_save_made_after_a_180_degree_move_reopens_at_the_launch_rotation(tmp_
     source = tmp_path / "scan.npy"
     np.save(source, _counts())
     calibration = dict(voltage_kV=300, semiangle_mrad=20, scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5, 5))
-    with gpu.SSB.open(str(source), **calibration) as ssb:
+    with gpu.DirectPtycho.open(str(source), **calibration) as ssb:
         launch = ssb.scan_detector_rotation_deg  # estimated from the centre-of-mass curl
         moved = opposite_rotation_deg(launch)
         ssb.set_rotation(moved)  # where fit_aberrations' 180-degree check leaves it
@@ -1539,8 +1539,8 @@ def test_a_save_made_after_a_180_degree_move_reopens_at_the_launch_rotation(tmp_
     def no_search(*args, **kwargs):
         raise AssertionError("Restoring a saved model must not run optimization.")
 
-    monkeypatch.setattr(gpu.SSB, "fit_aberrations", no_search)
-    with gpu.SSB.open(str(source), **calibration) as reopened:
+    monkeypatch.setattr(gpu.DirectPtycho, "fit_aberrations", no_search)
+    with gpu.DirectPtycho.open(str(source), **calibration) as reopened:
         assert reopened.scan_detector_rotation_deg == launch
         restored = ShowPtycho(reopened, save_dir=tmp_path)
         assert restored.calibration_status == "Restored saved full-field fit"
@@ -1551,7 +1551,7 @@ def test_a_save_made_after_a_180_degree_move_reopens_at_the_launch_rotation(tmp_
         assert result.aberrations == START and result.scan_detector_rotation_deg == pytest.approx(moved)
         restored.close()
     # a launch rotation that differs by anything but 180 degrees is another geometry
-    with gpu.SSB.open(str(source), **calibration, scan_detector_rotation_deg=launch + 1.0) as other:
+    with gpu.DirectPtycho.open(str(source), **calibration, scan_detector_rotation_deg=launch + 1.0) as other:
         viewer = ShowPtycho(other, save_dir=tmp_path)
         assert "acquisition or launch calibration has changed" in viewer.calibration_status
         viewer.close()
@@ -1568,7 +1568,7 @@ def test_a_scan_region_session_saves_a_calibration_it_reopens(tmp_path, monkeypa
                        scan_detector_rotation_deg=10.0)
     region = (16, 112, 8, 104)
     with gpu.io.load(str(source)) as data:
-        with gpu.SSB(data, scan_region=region, **calibration) as ssb:
+        with gpu.DirectPtycho(data, scan_region=region, **calibration) as ssb:
             assert ssb.input_scan_shape == (96, 96)
             viewer = ShowPtycho(ssb, save_dir=tmp_path)
             viewer.upsampling = 1
@@ -1582,9 +1582,9 @@ def test_a_scan_region_session_saves_a_calibration_it_reopens(tmp_path, monkeypa
     def no_search(*args, **kwargs):
         raise AssertionError("Restoring a saved model must not run optimization.")
 
-    monkeypatch.setattr(gpu.SSB, "fit_aberrations", no_search)
+    monkeypatch.setattr(gpu.DirectPtycho, "fit_aberrations", no_search)
     with gpu.io.load(str(source)) as data:
-        with gpu.SSB(data, scan_region=region, **calibration) as reopened:
+        with gpu.DirectPtycho(data, scan_region=region, **calibration) as reopened:
             restored = ShowPtycho(reopened, save_dir=tmp_path)
             assert restored.calibration_status == "Restored saved fit of scan region [16, 112, 8, 104]"
             assert reopened.aberrations == START
@@ -1592,7 +1592,7 @@ def test_a_scan_region_session_saves_a_calibration_it_reopens(tmp_path, monkeypa
             assert reopened.reconstruct().aberrations == START  # no refit: fit_aberrations would raise
             restored.close()
         # the whole scan, or another region, is another session
-        with gpu.SSB(data, **calibration) as whole:
+        with gpu.DirectPtycho(data, **calibration) as whole:
             viewer = ShowPtycho(whole, save_dir=tmp_path)
             assert "Saved fit not restored" in viewer.calibration_status
             viewer.close()
@@ -1608,7 +1608,7 @@ def test_the_propagator_tilt_of_a_flipped_session_follows_the_detector_axes(tmp_
     rotation = math.radians(10.0)
     unflipped = [3.0 * math.cos(rotation) - 4.0 * math.sin(rotation), -3.0 * math.sin(rotation) - 4.0 * math.cos(rotation)]
     for flipped, expected in ((False, unflipped), (True, unflipped[::-1])):
-        with gpu.SSB(_counts(), voltage_kV=300.0, semiangle_mrad=20.0, scan_sampling_A=(0.5, 0.5),
+        with gpu.DirectPtycho(_counts(), voltage_kV=300.0, semiangle_mrad=20.0, scan_sampling_A=(0.5, 0.5),
                      detector_sampling_mrad=(5.0, 5.0), aberrations=dict(START), scan_detector_rotation_deg=10.0,
                      scan_detector_rotation_flipped=flipped) as ssb:
             viewer = ShowPtycho(ssb, save_dir=tmp_path)
@@ -1632,7 +1632,7 @@ def test_calibration_returns_the_record_save_writes(tmp_path):
 
     source = tmp_path / "scan.npy"
     np.save(source, _counts())
-    with gpu.SSB.open(str(source), voltage_kV=300, semiangle_mrad=20, scan_sampling_A=(0.5, 0.5),
+    with gpu.DirectPtycho.open(str(source), voltage_kV=300, semiangle_mrad=20, scan_sampling_A=(0.5, 0.5),
                       detector_sampling_mrad=(5, 5), aberrations=START, scan_detector_rotation_deg=10.0) as ssb:
         viewer = ShowPtycho(ssb, save_dir=tmp_path)
         viewer.request_json = json.dumps({"id": 1, **START, "sample": {"sample_tilt_mrad": [3, -4], "depth_spread_nm": 12},
@@ -1667,7 +1667,7 @@ def test_the_tutorial_order_reopens_the_save_and_reconstruct_keeps_it(tmp_path, 
     np.save(source, _counts())
     calibration = dict(voltage_kV=300, semiangle_mrad=20, scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5, 5))
     reviewed = {"C10_nm": 3.0, "C12_nm": 1.0, "phi12_deg": 11.0}
-    with gpu.io.load(str(source)) as data, gpu.SSB(data, **calibration) as ssb:
+    with gpu.io.load(str(source)) as data, gpu.DirectPtycho(data, **calibration) as ssb:
         fitted = dict(ssb.reconstruct(verbose=False).aberrations)
         restored = {**fitted, **reviewed}
         viewer = ssb.show(save_dir=tmp_path)
@@ -1676,10 +1676,10 @@ def test_the_tutorial_order_reopens_the_save_and_reconstruct_keeps_it(tmp_path, 
         expected = _shown(viewer).copy()
         viewer.save_trigger += 1
         viewer.close()
-    with gpu.io.load(str(source)) as data, gpu.SSB(data, **calibration) as ssb:
+    with gpu.io.load(str(source)) as data, gpu.DirectPtycho(data, **calibration) as ssb:
         assert dict(ssb.reconstruct(verbose=False).aberrations) == fitted  # the restart fits again
         searches = []
-        monkeypatch.setattr(gpu.SSB, "fit_aberrations", lambda *args, **kwargs: searches.append(1))
+        monkeypatch.setattr(gpu.DirectPtycho, "fit_aberrations", lambda *args, **kwargs: searches.append(1))
         capsys.readouterr()
         viewer = ssb.show(save_dir=tmp_path)
         assert viewer.calibration_status == "Restored saved full-field fit"
@@ -1687,13 +1687,13 @@ def test_the_tutorial_order_reopens_the_save_and_reconstruct_keeps_it(tmp_path, 
         np.testing.assert_array_equal(_shown(viewer), expected)
         assert dict(ssb.reconstruct().aberrations) == restored and not searches
         viewer.close()
-    with gpu.io.load(str(source)) as data, gpu.SSB(data, **calibration) as ssb:
+    with gpu.io.load(str(source)) as data, gpu.DirectPtycho(data, **calibration) as ssb:
         viewer = ssb.show(save_dir=tmp_path)  # no run() first
         assert viewer.calibration_status == "Restored saved full-field fit"
         assert dict(ssb.reconstruct().aberrations) == restored and not searches
         viewer.close()
     (tmp_path / "calibration.json").unlink()
-    with gpu.io.load(str(source)) as data, gpu.SSB(data, **calibration) as ssb:
+    with gpu.io.load(str(source)) as data, gpu.DirectPtycho(data, **calibration) as ssb:
         viewer = ssb.show(save_dir=tmp_path)  # nothing saved yet, nothing fitted
         viewer.request_json = json.dumps({"id": 2, **reviewed, "committed": True})
         viewer.save_trigger += 1
@@ -1708,7 +1708,7 @@ def test_changed_acquisition_or_calibration_does_not_restore_an_old_fit(tmp_path
     np.save(source, _counts())
     calibration = dict(voltage_kV=300, semiangle_mrad=20,
                        scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5, 5))
-    with gpu.SSB.open(str(source), aberrations=START, **calibration) as ssb:
+    with gpu.DirectPtycho.open(str(source), aberrations=START, **calibration) as ssb:
         viewer = ShowPtycho(ssb, save_dir=tmp_path)
         viewer.save_trigger += 1
         viewer.close()
@@ -1716,7 +1716,7 @@ def test_changed_acquisition_or_calibration_does_not_restore_an_old_fit(tmp_path
         settings = {**calibration, "detector_sampling_mrad": (5.1, 5.1)} if changed else calibration
         if not changed:
             np.save(source, _counts() + 1)
-        with gpu.SSB.open(str(source), **settings) as ssb:
+        with gpu.DirectPtycho.open(str(source), **settings) as ssb:
             viewer = ShowPtycho(ssb, save_dir=tmp_path)
             assert viewer.fitted_C10_nm == 0
             assert "acquisition or launch calibration has changed" in viewer.calibration_status
@@ -1734,11 +1734,11 @@ def test_a_matching_save_replaces_a_supplied_model_unless_restore_is_false(tmp_p
     np.save(source, _counts())
     calibration = dict(voltage_kV=300, semiangle_mrad=20,
                        scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5, 5))
-    with gpu.SSB.open(str(source), aberrations=START, **calibration) as ssb:
+    with gpu.DirectPtycho.open(str(source), aberrations=START, **calibration) as ssb:
         viewer = ShowPtycho(ssb, save_dir=tmp_path)
         viewer.save_trigger += 1
         viewer.close()
-    with gpu.SSB.open(str(source), aberrations={**START, "C10_nm": 7}, **calibration) as ssb:
+    with gpu.DirectPtycho.open(str(source), aberrations={**START, "C10_nm": 7}, **calibration) as ssb:
         capsys.readouterr()
         viewer = ShowPtycho(ssb, save_dir=tmp_path)
         assert viewer.fitted_C10_nm == 3 and viewer.calibration_status == "Restored saved full-field fit"
@@ -1749,7 +1749,7 @@ def test_a_matching_save_replaces_a_supplied_model_unless_restore_is_false(tmp_p
                          r"replacing the session's C10 7\.00 nm, C12 1\.00 nm", printed[0])
         assert printed[0].endswith("Pass restore=False to keep the session's values.")
         viewer.close()
-    with gpu.SSB.open(str(source), aberrations={**START, "C10_nm": 7}, **calibration) as ssb:
+    with gpu.DirectPtycho.open(str(source), aberrations={**START, "C10_nm": 7}, **calibration) as ssb:
         viewer = ShowPtycho(ssb, save_dir=tmp_path, restore=False)
         assert viewer.fitted_C10_nm == 7 and viewer.calibration_status == ""
         viewer.close()
@@ -1763,7 +1763,7 @@ def test_a_save_naming_a_retired_estimator_restores_its_optics_and_says_so(tmp_p
     np.save(source, _counts())
     calibration = dict(voltage_kV=300, semiangle_mrad=20,
                        scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5, 5))
-    with gpu.SSB.open(str(source), aberrations=START, **calibration) as ssb:
+    with gpu.DirectPtycho.open(str(source), aberrations=START, **calibration) as ssb:
         viewer = ShowPtycho(ssb, save_dir=tmp_path)
         expected = _shown(viewer).copy()
         viewer.save_trigger += 1
@@ -1771,7 +1771,7 @@ def test_a_save_naming_a_retired_estimator_restores_its_optics_and_says_so(tmp_p
     path = tmp_path / "calibration.json"
     path.write_text(json.dumps({**json.loads(path.read_text()), "phase_estimator": retired}))
     for requested in (None, "phase_of_mean"):
-        with gpu.SSB.open(str(source), aberrations={**START, "C10_nm": 7}, **calibration) as ssb:
+        with gpu.DirectPtycho.open(str(source), aberrations={**START, "C10_nm": 7}, **calibration) as ssb:
             capsys.readouterr()
             viewer = ShowPtycho(ssb, save_dir=tmp_path, phase_estimator=requested)
             assert viewer.fitted_C10_nm == 3 and viewer.calibration_status == "Restored saved full-field fit"
@@ -1783,7 +1783,7 @@ def test_a_save_naming_a_retired_estimator_restores_its_optics_and_says_so(tmp_p
                                   "and loads as saved; previews and Save use phase_of_mean, the phase of the mean wave.")
             assert json.loads(path.read_text())["phase_estimator"] == retired  # opening does not relabel the file
             viewer.close()
-    with gpu.SSB.open(str(source), aberrations=START, **calibration) as ssb:
+    with gpu.DirectPtycho.open(str(source), aberrations=START, **calibration) as ssb:
         viewer = ShowPtycho(ssb, save_dir=tmp_path)
         viewer.save_trigger += 1
         viewer.close()
@@ -1798,7 +1798,7 @@ def test_full_field_launch_does_not_reinterpret_a_crop_or_unidentified_save(tmp_
     np.save(source, _counts())
     calibration = dict(voltage_kV=300, semiangle_mrad=20,
                        scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5, 5))
-    with gpu.SSB.open(str(source), aberrations=START, **calibration) as ssb:
+    with gpu.DirectPtycho.open(str(source), aberrations=START, **calibration) as ssb:
         viewer = ShowPtycho(ssb, save_dir=tmp_path)
         viewer.save_trigger += 1
         viewer.close()
@@ -1809,7 +1809,7 @@ def test_full_field_launch_does_not_reinterpret_a_crop_or_unidentified_save(tmp_
     else:
         saved.pop("session_identity")
     path.write_text(json.dumps(saved))
-    with gpu.SSB.open(str(source), **calibration) as ssb:
+    with gpu.DirectPtycho.open(str(source), **calibration) as ssb:
         viewer = ShowPtycho(ssb, save_dir=tmp_path)
         assert "Saved fit not restored" in viewer.calibration_status
         assert viewer.scan_rows == viewer.scan_cols == SCAN
@@ -1887,11 +1887,11 @@ def test_auto_caps_output_and_preserves_saved_joint_fit(tmp_path):
     """Auto remains 4× across reopen; a deliberate 8× choice survives saving."""
     if not gpu_adapter.accelerator_ready():
         pytest.skip("Needs CUDA or MPS")
-    from quantem.gpu import SSB
+    from quantem.gpu import DirectPtycho
 
     source = tmp_path / "scan.npy"
     np.save(source, _counts())
-    coarse = SSB.open(source, voltage_kV=300.0, semiangle_mrad=20.0, scan_sampling_A=(1.25, 1.25),
+    coarse = DirectPtycho.open(source, voltage_kV=300.0, semiangle_mrad=20.0, scan_sampling_A=(1.25, 1.25),
                  detector_sampling_mrad=(5.0, 5.0), aberrations=dict(START))
     viewer = ShowPtycho(coarse, save_dir=tmp_path)
     assert viewer.upsampling == "auto" and _shown(viewer).shape == (4 * SCAN, 4 * SCAN)
@@ -2102,7 +2102,7 @@ def test_nested_region_snapshot_uses_acquisition_bounds(tmp_path):
         "aberrations": dict(START), "sample_tilt_mrad": [0.1, -0.2],
         "depth_spread_nm": 12.0,
     }
-    with gpu.io.load(source) as data, gpu.SSB(
+    with gpu.io.load(source) as data, gpu.DirectPtycho(
         data, scan_region=session, aberrations=START,
         voltage_kV=300, semiangle_mrad=20,
         scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5, 5),

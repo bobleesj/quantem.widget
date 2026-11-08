@@ -1284,7 +1284,7 @@ def test_compute_ssb_selects_bright_field_pixels_with_the_quantem_gpu_default_th
     # Show4DSTEM passed threshold 0.5 where quantem.gpu defaults to 0.0: with a given 7 px radius on this
     # soft-edged disk it kept 120 of the 156 bright-field pixels a plain SSB session uses
     _require_ssb()
-    from quantem.gpu import SSB
+    from quantem.gpu import DirectPtycho
 
     rows, cols = np.indices((24, 24))
     pattern = np.round(40 * np.clip((8 - np.hypot(rows - 11.5, cols - 11.5)) / 4, 0, 1)).astype(np.uint16) + 1
@@ -1293,7 +1293,7 @@ def test_compute_ssb_selects_bright_field_pixels_with_the_quantem_gpu_default_th
     try:
         widget.compute_ssb(aberrations={"C10_nm": 0.0}, lock_aberrations=True, scan_detector_rotation_deg=0.0,
                            bright_field_radius_px=7.0)
-        with SSB(counts, voltage_kV=300, semiangle_mrad=20, scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(20 / 6, 20 / 6),
+        with DirectPtycho(counts, voltage_kV=300, semiangle_mrad=20, scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(20 / 6, 20 / 6),
                  scan_detector_rotation_deg=0.0, bright_field_radius_px=7.0) as plain:
             assert widget.ssb_compute_num_bright_field_pixels == plain.num_bright_field_pixels == 156
         record = json.loads(widget.ssb_compute_calibration_json)
@@ -1379,7 +1379,7 @@ def test_compute_ssb_converts_a_detector_step_in_reciprocal_angstrom(monkeypatch
 def test_compute_ssb_reconstructs_a_rectangular_scan_that_quantem_gpu_pads():
     # Compute SSB refused every scan but square 128, 256, 512 and 1024, although quantem.gpu pads other shapes
     _require_ssb()
-    from quantem.gpu import SSB
+    from quantem.gpu import DirectPtycho
 
     counts = _rotated_counts(30.0)[:96, :80].copy()
     widget = _ssb_widget(counts)
@@ -1387,7 +1387,7 @@ def test_compute_ssb_reconstructs_a_rectangular_scan_that_quantem_gpu_pads():
     try:
         phase = widget.compute_ssb(aberrations=optics, lock_aberrations=True, scan_detector_rotation_deg=30.0)
         assert phase.shape == (96, 80)
-        with SSB(counts, voltage_kV=300, semiangle_mrad=20, scan_sampling_A=0.5, detector_sampling_mrad=20 / 6,
+        with DirectPtycho(counts, voltage_kV=300, semiangle_mrad=20, scan_sampling_A=0.5, detector_sampling_mrad=20 / 6,
                  aberrations=optics, scan_detector_rotation_deg=30.0) as ssb:
             full = np.asarray(torch.as_tensor(ssb.reconstruct().phase).cpu())
             top, left = ((padded - measured) // 2 for padded, measured in zip(ssb.scan_shape, ssb.input_scan_shape))
@@ -1400,7 +1400,7 @@ def test_compute_ssb_uses_the_given_bright_field_disk_and_records_the_one_used()
     # bright_field_center_px= and bright_field_radius_px= never reached SSB, and the record wrote
     # None for the radius and the detector step whenever quantem.gpu found them itself
     _require_ssb()
-    from quantem.gpu import SSB, detector
+    from quantem.gpu import DirectPtycho, detector
 
     counts = _rotated_counts(30.0)
     optics = {"C10_nm": 0.0, "C12_nm": 0.0, "phi12_deg": 0.0}
@@ -1411,14 +1411,14 @@ def test_compute_ssb_uses_the_given_bright_field_disk_and_records_the_one_used()
     try:
         found.compute_ssb(aberrations=optics, lock_aberrations=True, scan_detector_rotation_deg=30.0)
         record = json.loads(found.ssb_compute_calibration_json)
-        with SSB(counts, voltage_kV=300, semiangle_mrad=20, scan_sampling_A=0.5, scan_detector_rotation_deg=30.0) as plain:
+        with DirectPtycho(counts, voltage_kV=300, semiangle_mrad=20, scan_sampling_A=0.5, scan_detector_rotation_deg=30.0) as plain:
             plain.num_bright_field_pixels
             expected_radius = plain.browser_state().brightfield.bright_field_radius_px
         assert record["bright_field_radius_px"] == pytest.approx(expected_radius)
         mean = np.asarray(counts, np.float64).mean(axis=(0, 1))
         assert record["detector_sampling_mrad"] == pytest.approx(list(detector.detector_sampling_mrad(mean, 20.0)))
         given.compute_ssb(aberrations=optics, lock_aberrations=True, scan_detector_rotation_deg=30.0)
-        with SSB(counts, voltage_kV=300, semiangle_mrad=20, scan_sampling_A=0.5, scan_detector_rotation_deg=30.0,
+        with DirectPtycho(counts, voltage_kV=300, semiangle_mrad=20, scan_sampling_A=0.5, scan_detector_rotation_deg=30.0,
                  bright_field_center_px=(11.0, 12.0), bright_field_radius_px=4.0) as plain:
             assert given.ssb_compute_num_bright_field_pixels == plain.num_bright_field_pixels
         assert given.ssb_compute_num_bright_field_pixels != found.ssb_compute_num_bright_field_pixels

@@ -824,6 +824,7 @@ function Show2D() {
   const colorShared = !(panelCmaps && panelCmaps.length === nImages && nImages > 1);
 
   const [logScale, setLogScale] = useModelState<boolean>("log_scale");
+  const [valueFlip, setValueFlip] = useModelState<boolean>("value_flip");
   const [autoContrast, setAutoContrast] = useModelState<boolean>("auto_contrast");
   const [traitVmin] = useModelState<number | null>("vmin");
   const [traitVmax] = useModelState<number | null>("vmax");
@@ -8794,6 +8795,10 @@ function Show2D() {
                         <MenuItem value="linear">Lin</MenuItem>
                         <MenuItem value="log">Log</MenuItem>
                       </Select>
+                    </Box>
+                    <Box sx={controlPairSx}>
+                      <Typography sx={compactLabelSx} title="Show the negated image: a phase with atoms as minima reads with atoms as bright maxima. Display only; stats and export follow.">Flip</Typography>
+                      <Switch checked={!!valueFlip} onChange={() => { setValueFlip(!valueFlip); }} slotProps={{ input: { "aria-label": "Flip sign" } }} size="small" sx={switchStyles.small} />
                     </Box>
                     <Box sx={controlPairSx}>
                       <Typography sx={compactLabelSx}>Color</Typography>

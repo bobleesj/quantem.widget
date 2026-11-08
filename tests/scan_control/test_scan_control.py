@@ -58,10 +58,10 @@ def test_actions_start_runner_steps_with_the_panel_settings():
         assert [row["name"] for row in panel.status["scans"]] == ["scan_1"]
         assert panel.status["scans"][0]["bytes"] == 4 + 100
         message(panel, action="go")
-        assert runner.calls[-1] == ("run", (256, False, "rdma", False), 3)
+        assert runner.calls[-1] == ("run", (256, False, "rdma", False), 3, None, True, True, True, True, False)
         panel.forever = True
         message(panel, action="go")
-        assert runner.calls[-1][-1] == FOREVER
+        assert runner.calls[-1] == ("run", (256, False, "rdma", False), FOREVER, None, True, True, True, True, False)
         message(panel, action="stop")
         assert runner.calls[-1] == ("stop",)
         message(panel, action="download", scans=["scan_1"], format="h5")

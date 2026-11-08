@@ -14,6 +14,10 @@ if TYPE_CHECKING:
     from quantem.widget.show4dstem.widget import Show4DSTEM
 
 
+# Seconds after the user last touched the viewer before the probe follows the newest pattern again.
+STREAM_FOLLOW_PAUSE_S = 1.5
+
+
 class StreamFollower:
     """Follow one recording without taking ownership of its acquisitions."""
 
@@ -127,6 +131,18 @@ class StreamFollower:
                     self.previous = None
                 self.shown_sources = sources
                 shown = len(sources)
+                if self.partial and isinstance(viewer._data, SessionSeries):
+                    # Live sessions remain open as leases until eviction. Their
+                    # completed datasets can already use batched GPU queries;
+                    # there is no need to wait for continuous acquisition to end.
+                    completed = {dataset.metadata.get("acquisition_id"): dataset
+                                 for dataset in self.recording.datasets
+                                 if gpu_adapter.is_acquisition(dataset) and dataset.metadata.get("acquisition_id")}
+                    with viewer._compare_lock:
+                        viewer._stream_completed_sources = {
+                            idx: completed[source.identifier] for idx, source in enumerate(sources)
+                            if getattr(source, "identifier", None) in completed
+                        }
             progress = tuple(source.received for source in sources[:shown]) if self.partial else ()
             if self.partial and complete and isinstance(viewer._data, SessionSeries) and len(self.recording.datasets) == shown and all(
                     gpu_adapter.is_acquisition(dataset) for dataset in self.recording.datasets):
@@ -141,6 +157,7 @@ class StreamFollower:
                 viewer.refresh()
                 if self.partial:
                     current = sources[shown - 1]
+                    self.follow_probe(current)
                     scan = current.metadata.get("series", shown)
                     status = "complete" if current.received == current.total else "receiving"
                     viewer.title = (f"{self.title} | scan {scan} {status}: "
@@ -157,6 +174,19 @@ class StreamFollower:
             if force:
                 raise
             return False
+
+    def follow_probe(self, current) -> None:
+        """Point the diffraction pattern at the newest arrived pattern of the scan being received, unless the
+        user interacted within STREAM_FOLLOW_PAUSE_S: their probe stays until they let go."""
+        viewer = self.viewer
+        if not viewer.stream_follow or not current.received or current.received >= current.total:
+            return
+        if time.monotonic() - viewer._last_interaction_at < STREAM_FOLLOW_PAUSE_S:
+            return
+        row, col = divmod(int(current.received) - 1, int(viewer.shape_cols))
+        if (row, col) != (viewer.pos_row, viewer.pos_col) and row < viewer.shape_rows:
+            with viewer.hold_trait_notifications():
+                viewer.pos_row, viewer.pos_col = row, col
 
     def update(self, force: bool = False) -> bool:
         """Coalesce display traffic without deferring acquisition retirement."""

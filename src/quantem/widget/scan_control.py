@@ -53,6 +53,14 @@ def scan_name(file_name: str) -> str:
     return re.sub(r"_(master|data_\d+)\.h5$", "", file_name)
 
 
+def maped_tilts(amplitude_mrad: float, count: int) -> list:
+    """MAPED image tilts (rad): count around a circle of amplitude_mrad, then on axis
+    (as maped_interface_clean's MAPED scan)."""
+    tilts = [(amplitude_mrad * 1e-3 * math.cos(2 * math.pi * k / count),
+              amplitude_mrad * 1e-3 * math.sin(2 * math.pi * k / count)) for k in range(count)]
+    return tilts + [(0.0, 0.0)]
+
+
 def dwell_us(binned: bool) -> float:
     """Dwell per scan position: binned 120 kHz, unbinned 30 kHz."""
     return 1e6 / (120_000 if binned else 30_000)
@@ -82,6 +90,29 @@ class ScanControl(anywidget.AnyWidget):
     sizes : tuple of int
         The scan sizes offered.
     title : str, default "Scan control"
+    auto_insert : bool, default True
+        Go (and Calibrate with the ARINA) first inserts the ARINA if it is out.
+    auto_clear : bool, default True
+        Go (and Calibrate with the ARINA) first retracts the Ceta, the fluorescent screen and the HAADF.
+    relative : bool, default True
+        MAPED tilts are changes on top of the deflectors at Go (the on-axis scan is the
+        operator alignment), and Calibrate steps around the current values; False: absolute.
+    rotation_pair : bool, default False
+        The 0-90 pair: every scan (Go and Go MAPED) twice, at the scan rotation at Go and 90
+        degrees from it (AutoScript), put back after; names end in _rot0 / _rot90.
+    auto_blank : bool, default True
+        Unblank the beam only while it is needed (each scan; the whole calibration) and blank it
+        again right after, also after a failure.
+    restore_after : bool, default True
+        After the run (also after a failure or Stop), put back what auto_clear and
+        auto_insert moved: the ARINA out, then the Ceta, the screen and the HAADF back in.
+    maped, tilt_mrad, tilt_count, calibration
+        MAPED series: Go runs one scan at each of ``tilt_count`` image tilts around a circle of
+        ``tilt_mrad``, plus one on axis, with the deflectors set from the ``calibration`` file
+        (the runner's ``calibration_files()``). Calibrate makes one (``cal_options``).
+        Value calibration: the beam disk (2 alpha across) is the angular ruler, so a
+        calibrated file turns MAPED tilts into true mrad. ``cal_options["alpha_mrad"]`` 0 takes
+        alpha from AutoScript; ``alpha_factor`` corrects it after a reference calibration.
     heartbeat : float, default 5.0
         Seconds between read-only checks of HV, detector position and the microscope
         detectors (``runner.read_hardware()``); 0 turns it off.
@@ -105,6 +136,20 @@ class ScanControl(anywidget.AnyWidget):
     folder = traitlets.Unicode("").tag(sync=True)
     sizes = traitlets.List(traitlets.Int()).tag(sync=True)
     title = traitlets.Unicode("Scan control").tag(sync=True)
+    maped = traitlets.Bool(False).tag(sync=True)
+    auto_insert = traitlets.Bool(True).tag(sync=True)
+    auto_clear = traitlets.Bool(True).tag(sync=True)
+    restore_after = traitlets.Bool(True).tag(sync=True)
+    auto_blank = traitlets.Bool(True).tag(sync=True)
+    rotation_pair = traitlets.Bool(False).tag(sync=True)
+    relative = traitlets.Bool(True).tag(sync=True)
+    tilt_mrad = traitlets.Float(17.0).tag(sync=True)
+    tilt_count = traitlets.Int(4).tag(sync=True)
+    calibration = traitlets.Unicode("").tag(sync=True)
+    calibrations = traitlets.List(traitlets.Dict()).tag(sync=True)
+    cal_options = traitlets.Dict({"camera": "ARINA", "tilt_mrad": 50.0, "shift_nm": 50.0, "model": "affine",
+                                  "settle": 2.0, "name": "", "alpha_mrad": 0.0,
+                                  "alpha_factor": 1.0}).tag(sync=True)
 
     def __init__(self, runner, *, size: int = 512, binned: bool = True, output: str = "rdma",
                  save: bool = False, count: int = 1, folder: str = "", sizes=SIZES,
@@ -121,6 +166,8 @@ class ScanControl(anywidget.AnyWidget):
                          output=output, save=bool(save), count=int(count), folder=str(folder),
                          title=str(title))
         self.on_msg(self._handle_message)
+        self._calibration_seen = None
+        self.load_calibrations()
         self.refresh()
         self._worker = threading.Thread(target=_poll, args=(weakref.ref(self), self._stop, interval),
                                         name="ScanControl status", daemon=True)
@@ -169,8 +216,44 @@ class ScanControl(anywidget.AnyWidget):
         return self.runner.start("connect", self.settings)
 
     def go(self) -> bool:
-        """*** Moves the beam. *** Run ``scans`` scans with the panel's settings."""
-        return self.runner.start("run", self.settings, self.scans)
+        """*** Moves the beam. *** Run ``scans`` scans with the panel's settings, or with
+        ``maped`` on, one scan per MAPED tilt with the chosen calibration."""
+        if self.maped:
+            if not self.calibration:
+                raise ValueError("Choose a calibration (or run Calibrate) before a MAPED series.")
+            return self.runner.start("run", self.settings, 1, {
+                "calibration": self.calibration, "tilts": maped_tilts(self.tilt_mrad, self.tilt_count),
+                "relative": self.relative},
+                *self._detector_options())
+        return self.runner.start("run", self.settings, self.scans, None, *self._detector_options())
+
+    def _detector_options(self) -> tuple:
+        """(auto_insert, auto_clear, restore, auto_blank, rotation_pair) for the runner's run."""
+        return self.auto_insert, self.auto_clear, self.restore_after, self.auto_blank, self.rotation_pair
+
+    # --- MAPED calibration ------------------------------------------------------------------------
+
+    def load_calibrations(self) -> None:
+        """The runner's calibration files (newest first); keeps the chosen one, else the newest."""
+        files = getattr(self.runner, "calibration_files", None)
+        if not callable(files):
+            return
+        try:
+            self.calibrations = list(files())
+        except Exception as exc:
+            self._notice(f"Calibration files: {exc}")
+            return
+        paths = [c["path"] for c in self.calibrations]
+        if self.calibration not in paths:
+            self.calibration = paths[0] if paths else ""
+
+    def calibrate(self) -> bool:
+        """*** Moves the deflectors, the screen and the HAADF. *** The automatic calibration,
+        with its points at the MAPED tilts."""
+        return self.runner.start("calibrate", {**self.cal_options, "points_mrad": self.tilt_mrad,
+                                               "count": self.tilt_count, "auto_insert": self.auto_insert,
+                                               "auto_clear": self.auto_clear, "restore": self.restore_after,
+                                               "auto_blank": self.auto_blank, "relative": self.relative})
 
     def stop(self) -> None:
         """End the run after the scan in progress."""
@@ -210,6 +293,8 @@ class ScanControl(anywidget.AnyWidget):
             raise ValueError("Set folder before downloading.")
         if format not in ("h5", "qem"):
             raise ValueError("format must be 'h5' or 'qem'.")
+        if getattr(self.runner, "vram_scans", False):      # Save from Buffle VRAM into a Buffle folder
+            return self.runner.start("save_vram", list(scans), self.folder, format)
         scans, folder = list(scans), Path(self.folder)
         if format == "h5":
             return self.runner.start("download", self.files_of(scans), str(folder))
@@ -264,6 +349,11 @@ class ScanControl(anywidget.AnyWidget):
             elif action == "stop":
                 self.stop()
                 started = True
+            elif action == "calibrate":
+                started = self.calibrate()
+            elif action == "calibrations":
+                self.load_calibrations()
+                started = True
             elif action == "high_voltage":
                 started = self.set_high_voltage(content.get("on", False))
             elif action == "insert":
@@ -296,8 +386,16 @@ class ScanControl(anywidget.AnyWidget):
         fields = st._asdict() if hasattr(st, "_asdict") else dict(st)
         status = {key: fields.get(key) for key in ("state", "message", "dcu_ok", "revolon_ok",
                                                     "high_voltage", "done", "total", "dropped",
-                                                    "files", "free_bytes", "sensor", "microscope")}
+                                                    "files", "free_bytes", "sensor", "microscope",
+                                                    "calibration")}
         status["files"] = list(status["files"] or [])
+        # "vram": the runner lists the scans the live view holds in Buffle VRAM (RDMA; the DCU writes no files)
+        status["source"] = "vram" if getattr(self.runner, "vram_scans", False) else "detector"
+        done = status["calibration"]
+        if done and done.get("path") != self._calibration_seen:      # a new calibration: choose it
+            self._calibration_seen = done.get("path")
+            self.load_calibrations()
+            self.calibration = done.get("path", self.calibration)
         status["scans"] = self._scans(status["files"])
         status["dwell_us"] = dwell_us(self.binned)
         busy = getattr(self.runner, "busy", None)

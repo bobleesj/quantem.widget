@@ -151,3 +151,50 @@ def test_scan_roi_of_signed_integer_data_keeps_its_sign(reduce):
         np.testing.assert_array_equal(widget.vi_roi_pattern(), expected.astype(np.float32))
     finally:
         widget.close()
+
+
+@pytest.mark.parametrize("count", [7, 70])
+def test_encoded_series_diffraction_tracks_visible_order_and_selection(tmp_path, count):
+    """Point, average and all-pattern views agree while paging a retained series."""
+    if not gpu_adapter.accelerator_ready():
+        pytest.skip("encoded acquisitions require an accelerator")
+    values = _values(np.uint16)
+    scans = []
+    widget = None
+    try:
+        for index in range(count):
+            path = tmp_path / f"scan_{index}.npy"
+            np.save(path, values + index)
+            scans.append(gpu_adapter.load_acquisition(path))
+        widget = Show4DSTEM(scans, view_mode="multiple", compare_dp_mode="all",
+                           compare_group_mode="paged", compare_max_panels=7)
+        widget.compare_panel_order = list(reversed(range(count)))
+        for page in (0, widget.compare_page_count - 1, 0):
+            widget.compare_page_idx = page
+            with widget.hold_trait_notifications():
+                widget.pos_row, widget.pos_col = 2 + (page % 2), 4
+            selected = widget.compare_panel_indices
+            expected = np.stack([values[widget.pos_row, 4] + index for index in selected]).astype(np.float32)
+            actual = np.frombuffer(widget.compare_diffraction_bytes, np.float32).reshape(len(selected), *DET)
+            np.testing.assert_array_equal(actual, expected)
+            widget.compare_dp_mode = "average"
+            np.testing.assert_array_equal(np.frombuffer(widget.frame_bytes, np.float32).reshape(DET), expected.mean(0))
+            widget.compare_dp_mode = "selected"
+            np.testing.assert_array_equal(np.frombuffer(widget.frame_bytes, np.float32).reshape(DET),
+                                          values[widget.pos_row, 4] + widget.frame_idx)
+            widget.compare_dp_mode = "all"
+        widget.compare_hidden_panels = [selected[0]]
+        shown = widget.compare_panel_indices
+        expected = np.stack([values[widget.pos_row, 4] + index for index in shown]).astype(np.float32)
+        np.testing.assert_array_equal(np.frombuffer(widget.compare_diffraction_bytes, np.float32).reshape(len(shown), *DET), expected)
+        # A detector drag still uses the same counts after the joint DP query.
+        widget.roi_center = [6.25, 8.5]
+        mask = widget._current_detector_mask()
+        images = np.frombuffer(widget.compare_virtual_image_bytes, np.float32).reshape(len(shown), *SCAN)
+        expected = np.stack([(values + index)[..., mask].sum(-1).astype(np.float32) / mask.sum() for index in shown])
+        np.testing.assert_array_equal(images, expected)
+    finally:
+        if widget is not None:
+            widget.close()
+        for scan in scans:
+            scan.close()

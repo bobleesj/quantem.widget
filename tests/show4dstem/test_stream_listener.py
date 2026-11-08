@@ -118,6 +118,60 @@ def test_idle_listener_reports_receiver_failure_and_closes(recording):
     assert viewer._stream_stop.is_set()
 
 
+def test_live_counts_remain_exact_through_completion_and_eviction(recording):
+    """Completed scans batch while an arriving scan still exposes missing positions."""
+    if not torch.cuda.is_available():
+        pytest.skip("live ANS encoding requires CUDA")
+    cp = pytest.importorskip("cupy")
+    from quantem.gpu.streaming import LiveEncoder
+
+    counts = np.random.default_rng(5).integers(0, 20, (3, 32, 16, 16, 16), dtype=np.uint16)
+    acquisitions = [LiveEncoder((32, 16), (16, 16), hot_pixel_correction="none") for _ in counts]
+    viewer = Show4DSTEM.stream(recording, compare_dp_mode="all")
+    try:
+        for index, acquisition in enumerate(acquisitions):
+            acquisition.add(0, cp.asarray(counts[index].reshape(-1, 16, 16)[:256 if index == 2 else 512]))
+            recording.acquisitions.append(acquisition)
+            if acquisition.complete:
+                recording.datasets.append(acquisition.finish())
+        viewer.refresh_stream()
+        with viewer.hold_trait_notifications():
+            viewer.pos_row, viewer.pos_col = 20, 7
+        panels = viewer.compare_panel_indices
+        actual = np.frombuffer(viewer.compare_diffraction_bytes, np.float32).reshape(-1, 16, 16)
+        for index, frame in zip(panels, actual):
+            if index == 2:
+                assert np.isnan(frame).all()
+            else:
+                np.testing.assert_array_equal(frame, counts[index, 20, 7])
+        viewer.compare_dp_mode = "average"
+        np.testing.assert_array_equal(np.frombuffer(viewer.frame_bytes, np.float32).reshape(16, 16),
+                                      counts[:2, 20, 7].astype(np.float32).mean(0))
+
+        recording.acquisitions.pop(0)
+        recording.datasets.pop(0)
+        acquisitions[0]._retire()
+        assert not acquisitions[0].source.is_released  # viewer still borrows this scan
+        viewer.refresh_stream()
+        assert acquisitions[0].source.is_released
+        acquisitions[2].add(256, cp.asarray(counts[2].reshape(-1, 16, 16)[256:]))
+        recording.datasets.append(acquisitions[2].finish())
+        viewer.refresh_stream()
+        viewer.compare_dp_mode = "all"
+        viewer.roi_center = [6.5, 7.5]
+        mask = viewer._current_detector_mask()
+        panels = viewer.compare_panel_indices
+        images = np.frombuffer(viewer.compare_virtual_image_bytes, np.float32).reshape(-1, 32, 16)
+        for index, image in zip(panels, images):
+            expected = counts[index + 1][..., mask].sum(-1).astype(np.float32) / np.float32(mask.sum())
+            np.testing.assert_array_equal(image, expected)
+        assert recording.receiving  # this optimization must not depend on stopping the receiver
+    finally:
+        viewer.close()
+        for acquisition in acquisitions:
+            acquisition.release()
+
+
 def test_stream_updates_while_notebook_waits():
     """Arriving counts still reach the viewer while a cell blocks its event loop."""
     async def notebook():

@@ -21,7 +21,7 @@ import torch
 from quantem.widget.device import device_name, gpu_path_hint, no_gpu_path, print_once
 
 try:
-    from quantem.gpu import DirectPtycho, SSB
+    from quantem.gpu import DirectPtycho
     from quantem.gpu import io as gpu_io
     from quantem.gpu.detector import disk_edge_radius as gpu_disk_edge_radius
     from quantem.gpu.detector import fit_bright_field_disk as gpu_fit_bright_field_disk
@@ -32,7 +32,7 @@ try:
     from quantem.gpu.dpc import run as gpu_dpc_run
     from quantem.gpu.io import Dataset4dstemGPU
 except ImportError:
-    DirectPtycho = SSB = gpu_io = prepare = gpu_disk_edge_radius = gpu_fit_bright_field_disk = gpu_release_cached_memory = None
+    DirectPtycho = gpu_io = prepare = gpu_disk_edge_radius = gpu_fit_bright_field_disk = gpu_release_cached_memory = None
     gpu_runtime_notice = gpu_dpc_run = Dataset4dstemGPU = BRIGHT_FIELD_DISK_KEY = BRIGHT_FIELD_DISK_SCHEMA = None
 
 
@@ -67,7 +67,7 @@ def is_acquisition(obj) -> bool:
 
 def is_ssb(obj) -> bool:
     """Whether ``obj`` is a ``quantem.gpu.DirectPtycho`` session."""
-    return available() and isinstance(obj, (DirectPtycho, SSB))
+    return available() and isinstance(obj, DirectPtycho)
 
 
 def announce_hot_pixels(record: dict | None) -> None:
@@ -615,7 +615,7 @@ class DirectSession:
         if ssb.scan_region is not None or not ssb.source_path:
             raise ValueError(
                 "Local fitting needs the full acquisition. Open it with "
-                "SSB.open(path, ...) or pass source_path to SSB(data, ...).")
+                "DirectPtycho.open(path, ...) or pass source_path to DirectPtycho(data, ...).")
         optics = parameters["aberrations"]
         if ssb.scan_sampling_A[0] != ssb.scan_sampling_A[1]:
             raise ValueError("Regional display currently needs equal row and column scan sampling.")

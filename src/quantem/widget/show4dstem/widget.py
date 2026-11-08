@@ -255,6 +255,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     show_title = traitlets.Bool(True).tag(sync=True)
     folder_watch_state = traitlets.Enum(FOLDER_WATCH_STATE_VALUES, default_value="hidden").tag(sync=True)
     folder_watch_detail = traitlets.Unicode("").tag(sync=True)
+    # Live acquisition: the diffraction pattern follows the newest arrived pattern, except while the user
+    # interacts and for STREAM_FOLLOW_PAUSE_S after (drag the probe, let go, and it returns to the newest).
+    stream_follow = traitlets.Bool(True).tag(sync=True)
     pos_row = traitlets.Int(0).tag(sync=True)
     pos_col = traitlets.Int(0).tag(sync=True)
     shape_rows = traitlets.Int(1).tag(sync=True)
@@ -446,6 +449,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._sessions: dict[int, object] = {}  # DenseSession or a quantem.gpu detector session per dataset
         self._compare_session = None
         self._compare_session_indices: tuple[int, ...] = ()
+        self._stream_completed_sources: dict[int, object] = {}
         self._vi_product_maps: dict[str, np.ndarray] = {}
         self._preset_images: dict[str, bytes | memoryview] = {}
         self._suppress_roi_recompute = False
@@ -1661,6 +1665,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     def _replace_stream_sources(self, previous, sources, labels=None) -> None:
         """Retire old live panels without resetting the detector or surviving query sessions."""
         with self._compare_lock, self._session_lock:
+            self._stream_completed_sources.clear()
             if not sources:
                 self._close_sessions()
                 self._data = None
@@ -1771,6 +1776,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     def _close_sessions(self) -> None:
         """Close every detector session: sessions hold views of the data, so the memory is released only after this."""
         with self._compare_lock, self._session_lock:
+            self._stream_completed_sources.clear()
             if self._compare_session is not None:
                 self._compare_session.close()
                 self._compare_session = None
@@ -1887,6 +1893,44 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 return name
         return None
 
+    def _joint_session(self, indices: Sequence[int]):
+        """Reuse one batched query session for the visible compatible acquisitions."""
+        selected = tuple(int(idx) for idx in indices)
+        sources = ([self._data.frames[idx].source for idx in selected]
+                   if isinstance(self._data, AcquisitionSeries) else
+                   [self._stream_completed_sources[idx] for idx in selected])
+        if gpu_adapter.can_query_together(sources):
+            if selected != self._compare_session_indices:
+                if self._compare_session is not None:
+                    self._compare_session.close()
+                self._compare_session = None
+                self._compare_session_indices = ()
+                self._compare_session = gpu_adapter.prepare_session(sources)
+                self._compare_session_indices = selected
+            return self._compare_session
+        return None
+
+    def _compare_query(self, indices: Sequence[int], method: str, *args) -> np.ndarray:
+        """Batch immutable counts, querying any arriving scans in their original panel order."""
+        with self._compare_lock:
+            completed = (list(indices) if isinstance(self._data, AcquisitionSeries) else
+                         [idx for idx in indices if idx in self._stream_completed_sources])
+            session = self._joint_session(completed) if completed else None
+            if session is None:
+                return np.stack([np.asarray(getattr(self._session(idx), method)(*args), dtype=np.float32)
+                                 for idx in indices])
+            results = np.asarray(getattr(session, method)(*args), dtype=np.float32)
+            if len(completed) == len(indices):
+                return results
+            ready = dict(zip(completed, results))
+            return np.stack([ready[idx] if idx in ready else
+                             np.asarray(getattr(self._session(idx), method)(*args), dtype=np.float32)
+                             for idx in indices])
+
+    def _compare_frames(self, indices: Sequence[int], flat: int) -> np.ndarray:
+        """Read one position across visible acquisitions in a single supported query."""
+        return self._compare_query(indices, "frame", flat)
+
     def _compare_images(self, indices: Sequence[int], mask: np.ndarray) -> np.ndarray:
         """Virtual images of several datasets under one mask, per detector pixel.
 
@@ -1895,24 +1939,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         covers more pixels. The single-view image stays a plain sum.
         """
         area = max(1.0, float(np.count_nonzero(mask)))
-        selected = tuple(int(idx) for idx in indices)
-        if isinstance(self._data, AcquisitionSeries):
-            sources = [self._data.frames[idx].source for idx in selected]
-            if gpu_adapter.can_query_together(sources):
-                if selected != self._compare_session_indices:
-                    if self._compare_session is not None:
-                        self._compare_session.close()
-                    self._compare_session = None
-                    self._compare_session_indices = ()
-                    self._compare_session = gpu_adapter.prepare_session(sources)
-                    self._compare_session_indices = selected
-                images = np.ascontiguousarray(self._compare_session.masked_sum(mask), dtype=np.float32)
-                images /= area
-                return images
-        return np.stack([
-            np.ascontiguousarray(self._session(idx).masked_sum(mask), dtype=np.float32) / area
-            for idx in selected
-        ])
+        images = np.ascontiguousarray(self._compare_query(indices, "masked_sum", mask))
+        images /= area
+        return images
 
     def selected_scan_region(self) -> tuple[int, int, int, int]:
         """Return the scan rectangle selected in the virtual image.
@@ -1996,36 +2025,42 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         if self._data is None:
             return
         flat = self.pos_row * self.shape_cols + self.pos_col
-        with self._session_lock:
+        frames = None
+        with self._compare_lock, self._session_lock:
             if self._multiple_view_active() and self.compare_dp_mode == "average":
                 page = self._page_indices() or [int(self.frame_idx)]
-                frames = [np.asarray(self._session(idx).frame(flat), dtype=np.float32) for idx in page]
+                frames = self._compare_frames(page, flat)
                 # A live scan returns an all-NaN pattern until this position
                 # arrives. Average acquired patterns; retain NaN if none exist.
                 acquired = [frame for frame in frames if not np.isnan(frame).all()]
                 frame = (np.mean(acquired, axis=0) if acquired else
                          np.full((self.det_rows, self.det_cols), np.nan, np.float32))
+            elif (self._multiple_view_active() and self.compare_dp_mode == "all"
+                  and self.vi_roi_mode == "off" and self.compare_panel_indices):
+                panels = list(self.compare_panel_indices)
+                frames = self._compare_frames(panels, flat)
+                frame = (frames[panels.index(self.frame_idx)] if self.frame_idx in panels else
+                         np.asarray(self._compute.frame(flat), dtype=np.float32))
             else:
                 frame = np.asarray(self._compute.frame(flat), dtype=np.float32)
         self.frame_bytes = frame.tobytes()
         if self.vi_roi_mode != "off":
             self._compute_vi_roi_dp()
         else:
-            self._publish_all_diffraction()
+            self._publish_all_diffraction(frames=frames)
 
-    def _publish_all_diffraction(self, indices=None) -> None:
+    def _publish_all_diffraction(self, indices=None, *, frames=None) -> None:
         """In ``compare_dp_mode="all"`` send every visible dataset's pattern for the one selection."""
         if self._multiple_view_active() and self.compare_dp_mode == "all":
             panels = list(self.compare_panel_indices)
             flat = self.pos_row * self.shape_cols + self.pos_col
-            frames = [
-                self._session(idx).frame(flat) if indices is None else self._session(idx).reduce_frames(indices, self.vi_roi_reduce)
-                for idx in panels
-            ]
-            if frames:
+            if panels:
+                if frames is None:
+                    frames = (self._compare_frames(panels, flat) if indices is None else
+                              np.stack([self._session(idx).reduce_frames(indices, self.vi_roi_reduce) for idx in panels]))
                 with self.hold_sync():
                     self.compare_diffraction_indices = panels
-                    self.compare_diffraction_bytes = np.stack([np.asarray(frame, dtype=np.float32) for frame in frames]).tobytes()
+                    self.compare_diffraction_bytes = np.ascontiguousarray(frames, dtype=np.float32).tobytes()
                 return
         self._clear_all_diffraction()
 

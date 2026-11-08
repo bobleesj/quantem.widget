@@ -673,6 +673,8 @@ class Show2D(
     panel_cmaps_memory = traitlets.List(traitlets.Unicode(), default_value=[]).tag(sync=True)
     ncols = traitlets.Int(3).tag(sync=True)
     log_scale = traitlets.Bool(False).tag(sync=True)
+    # Flip: show -image (a phase with atoms as minima reads with atoms as maxima); stats and export follow
+    value_flip = traitlets.Bool(False).tag(sync=True)
     auto_contrast = traitlets.Bool(False).tag(sync=True)
     contrast_preset = traitlets.Unicode("custom").tag(sync=True)
     vmin = traitlets.Float(None, allow_none=True).tag(sync=True)
@@ -870,6 +872,7 @@ class Show2D(
         panel_title_font_size: int = 11,
         panel_title_style: Mapping[str, object] | None = None,
         log_scale: bool = False,
+        value_flip: bool = False,
         auto_contrast: bool = False,
         vmin: float | list | None = None,
         vmax: float | list | None = None,
@@ -1324,6 +1327,8 @@ class Show2D(
         self.observe(self._on_first_render, names=["_js_rendered"])
         self.observe(self._on_export_request_change, names=["export_request"])
         self.observe(self._on_detail_request_change, names=["_detail_request"])
+        if value_flip:
+            self.value_flip = True
 
     @traitlets.validate("starred")
     def _validate_starred(self, proposal: dict) -> list[int]:
@@ -1703,6 +1708,8 @@ class Show2D(
             self._compute_all_stats()
             self._update_all_frames()
             announce_browser_limit("Show2D", len(self.frame_bytes) + len(self.panel_stack_bytes), self.display_bin)
+            if self.value_flip:
+                self._negate_pixels()
         self._updating_panel_frames = False
 
     def _apply_folder_image_records(
@@ -2229,6 +2236,32 @@ class Show2D(
             (self.image_rotations[panel] if panel < len(self.image_rotations) else 0) % 4
             for panel in range(n_panels)
         ]
+
+    @traitlets.observe("value_flip")
+    def _on_value_flip(self, change):
+        if bool(change["new"]) != bool(change["old"]):
+            self._negate_pixels()
+
+    def _negate_pixels(self):
+        """Negate the widget's own pixel copies (never the caller's array) once each, swap the contrast limits,
+        and resend. Views of an array already negated are skipped."""
+        done = []
+        arrays = [self._data, getattr(self, "_display_data", None),
+                  *(getattr(self, "_panel_stacks", None) or []), *(getattr(self, "_display_panel_stacks", None) or [])]
+        for array in arrays:
+            if not isinstance(array, np.ndarray) or array.size == 0 or array.dtype.kind != "f":
+                continue
+            if any(np.shares_memory(array, other) for other in done):
+                continue
+            np.negative(array, out=array)
+            done.append(array)
+        if self.vmin is not None or self.vmax is not None:
+            self.vmin, self.vmax = (None if self.vmax is None else -self.vmax), (None if self.vmin is None else -self.vmin)
+        if self.vmins is not None and self.vmaxs is not None:
+            self.vmins, self.vmaxs = ([None if v is None else -v for v in self.vmaxs],
+                                      [None if v is None else -v for v in self.vmins])
+        self._compute_all_stats()
+        self._update_all_frames()
 
     @traitlets.observe("image_rotations")
     def _on_image_rotations_changed(self, change):
