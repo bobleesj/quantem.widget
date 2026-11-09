@@ -11,6 +11,7 @@
 
 import * as React from "react";
 import { createRender, useModel, useModelState } from "@anywidget/react";
+import { useStreamPanels } from "./streamPanels";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import Stack from "@mui/material/Stack";
@@ -769,7 +770,10 @@ function Show2D() {
   const isGallery = usesGalleryLayout(nImages, isPaged);
   const [width] = useModelState<number>("width");
   const [height] = useModelState<number>("height");
-  const [frameBytes] = useModelState<DataView>("frame_bytes");
+  const [modelFrameBytes] = useModelState<DataView>("frame_bytes");
+  // Show2D.stream sends changed panels as messages; the trait stays as Python last sent it.
+  const streamedFrameBytes = useStreamPanels(model);
+  const frameBytes = streamedFrameBytes ?? modelFrameBytes;
   const [panelFrameCounts] = useModelState<number[]>("panel_frame_counts");
   const [panelFrameIndices, setPanelFrameIndices] = useModelState<number[]>("panel_frame_indices");
   const [panelPlaybackFpsTrait] = useModelState<number>("panel_playback_fps");
