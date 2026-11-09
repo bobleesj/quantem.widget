@@ -4633,12 +4633,28 @@ function Show4DSTEM() {
   const initialCanvasSize = panelWidthPx > 0 ? panelWidthPx : CANVAS_SIZE;
   const [canvasSize, setCanvasSize] = React.useState(dpPanelWidthPx || initialCanvasSize);
   const [viCanvasSize, setViCanvasSize] = React.useState(viPanelWidthPx || initialCanvasSize);
+  // Panels shrink to stay side by side (DP | VI | FFT) instead of wrapping below each other;
+  // under 700 px the layout stacks into one column, and never below MIN_CANVAS_SIZE.
+  const mainRowRef = React.useRef<HTMLDivElement>(null);
+  const [mainRowWidth, setMainRowWidth] = React.useState(0);
+  React.useLayoutEffect(() => {
+    const node = mainRowRef.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => setMainRowWidth(Math.floor(entry.contentRect.width)));
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  const sideBySideLimit = React.useMemo(() => {
+    if (mainRowWidth <= 700) return Infinity;
+    const panels = showFft ? 3 : 2;
+    return Math.max(MIN_CANVAS_SIZE, Math.floor((mainRowWidth - SPACING.LG * (panels - 1)) / panels));
+  }, [mainRowWidth, showFft]);
   React.useEffect(() => {
-    setCanvasSize(dpPanelWidthPx || panelWidthPx || CANVAS_SIZE);
-  }, [dpPanelWidthPx, panelWidthPx]);
+    setCanvasSize(Math.min(dpPanelWidthPx || panelWidthPx || CANVAS_SIZE, sideBySideLimit));
+  }, [dpPanelWidthPx, panelWidthPx, sideBySideLimit]);
   React.useEffect(() => {
-    setViCanvasSize(viPanelWidthPx || panelWidthPx || CANVAS_SIZE);
-  }, [viPanelWidthPx, panelWidthPx]);
+    setViCanvasSize(Math.min(viPanelWidthPx || panelWidthPx || CANVAS_SIZE, sideBySideLimit));
+  }, [viPanelWidthPx, panelWidthPx, sideBySideLimit]);
   const [isResizingCanvas, setIsResizingCanvas] = React.useState(false);
   const [resizeCanvasStart, setResizeCanvasStart] = React.useState<{ x: number; y: number; size: number; panel: "dp" | "vi" } | null>(null);
 
@@ -8306,6 +8322,7 @@ function Show4DSTEM() {
       )}
       {/* MAIN CONTENT: DP | VI | FFT (three columns when FFT shown) */}
       <Stack
+        ref={mainRowRef}
         direction="row"
         sx={{
           gap: `${SPACING.LG}px`,
