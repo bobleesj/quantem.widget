@@ -243,6 +243,7 @@ const sliderStyles = {
 
 const CANVAS_SIZE = 480;  // Both DP and VI canvases
 const MIN_CANVAS_SIZE = 240;
+const SIDE_BY_SIDE_MIN = 160;  // panels shrink this far to stay side by side in a narrow notebook
 const COMPARE_GRID_DEFAULT_WIDTH = 980;
 const MIN_COMPARE_GRID_WIDTH = 320;
 type Show4DSTEMWindow = SavePickerWindow & {
@@ -4634,7 +4635,7 @@ function Show4DSTEM() {
   const [canvasSize, setCanvasSize] = React.useState(dpPanelWidthPx || initialCanvasSize);
   const [viCanvasSize, setViCanvasSize] = React.useState(viPanelWidthPx || initialCanvasSize);
   // Panels shrink to stay side by side (DP | VI | FFT) instead of wrapping below each other;
-  // never below MIN_CANVAS_SIZE (then they wrap); phones (viewport < 700 px) stack by media query.
+  // never below SIDE_BY_SIDE_MIN (then they wrap); phones (viewport < 700 px) stack by media query.
   const mainRowRef = React.useRef<HTMLDivElement>(null);
   const [mainRowWidth, setMainRowWidth] = React.useState(0);
   React.useLayoutEffect(() => {
@@ -4647,7 +4648,7 @@ function Show4DSTEM() {
   const sideBySideLimit = React.useMemo(() => {
     if (!mainRowWidth) return Infinity;
     const panels = showFft ? 3 : 2;
-    return Math.max(MIN_CANVAS_SIZE, Math.floor((mainRowWidth - SPACING.LG * (panels - 1)) / panels));
+    return Math.max(SIDE_BY_SIDE_MIN, Math.floor((mainRowWidth - SPACING.LG * (panels - 1)) / panels));
   }, [mainRowWidth, showFft]);
   React.useEffect(() => {
     setCanvasSize(Math.min(dpPanelWidthPx || panelWidthPx || CANVAS_SIZE, sideBySideLimit));
