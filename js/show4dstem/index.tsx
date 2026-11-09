@@ -8235,7 +8235,7 @@ function Show4DSTEM() {
   ]);
   if (nFrames === 0) {
     return (
-      <Box ref={rootRef} className="show4dstem-root" sx={{ p: 2, bgcolor: themeColors.bg, color: themeColors.text }}>
+      <Box ref={rootRef} className="show4dstem-root" sx={{ p: "4px", bgcolor: themeColors.bg, color: themeColors.text }}>
         {titleHeading}
         <Typography role="status" sx={themedTypography.label}>
           No acquired patterns. Images appear when the detector starts sending data.
@@ -8252,7 +8252,7 @@ function Show4DSTEM() {
       onMouseDownCapture={handleRootMouseDownCapture}
       onDragOver={onLocalDragOver}
       onDrop={onLocalDrop}
-      sx={{ p: 2, bgcolor: themeColors.bg, color: themeColors.text, outline: "none", borderRadius: "2px", width: "100%", maxWidth: "100%", boxSizing: "border-box", "@media (max-width: 700px)": { p: 0, overflowX: "hidden", ".jp-OutputArea-output &, .jp-OutputArea-child &": { width: "calc(100vw - 96px)", maxWidth: "calc(100vw - 96px)" } } }}
+      sx={{ p: "4px", bgcolor: themeColors.bg, color: themeColors.text, outline: "none", borderRadius: "2px", width: "100%", maxWidth: "100%", boxSizing: "border-box", "@media (max-width: 700px)": { p: 0, overflowX: "hidden", ".jp-OutputArea-output &, .jp-OutputArea-child &": { width: "calc(100vw - 96px)", maxWidth: "calc(100vw - 96px)" } } }}
     >
       <FolderWatchBadge
         state={folderWatchState}
