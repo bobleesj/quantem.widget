@@ -159,10 +159,9 @@ class StreamFollower:
                     current = sources[shown - 1]
                     self.follow_probe(current)
                     scan = current.metadata.get("series", shown)
-                    status = "complete" if current.received == current.total else "receiving"
-                    viewer.title = (f"{self.title} | scan {scan} {status}: "
-                                    f"{current.received:,}/{current.total:,} patterns"
-                                    f" | {shown} retained | row scan left → right | ANS on GPU")
+                    # One short line that never wraps beside a control panel; the counts are in the stats bar.
+                    done = " ✓" if current.received == current.total else ""
+                    viewer.title = f"Live · {scan} · {current.received:,}/{current.total:,}{done} · {shown} kept"
                 else:
                     viewer.title = self.title
                 self.previous = progress

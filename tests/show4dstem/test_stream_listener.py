@@ -184,14 +184,14 @@ def test_stream_updates_while_notebook_waits():
             recording.acquisitions.append(scan)
             deadline = time.monotonic() + 5
             # Deliberately synchronous, just like replay.wait()/arina_stream.wait().
-            while "4/12 patterns" not in viewer.title and time.monotonic() < deadline:
+            while "4/12" not in viewer.title and time.monotonic() < deadline:
                 time.sleep(0.01)
-            assert "scan 7 receiving: 4/12 patterns" in viewer.title
+            assert "Live · 7 · 4/12 · " in viewer.title
             scan.counts.fill_(2)
             scan.received = scan.total
-            while "complete" not in viewer.title and time.monotonic() < deadline:
+            while "✓" not in viewer.title and time.monotonic() < deadline:
                 time.sleep(0.01)
-            assert "scan 7 complete: 12/12 patterns" in viewer.title
+            assert "Live · 7 · 12/12 ✓" in viewer.title
             np.testing.assert_array_equal(viewer.pattern(1, 2), scan.counts[1, 2].numpy())
             assert viewer.stream_error is None
         finally:
