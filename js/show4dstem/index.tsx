@@ -7711,8 +7711,8 @@ function Show4DSTEM() {
       direction="row"
       spacing={`${SPACING.SM}px`}
       alignItems="center"
-      justifyContent="flex-end"
-      sx={{ flexWrap: "wrap", rowGap: 0.5 }}
+      justifyContent="flex-start"
+      sx={{ flexWrap: "nowrap", whiteSpace: "nowrap" }}
     >
       <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Profile</Typography>
       <Switch checked={profileActive} onChange={(event) => {
@@ -8355,11 +8355,10 @@ function Show4DSTEM() {
         {/* LEFT COLUMN: DP Panel */}
         <Box sx={{ width: squarePanelWidth, maxWidth: "100%", ...mobilePanelSx }}>
           {/* DP Header */}
-          <Stack direction="row" justifyContent="space-between" alignItems="center" sx={panelHeaderSx}>
-            <Typography variant="caption" sx={{ ...themedTypography.label }}>
-              DP at ({Math.round(localPosRow)}, {Math.round(localPosCol)})
-              <span style={{ color: roiColors.textColor, marginLeft: SPACING.SM }}>k: ({Math.round(localKRow)}, {Math.round(localKCol)})</span>
-            </Typography>
+          {/* One row, the same height as the image header, so the two canvases line up; the cursor
+              readout already gives the scan position and k (also on hover here). */}
+          <Stack direction="row" justifyContent="flex-start" alignItems="center" sx={{ ...panelHeaderSx, flexWrap: "nowrap" }}
+            title={`DP at (${Math.round(localPosRow)}, ${Math.round(localPosCol)}) · k (${Math.round(localKRow)}, ${Math.round(localKCol)})`}>
             {dpToolbarControls}
           </Stack>
 
