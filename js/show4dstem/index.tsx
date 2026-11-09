@@ -243,8 +243,8 @@ const sliderStyles = {
 
 const CANVAS_SIZE = 480;  // Both DP and VI canvases
 const MIN_CANVAS_SIZE = 240;
-const SIDE_BY_SIDE_MIN = 160;
-const PANEL_GAP = 4;  // between the diffraction pattern, the image or scan grid and the FFT  // panels shrink this far to stay side by side in a narrow notebook
+const SIDE_BY_SIDE_MIN = 160;  // panels shrink this far to stay side by side in a narrow notebook
+const PANEL_GAP = 4;  // between the diffraction pattern, the image or scan grid and the FFT
 const COMPARE_GRID_DEFAULT_WIDTH = 980;
 const MIN_COMPARE_GRID_WIDTH = 320;
 type Show4DSTEMWindow = SavePickerWindow & {
