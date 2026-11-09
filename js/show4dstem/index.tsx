@@ -4634,7 +4634,7 @@ function Show4DSTEM() {
   const [canvasSize, setCanvasSize] = React.useState(dpPanelWidthPx || initialCanvasSize);
   const [viCanvasSize, setViCanvasSize] = React.useState(viPanelWidthPx || initialCanvasSize);
   // Panels shrink to stay side by side (DP | VI | FFT) instead of wrapping below each other;
-  // under 700 px the layout stacks into one column, and never below MIN_CANVAS_SIZE.
+  // never below MIN_CANVAS_SIZE (then they wrap); phones (viewport < 700 px) stack by media query.
   const mainRowRef = React.useRef<HTMLDivElement>(null);
   const [mainRowWidth, setMainRowWidth] = React.useState(0);
   React.useLayoutEffect(() => {
@@ -4645,7 +4645,7 @@ function Show4DSTEM() {
     return () => observer.disconnect();
   }, []);
   const sideBySideLimit = React.useMemo(() => {
-    if (mainRowWidth <= 700) return Infinity;
+    if (!mainRowWidth) return Infinity;
     const panels = showFft ? 3 : 2;
     return Math.max(MIN_CANVAS_SIZE, Math.floor((mainRowWidth - SPACING.LG * (panels - 1)) / panels));
   }, [mainRowWidth, showFft]);
