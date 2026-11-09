@@ -243,7 +243,8 @@ const sliderStyles = {
 
 const CANVAS_SIZE = 480;  // Both DP and VI canvases
 const MIN_CANVAS_SIZE = 240;
-const SIDE_BY_SIDE_MIN = 160;  // panels shrink this far to stay side by side in a narrow notebook
+const SIDE_BY_SIDE_MIN = 160;
+const PANEL_GAP = 4;  // between the diffraction pattern, the image or scan grid and the FFT  // panels shrink this far to stay side by side in a narrow notebook
 const COMPARE_GRID_DEFAULT_WIDTH = 980;
 const MIN_COMPARE_GRID_WIDTH = 320;
 type Show4DSTEMWindow = SavePickerWindow & {
@@ -2193,12 +2194,13 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   }
 
   return (
-    <Box sx={{ width: "100%", maxWidth: gridWidth > 0 ? `${gridWidth}px` : "100%", position: "relative", "@media (max-width: 700px)": { maxWidth: "100%" } }}>
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1, color: themeColors.textMuted, fontSize: 10 }}>
-        <span>Scroll to zoom · Shift-drag to pan</span>
-        <Button size="small" sx={{ fontSize: 10, minWidth: 0 }} onClick={resetCompareView}>Reset</Button>
+    <Box title="Scroll to zoom · Shift-drag to pan" sx={{ width: "100%", maxWidth: gridWidth > 0 ? `${gridWidth}px` : "100%", position: "relative", "@media (max-width: 700px)": { maxWidth: "100%" } }}>
+      {/* Zoom readout only while zoomed, over the grid: no line of its own. */}
+      {Math.abs(compareZoom - 1) > 1e-3 && <Box sx={{ position: "absolute", top: 2, right: 2, zIndex: 3, display: "flex", alignItems: "center", gap: 0.5,
+        px: 0.5, borderRadius: "3px", bgcolor: "rgba(0,0,0,0.55)", color: "#fff", fontSize: 10 }}>
         <span>{compareZoom.toFixed(1)}×</span>
-      </Box>
+        <Button size="small" sx={{ fontSize: 10, minWidth: 0, p: 0, color: "#fff" }} onClick={resetCompareView}>Reset</Button>
+      </Box>}
       <Box
         sx={{
           position: "relative",
@@ -4547,11 +4549,11 @@ function Show4DSTEM() {
   const sideBySideLimit = React.useMemo(() => {
     if (!mainRowWidth) return Infinity;
     const panels = showFft ? 3 : 2;
-    return Math.max(SIDE_BY_SIDE_MIN, Math.floor((mainRowWidth - SPACING.LG * (panels - 1)) / panels));
+    return Math.max(SIDE_BY_SIDE_MIN, Math.floor((mainRowWidth - PANEL_GAP * (panels - 1)) / panels));
   }, [mainRowWidth, showFft]);
   const fittedDpWidth = Math.min(dpPanelWidthPx || panelWidthPx || CANVAS_SIZE, sideBySideLimit);
   const compareGridFit = mainRowWidth > 0
-    ? Math.max(SIDE_BY_SIDE_MIN, mainRowWidth - fittedDpWidth * (showFft ? 2 : 1) - SPACING.LG * (showFft ? 2 : 1))
+    ? Math.max(SIDE_BY_SIDE_MIN, mainRowWidth - fittedDpWidth * (showFft ? 2 : 1) - PANEL_GAP * (showFft ? 2 : 1))
     : COMPARE_GRID_DEFAULT_WIDTH;
   const compareGridWidth = compareGridPreviewWidth ?? (compareGridWidthPx > 0 ? compareGridWidthPx : compareGridFit);
   React.useEffect(() => {
@@ -8066,7 +8068,7 @@ function Show4DSTEM() {
       spacing={`${SPACING.SM}px`}
       alignItems="center"
       justifyContent="flex-end"
-      sx={{ flexWrap: "wrap", rowGap: 0.5 }}
+      sx={{ flexWrap: "nowrap", flexShrink: 0, whiteSpace: "nowrap" }}
     >
       {compareMode && <>
         <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Cols</Typography>
@@ -8334,7 +8336,7 @@ function Show4DSTEM() {
         ref={mainRowRef}
         direction="row"
         sx={{
-          gap: `${SPACING.LG}px`,
+          gap: `${PANEL_GAP}px`,
           flexWrap: "wrap",
           alignItems: "flex-start",
           maxWidth: "100%",
@@ -8482,10 +8484,11 @@ function Show4DSTEM() {
         {/* SECOND COLUMN: VI Panel */}
         <Box sx={{ width: viPanelWidth, maxWidth: "100%", ...mobilePanelSx }}>
           {/* VI Header */}
-          <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ ...panelHeaderSx, ...hideBetweenPanelsOnMobileSx }}>
-            <Stack direction="row" alignItems="center" spacing={`${SPACING.SM}px`} sx={{ minWidth: 0, flexWrap: "wrap", rowGap: 0.5 }}>
-              <Typography sx={{ ...themedTypography.label, color: themeColors.textMuted, flexShrink: 0 }}>
-                {compareMode ? "Multiple " : ""}{viSourceLabel(activeViSource)}{compareMode ? ` | ${shapeRows}×${shapeCols}` : ` | ${shapeRows}×${shapeCols} | ${detRows}×${detCols}`}
+          <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ ...panelHeaderSx, flexWrap: "nowrap", ...hideBetweenPanelsOnMobileSx }}>
+            <Stack direction="row" alignItems="center" spacing={`${SPACING.SM}px`} sx={{ minWidth: 0, flexWrap: "nowrap" }}>
+              <Typography noWrap title={`${compareMode ? "Multiple " : ""}${viSourceLabel(activeViSource)} | ${shapeRows}×${shapeCols}`}
+                sx={{ ...themedTypography.label, color: themeColors.textMuted, minWidth: 0 }}>
+                {viSourceLabel(activeViSource)}{compareMode ? ` · ${shapeRows}×${shapeCols}` : ` | ${shapeRows}×${shapeCols} | ${detRows}×${detCols}`}
               </Typography>
               {controlsVisible && compareMode && activeComparePageCount > 1 && (
                 <Box sx={{ display: "flex", alignItems: "center", gap: 0.35, flexShrink: 0 }}>
