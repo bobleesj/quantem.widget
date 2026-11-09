@@ -168,7 +168,7 @@ function ScanControlView() {
 
   const state = status?.state ?? "NOT_CONNECTED";
   const scans = status?.scans ?? [];
-  const vram = status?.source === "vram";       // the live view's scans in Buffle VRAM, saved there
+  const vram = status?.source === "vram";       // the live view's scans in GPU memory on the processing host, saved there
   const names = scans.map((scan) => scan.name);
   React.useEffect(() => setSelected((chosen) => chosen.filter((name) => names.includes(name))), [names.join("\n")]);
   const running = state === "SCANNING" || state === "STOPPING";
@@ -418,7 +418,7 @@ function ScanControlView() {
 
     <Box sx={box}>
       <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap", mb: 0.5 }}>
-        <strong>{vram ? "Scans on Buffle (VRAM)" : "Scans on the detector"}</strong>
+        <strong>{vram ? "Scans in GPU memory" : "Scans on the detector"}</strong>
         <span style={{ color: colors.textMuted }}>{vram ? `${scans.length} scans, newest last` : `${scans.length} scans · free ${gb(status?.free_bytes, 0)}`}</span>
         <Box sx={{ flex: 1 }} />
         <Button size="small" sx={button} disabled={!scans.length} onClick={() => setSelected(names)}>Select all</Button>
@@ -453,7 +453,7 @@ function ScanControlView() {
           <MenuItem value="h5">{vram ? ".h5 (HDF5, all metadata)" : ".h5 (detector files)"}</MenuItem>
           <MenuItem value="qem">.qem (ANS, quantem.gpu)</MenuItem>
         </Select>
-        <TextField size="small" value={folder} placeholder={vram ? "Buffle folder, e.g. /data/live/2026-10-28" : "Download folder"} disabled={locked}
+        <TextField size="small" value={folder} placeholder={vram ? "Folder on the GPU host, e.g. /data/live/<date>" : "Download folder"} disabled={locked}
           sx={{ ...field, flex: 1, minWidth: 220 }} onChange={(e) => setFolder(e.target.value)} />
       </Box>
       <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap", mt: 1 }}>

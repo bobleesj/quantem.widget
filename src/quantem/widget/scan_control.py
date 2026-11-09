@@ -293,7 +293,7 @@ class ScanControl(anywidget.AnyWidget):
             raise ValueError("Set folder before downloading.")
         if format not in ("h5", "qem"):
             raise ValueError("format must be 'h5' or 'qem'.")
-        if getattr(self.runner, "vram_scans", False):      # Save from Buffle VRAM into a Buffle folder
+        if getattr(self.runner, "vram_scans", False):      # Save from GPU memory into a folder on the GPU host
             return self.runner.start("save_vram", list(scans), self.folder, format)
         scans, folder = list(scans), Path(self.folder)
         if format == "h5":
@@ -389,7 +389,7 @@ class ScanControl(anywidget.AnyWidget):
                                                     "files", "free_bytes", "sensor", "microscope",
                                                     "calibration")}
         status["files"] = list(status["files"] or [])
-        # "vram": the runner lists the scans the live view holds in Buffle VRAM (RDMA; the DCU writes no files)
+        # "vram": the runner lists the scans the live view holds in GPU memory (RDMA; the DCU writes no files)
         status["source"] = "vram" if getattr(self.runner, "vram_scans", False) else "detector"
         done = status["calibration"]
         if done and done.get("path") != self._calibration_seen:      # a new calibration: choose it
