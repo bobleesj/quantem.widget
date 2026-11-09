@@ -1529,7 +1529,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         Returns a waiting viewer immediately when the receiver is idle. It does
         not arm or trigger acquisition. Pass ``first_timeout_s=120`` to wait for
         the first pattern before returning, as in earlier versions.
-        New scans appear at the top left; the selected scan stays selected.
+        New scans appear at the top left, three per row (``compare_cols``); the selected scan stays selected.
         Set ``newest_first=False`` for chronological display. Data and dataset
         indices always retain acquisition order.
 
@@ -1541,6 +1541,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             raise ValueError("refresh_s must be finite and positive.")
         if not math.isfinite(first_timeout_s) or first_timeout_s < 0:
             raise ValueError("first_timeout_s must be finite and nonnegative.")
+        viewer_kwargs.setdefault("compare_cols", 3)   # a steady grid while scans arrive; 0 chooses automatically
         partial = hasattr(recording, "acquisitions")
         lock = getattr(recording, "lock", nullcontext())
 

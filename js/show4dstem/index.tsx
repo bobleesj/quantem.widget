@@ -4531,7 +4531,12 @@ function Show4DSTEM() {
     return items;
   }, [activeComparePageCount, activeComparePageIdx]);
   const frameSliderAriaLabel = `Show4DSTEM ${frameDimLabel.toLowerCase()}`;
-  const compareGridWidth = compareGridPreviewWidth ?? (compareGridWidthPx > 0 ? compareGridWidthPx : COMPARE_GRID_DEFAULT_WIDTH);
+  // Unless a width was chosen, the scan grid fills the space beside the diffraction pattern
+  // (and the FFT) instead of wrapping below it.
+  const compareGridFit = mainRowWidth > 0
+    ? Math.max(SIDE_BY_SIDE_MIN, mainRowWidth - canvasSize - SPACING.LG * (showFft ? 2 : 1) - (showFft ? canvasSize : 0))
+    : COMPARE_GRID_DEFAULT_WIDTH;
+  const compareGridWidth = compareGridPreviewWidth ?? (compareGridWidthPx > 0 ? compareGridWidthPx : compareGridFit);
   React.useEffect(() => {
     if (!compareMode || compareAllGroups) {
       setCompareReorderMode(false);
