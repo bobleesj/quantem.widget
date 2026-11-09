@@ -15,6 +15,7 @@ import * as React from "react";
 import { sliderStyles, SPACING, controlRow, switchStyles, upwardMenuProps, controlPanel } from "../controlStyles";
 import { PlayPauseButton } from "../PlayPauseButton";
 import { createRender, useModel, useModelState } from "@anywidget/react";
+import { streamedStackExtends, useStreamFrames } from "./streamFrames";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import Stack from "@mui/material/Stack";
@@ -578,7 +579,10 @@ function Show3D() {
   // sliced from it. Native arrays remain in Python; the browser uploads this
   // float32 stack to WebGPU once when available.
   const [offlineStackTrait] = useModelState<DataView>("_offline_stack");
-  const [offlineFloatStack] = useModelState<DataView>("_offline_float_stack");
+  const [modelFloatStack] = useModelState<DataView>("_offline_float_stack");
+  // Show3D.stream appends arrive as frame messages; the trait stays as Python last sent it.
+  const streamedFloatStack = useStreamFrames(model);
+  const offlineFloatStack = streamedFloatStack ?? modelFloatStack;
   const [offlineMin] = useModelState<number>("_offline_min");
   const [offlineMax] = useModelState<number>("_offline_max");
   const [offlineMins] = useModelState<number[]>("_offline_mins");
@@ -2837,6 +2841,11 @@ function Show3D() {
   const gpuCmapRef = React.useRef<GPUColormapEngine | null>(null);
   const gpuCmapReadyRef = React.useRef(false);
   const gpuFrameCacheUploadedRef = React.useRef<Set<number>>(new Set());
+  // Show3D.stream: the stack the GPU residency effect will see next, read by its cleanup to keep
+  // resident frames when the new stack only appends to the old one.
+  const gpuStackRef = React.useRef({ stack: offlineFloatStack as DataView | null, width, height, isRgb });
+  gpuStackRef.current = { stack: offlineFloatStack, width, height, isRgb };
+  const gpuKeepResidentRef = React.useRef(false);
   const gpuUploadRef = React.useRef<{
     source: Float32Array | null;
     data: Float32Array | null;
@@ -4723,6 +4732,9 @@ function Show3D() {
 
   React.useEffect(() => {
     let cancelled = false;
+    const keepResident = gpuKeepResidentRef.current;
+    gpuKeepResidentRef.current = false;
+    if (!keepResident) gpuFrameCacheUploadedRef.current.clear();
     const frameCount = Math.max(1, nSlices || 1);
     const frameSize = Math.max(1, width * height * (isRgb ? 3 : 1));
     const hasEmbeddedDisplayStack = Boolean(
@@ -4756,9 +4768,11 @@ function Show3D() {
     }
 
     const current = ((Math.round(sliceIdx) % frameCount) + frameCount) % frameCount;
-    const order = [current, ...Array.from({ length: frameCount }, (_, idx) => idx).filter(idx => idx !== current)];
-    setGpuResidency({ stage: "uploading", ready: 0, error: "" });
-    gpuFrameCacheUploadedRef.current.clear();
+    // A streamed append keeps the resident frames (see the cleanup below) and uploads only the new ones.
+    const uploaded = gpuFrameCacheUploadedRef.current;
+    const order = [current, ...Array.from({ length: frameCount }, (_, idx) => idx).filter(idx => idx !== current)]
+      .filter(idx => !uploaded.has(idx));
+    setGpuResidency({ stage: "uploading", ready: uploaded.size, error: "" });
 
     void (async () => {
       try {
@@ -4770,9 +4784,8 @@ function Show3D() {
             throw new Error(`display frame ${idx + 1} is unavailable`);
           }
           engine.uploadData(idx, frame, width, height, 1, true);
-          gpuFrameCacheUploadedRef.current.add(idx);
-          const ready = position + 1;
-          setGpuResidency({ stage: "uploading", ready, error: "" });
+          uploaded.add(idx);
+          setGpuResidency({ stage: "uploading", ready: uploaded.size, error: "" });
           if (position === 0) renderGpuCachedSliceDirect(current, false);
           if (position % 4 === 3) await new Promise<void>(resolve => window.setTimeout(resolve, 0));
         }
@@ -4790,6 +4803,13 @@ function Show3D() {
 
     return () => {
       cancelled = true;
+      const next = gpuStackRef.current;
+      if (next.width === width && next.height === height && next.isRgb === isRgb
+          && streamedStackExtends(offlineFloatStack, next.stack) !== null) {
+        // Appended frames only: the resident slots still hold this stack's frames.
+        gpuKeepResidentRef.current = true;
+        return;
+      }
       for (let idx = 0; idx < frameCount; idx++) engine.releaseSlot(idx);
       engine.releaseSlot(averageScratchSlot);
       gpuFrameCacheUploadedRef.current.clear();

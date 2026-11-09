@@ -41,6 +41,7 @@ from quantem.widget.show2d.widget import _BROWSER_DENOISE_MODES, _nonnegative_in
 from quantem.widget.show3d.export import Show3DExport
 from quantem.widget.show3d.fallback import Show3DFallback
 from quantem.widget.show3d.playback import Show3DPlayback
+from quantem.widget.show3d.streaming import Show3DStream
 from quantem.widget.utils.array import bin2d, to_numpy
 from quantem.widget.utils.display_filter import format_display_filter_banner
 from quantem.widget.utils.state_io import read_state
@@ -123,6 +124,7 @@ def _validated_float32(stack: np.ndarray, panel_name: str) -> np.ndarray:
 
 
 class Show3D(
+    Show3DStream,
     WatchedImageFolderMixin,
     Show3DFallback,
     Show3DExport,
