@@ -7660,8 +7660,10 @@ function Show4DSTEM() {
   // The toolbar and control rows re-render only when their inputs change: a
   // drag that streams new pattern or image bytes leaves their MUI styles alone.
   const titleHeading = React.useMemo(() => (
-    showTitle && <Typography variant="h6" sx={{ ...themedTypography.title, mb: `${SPACING.SM}px` }}>
-      {title || "4D-STEM Explorer"}
+    showTitle && <Typography variant="h6" sx={{ ...themedTypography.title, mb: `${SPACING.SM}px`, display: "flex", alignItems: "center", minWidth: 0 }}>
+      {/* One line beside narrow panels: the full title is on hover. */}
+      <span title={title || "4D-STEM Explorer"} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {title || "4D-STEM Explorer"}</span>
       <RenderPathBadge colors={themeColors} />
       {nFrames > 1 && <span style={{ fontWeight: "normal", fontSize: 13, marginLeft: 8, opacity: 0.7 }}>({frameLabels && frameLabels.length > frameIdx ? frameLabels[frameIdx] : `${frameDimLabel} ${frameIdx + 1}/${nFrames}`})</span>}
       {panelChromeVisible && <InfoTooltip text={<Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
