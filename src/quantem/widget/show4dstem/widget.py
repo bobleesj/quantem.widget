@@ -227,8 +227,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     size, dp_size, image_size
         Named display widths: ``"small"``, ``"medium"``, ``"large"`` or
         ``"xlarge"``. ``size`` sets both panels; ``dp_size`` and ``image_size``
-        override diffraction and virtual images independently. Omitted, retain
-        the responsive layout. Source pixels and scientific precision do not change.
+        override diffraction and virtual images independently. Omitted, the
+        diffraction pattern shows at 300 px and the virtual image (or scan grid)
+        fills the rest of the row. Source pixels and scientific precision do not change.
     panel_width_px, dp_panel_width_px, vi_panel_width_px
         Display widths in CSS pixels. The diffraction and virtual-image widths
         override ``panel_width_px`` independently; zero uses the shared default.

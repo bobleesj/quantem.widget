@@ -242,6 +242,7 @@ const sliderStyles = {
 // ============================================================================
 
 const CANVAS_SIZE = 480;  // Both DP and VI canvases
+const DP_DEFAULT_SIZE = 300;  // the diffraction pattern unless sized; the image or scan grid fills the rest of the row
 const MIN_CANVAS_SIZE = 240;
 const SIDE_BY_SIDE_MIN = 160;  // panels shrink this far to stay side by side in a narrow notebook
 const PANEL_GAP = 4;  // between the diffraction pattern, the image or scan grid and the FFT
@@ -4551,7 +4552,7 @@ function Show4DSTEM() {
     const panels = showFft ? 3 : 2;
     return Math.max(SIDE_BY_SIDE_MIN, Math.floor((mainRowWidth - PANEL_GAP * (panels - 1)) / panels));
   }, [mainRowWidth, showFft]);
-  const fittedDpWidth = Math.min(dpPanelWidthPx || panelWidthPx || CANVAS_SIZE, sideBySideLimit);
+  const fittedDpWidth = Math.min(dpPanelWidthPx || panelWidthPx || DP_DEFAULT_SIZE, sideBySideLimit);
   const compareGridFit = mainRowWidth > 0
     ? Math.max(SIDE_BY_SIDE_MIN, mainRowWidth - fittedDpWidth * (showFft ? 2 : 1) - PANEL_GAP * (showFft ? 2 : 1))
     : COMPARE_GRID_DEFAULT_WIDTH;
@@ -4656,14 +4657,19 @@ function Show4DSTEM() {
 
   // Canvas resize state
   const initialCanvasSize = panelWidthPx > 0 ? panelWidthPx : CANVAS_SIZE;
-  const [canvasSize, setCanvasSize] = React.useState(dpPanelWidthPx || initialCanvasSize);
+  const [canvasSize, setCanvasSize] = React.useState(dpPanelWidthPx || panelWidthPx || DP_DEFAULT_SIZE);
   const [viCanvasSize, setViCanvasSize] = React.useState(viPanelWidthPx || initialCanvasSize);
   React.useEffect(() => {
-    setCanvasSize(Math.min(dpPanelWidthPx || panelWidthPx || CANVAS_SIZE, sideBySideLimit));
-  }, [dpPanelWidthPx, panelWidthPx, sideBySideLimit]);
+    setCanvasSize(fittedDpWidth);
+  }, [fittedDpWidth]);
   React.useEffect(() => {
-    setViCanvasSize(Math.min(viPanelWidthPx || panelWidthPx || CANVAS_SIZE, sideBySideLimit));
-  }, [viPanelWidthPx, panelWidthPx, sideBySideLimit]);
+    // The image fills what the diffraction pattern leaves (shared with the FFT); a set width caps it.
+    const rest = mainRowWidth > 0
+      ? Math.max(SIDE_BY_SIDE_MIN, Math.floor((mainRowWidth - fittedDpWidth - PANEL_GAP * (showFft ? 2 : 1)) / (showFft ? 2 : 1)))
+      : CANVAS_SIZE;
+    const cap = viPanelWidthPx || panelWidthPx;
+    setViCanvasSize(cap ? Math.min(cap, rest) : rest);
+  }, [viPanelWidthPx, panelWidthPx, mainRowWidth, fittedDpWidth, showFft]);
   const [isResizingCanvas, setIsResizingCanvas] = React.useState(false);
   const [resizeCanvasStart, setResizeCanvasStart] = React.useState<{ x: number; y: number; size: number; panel: "dp" | "vi" } | null>(null);
 
