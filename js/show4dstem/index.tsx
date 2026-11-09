@@ -4535,15 +4535,15 @@ function Show4DSTEM() {
   // (and the FFT) instead of wrapping below it.
   // Panels shrink to stay side by side (DP | VI | FFT) instead of wrapping below each other;
   // never below SIDE_BY_SIDE_MIN (then they wrap); phones (viewport < 700 px) stack by media query.
-  const mainRowRef = React.useRef<HTMLDivElement>(null);
+  // A callback ref: the row appears only once data arrives (a streaming viewer mounts while waiting).
+  const [mainRowNode, mainRowRef] = React.useState<HTMLDivElement | null>(null);
   const [mainRowWidth, setMainRowWidth] = React.useState(0);
   React.useLayoutEffect(() => {
-    const node = mainRowRef.current;
-    if (!node || typeof ResizeObserver === "undefined") return;
+    if (!mainRowNode || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(([entry]) => setMainRowWidth(Math.floor(entry.contentRect.width)));
-    observer.observe(node);
+    observer.observe(mainRowNode);
     return () => observer.disconnect();
-  }, []);
+  }, [mainRowNode]);
   const sideBySideLimit = React.useMemo(() => {
     if (!mainRowWidth) return Infinity;
     const panels = showFft ? 3 : 2;
