@@ -50,6 +50,7 @@ from quantem.widget.show2d.options import (
 from quantem.widget.show2d.export import Show2DExport
 from quantem.widget.show2d.fallback import Show2DStaticPng
 from quantem.widget.show2d.state import Show2DState, _rescale_view
+from quantem.widget.show2d.streaming import Show2DStream
 from quantem.widget.utils.array import _b64_safe, _resize_image, bin2d, to_numpy
 from quantem.widget.utils.state_io import read_state
 from quantem.widget.utils.ui import (
@@ -370,6 +371,7 @@ def _quantize_uint8(values: np.ndarray) -> tuple[np.ndarray, float, float]:
 
 
 class Show2D(
+    Show2DStream,
     WatchedImageFolderMixin,
     Show2DExport,
     Show2DState,
@@ -623,6 +625,10 @@ class Show2D(
     # Python then drops the synced pixel buffers from the saved-notebook state.
     _js_rendered = traitlets.Bool(False).tag(sync=True)
     frame_bytes = traitlets.Bytes(b"").tag(sync=True)
+    # Show2D.stream: the base revision the browser patches changed panels onto,
+    # and the acknowledgment number of the last full-image publication.
+    _stream_revision = traitlets.Int(0).tag(sync=True)
+    _stream_seq = traitlets.Int(0).tag(sync=True)
     # Optional per-panel frame stacks. Static panels keep count=1 and are not
     # duplicated in panel_stack_bytes; offsets are -1 for those panels.
     panel_frame_counts = traitlets.List(traitlets.Int(), default_value=[]).tag(sync=True)
