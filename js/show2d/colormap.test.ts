@@ -83,7 +83,7 @@ function colormapsOf(pixels: Uint8ClampedArray): string[] {
 class Model {
   values: Record<string, unknown> = {
     n_images: 2, width: SIZE, height: SIZE, frame_bytes: frameBytes(BF, ADF), cmap: "gray", labels: ["BF", "ADF"],
-    is_rgb: [false, false], ncols: 2, show_fft: false, show_controls: true, show_stats: true, link_contrast: true,
+    is_rgb: [false, false], columns: 2, show_fft: false, show_controls: true, show_stats: true, link_contrast: true,
     link_zoom: true, link_pan: true, panel_cmaps: [], hidden_panels: [], panel_order: [], log_scale: false,
     auto_contrast: false, image_rotations: [0, 0], image_flips_horizontal: [false, false],
     image_flips_vertical: [false, false], panel_frame_counts: [1, 1], panel_frame_indices: [0, 0],
@@ -228,7 +228,7 @@ it("previews a histogram drag of a packed uint8 frame through the scaled pass at
     n_images: 1, labels: ["uint8"], is_rgb: [false], frame_bytes: new DataView(frame.buffer), offline: true,
     _offline_mins: [0], _offline_maxs: [255], image_rotations: [0],
     image_flips_horizontal: [false], image_flips_vertical: [false], panel_frame_counts: [1], panel_frame_indices: [0],
-    panel_stack_offsets: [-1], stats_mean: [0], stats_min: [0], stats_max: [0], stats_std: [0], ncols: 1,
+    panel_stack_offsets: [-1], stats_mean: [0], stats_min: [0], stats_max: [0], stats_std: [0], columns: 1,
   });
   act(() => { cleanup = renderShow2D({ model, el } as never) as (() => void) | undefined; });
   await settle();

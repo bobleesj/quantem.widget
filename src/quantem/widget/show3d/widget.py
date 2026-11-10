@@ -42,11 +42,11 @@ from quantem.widget.state import SavedStateMixin, announce_browser_limit
 from quantem.widget.units import image_axes, per_axis, unit_entry
 from quantem.widget.utils.ui import (
     PANEL_WIDTHS,
-    UiMode,
+    DisplayMode,
     ViewerSize,
     resolve_panel_width,
     resolve_columns,
-    resolve_ui_mode,
+    resolve_mode,
     validate_display_limits,
 )
 
@@ -147,7 +147,7 @@ class Show3D(
         One label per page for 5D input.
     title : str
         Title above the canvas; a ``Dataset3d`` name is used when empty.
-    ui_mode : {"interactive", "presentation", "report", "minimal"}
+    mode : {"interactive", "presentation", "report", "minimal"}
         Chrome preset. ``show_title``, ``show_stats`` and ``show_scale_bar``
         override the preset when given.
     cmap : str or Colormap
@@ -196,9 +196,6 @@ class Show3D(
     rows : int, optional
         Desired initial rows per page; infer columns when supplied alone.
         If both are supplied, their capacity must hold every panel on a page.
-    max_cols : int, optional
-        Deprecated alias for ``columns``. Do not combine it with rows or columns.
-        Panels per row; 0 is one row.
     panel_gap_px : int
         Gap between panels in CSS pixels.
     dim_label : str
@@ -306,7 +303,7 @@ class Show3D(
     link_panels = traitlets.Bool(True).tag(sync=True)
     link_contrast = traitlets.Bool(True).tag(sync=True)
     view_state = traitlets.Dict(default_value={}).tag(sync=True)
-    max_cols = traitlets.Int(4).tag(sync=True)
+    columns = traitlets.Int(4).tag(sync=True)
     show_resize_handles = traitlets.Bool(True).tag(sync=True)
     show_zoom_indicator = traitlets.Bool(False).tag(sync=True)
     show_panel_titles = traitlets.Bool(True).tag(sync=True)
@@ -626,14 +623,10 @@ class Show3D(
 
     # --- construction ----------------------------------------------------------
 
-    @property
-    def columns(self) -> int:
-        """Image panels across each page; the saved layout uses the same value."""
-        return self.max_cols or self.panels_per_page or self.n_panels
-
-    @columns.setter
-    def columns(self, value: int) -> None:
-        self.max_cols = resolve_columns(self.panels_per_page or self.n_panels, columns=value)
+    @traitlets.validate("columns")
+    def _validate_columns(self, proposal: dict) -> int:
+        """A layout of at least one column: the property it replaced checked the same."""
+        return resolve_columns(1, columns=proposal["value"])
 
     def __init__(
         self,
@@ -642,7 +635,7 @@ class Show3D(
         panel_titles: Sequence[str | Sequence[Mapping[str, object]] | Mapping[str, object] | None] | None = None,
         page_labels: Sequence[str | None] | None = None,
         title: str = "",
-        ui_mode: UiMode = "interactive",
+        mode: DisplayMode = "interactive",
         show_title: bool | None = None,
         show_stats: bool | None = None,
         show_scale_bar: bool | None = None,
@@ -665,7 +658,6 @@ class Show3D(
         panel_width_px: int | None = None,
         columns: int | None = None,
         rows: int | None = None,
-        max_cols: int | None = None,
         panel_gap_px: int = 0,
         dim_label: str = "Frame",
         display_bin: int = 1,
@@ -676,8 +668,8 @@ class Show3D(
         verbose: bool = True,
     ):
         """Validate the display options, open the widget model, then load the stacks in one batched sync."""
-        ui = resolve_ui_mode(
-            ui_mode,
+        ui = resolve_mode(
+            mode,
             defaults={
                 "show_title": True,
                 "show_controls": True,
@@ -742,9 +734,8 @@ class Show3D(
             )
             self.cmap = cmap_to_name(cmap)
             self.panel_cmaps = []
-            self.max_cols = resolve_columns(
-                self.panels_per_page or self.n_panels, columns=columns, rows=rows,
-                default=4, legacy_columns=max_cols, legacy_name="max_cols",
+            self.columns = resolve_columns(
+                self.panels_per_page or self.n_panels, columns=columns, rows=rows, default=4,
             )
             self.link_contrast = bool(link_contrast) if link_contrast is not None else int(self.n_panels) <= 1
             self.vmin = vmin
@@ -1099,7 +1090,7 @@ class Show3D(
         # the cross-validators accept a round trip in dict order.
         "percentile_high", "percentile_low", "image_vmin_pct", "image_vmax_pct", "contrast_preset",
         "vmin", "vmax", "link_contrast", "link_panels", "view_state", "vmin_per_panel", "vmax_per_panel",
-        "show_title", "show_stats", "show_controls", "controls_collapsed", "max_cols",
+        "show_title", "show_stats", "show_controls", "controls_collapsed", "columns",
         "panel_gap_px", "show_panel_titles", "show_zoom_indicator", "show_fft", "fft_layout",
         "fft_overlay_position", "fft_overlay_size", "fft_overlay_zoom", "show_kymograph", "fft_window",
         "pixel_size", "pixel_unit", "smooth", "image_rotation", "rotation_scope", "frame_rotations",

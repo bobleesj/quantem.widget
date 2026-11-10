@@ -86,11 +86,11 @@ def test_set_data_replaces_traces_and_keeps_display_settings():
 # --- axis and UI state -------------------------------------------------------
 
 
-def test_ui_mode_presets_explicit_toggles_and_unknown_kwargs():
-    widget = Show1D(_traces(), log_scale=True, ui_mode="minimal", show_legend=True)
+def test_mode_presets_explicit_toggles_and_unknown_kwargs():
+    widget = Show1D(_traces(), log_scale=True, mode="minimal", show_legend=True)
     assert widget.log_scale and widget.show_legend
     assert not widget.show_title and not widget.show_grid and not widget.show_controls
-    report = Show1D(_traces(), ui_mode="report", show_stats=True)
+    report = Show1D(_traces(), mode="report", show_stats=True)
     assert not report.show_controls and report.show_stats and report.show_title
     with pytest.raises(TypeError, match="unexpected keyword argument 'show_denoise'"):
         Show1D(_traces(), show_denoise=True)
@@ -208,7 +208,7 @@ def test_state_round_trip_through_save_file_and_state_kwarg(tmp_path):
         assert getattr(restored, key) == getattr(widget, key), key
     assert restored.state_dict() == widget.state_dict()
     with pytest.raises(ValueError, match="cannot load into"):
-        Show1D(_traces(), state={"schema": "quantem.widget-state/2", "widget_name": "Show2D", "state": {}})
+        Show1D(_traces(), state={"schema": "quantem.widget-state/3", "widget_name": "Show2D", "state": {}})
     # a plain widget keeps the trace bytes but not the image buffers in the saved notebook
     saved = widget.get_state()
     assert "y_bytes" in saved and "snapshot_bytes" not in saved and saved["_static_fallback_image"]

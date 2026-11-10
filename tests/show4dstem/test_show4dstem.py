@@ -989,7 +989,7 @@ def test_qem_bundle_links_acquisitions_for_a_streaming_viewer(tmp_path):
     page = (viewer / ".viewer" / "Show4DSTEM.html").read_text()
     assert '\\"../qem/tilt_a.qem\\", \\"../qem/tilt_b.qem\\"' in page
     assert "+17 mrad" in page and "__QT_H5_DECODE_DTYPE ??=" not in page
-    assert '\"compare_cols\": 2' in page
+    assert '\"compare_columns\": 2' in page
     # the page draws the calibration the headers record (it showed 1.0 px scale bars before)
     assert re.search(r'"scan_sampling_A": \[\s*0\.4,\s*0\.6\s*\]', page)
     assert re.search(r'"detector_sampling_mrad": \[\s*1\.5,\s*2(\.0)?\s*\]', page)

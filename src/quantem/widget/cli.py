@@ -76,7 +76,7 @@ def _add_github_args(parser: argparse.ArgumentParser) -> None:
                         help="JPEG quality for the embedded renders (default 92).")
     parser.add_argument("--max-width", type=int, default=1200,
                         help="Maximum embedded UI width in pixels (default 1200).")
-    parser.add_argument("--timeout", type=int, default=600,
+    parser.add_argument("--timeout-s", type=int, default=600,
                         help="Per-cell execution timeout in seconds (default 600).")
 
 
@@ -631,7 +631,7 @@ def _prepare_github(args: argparse.Namespace) -> int:
     if not args.no_execute:
         print(f"executing {notebook.name} ...")
         if subprocess.run(["jupyter", "nbconvert", "--to", "notebook", "--execute", "--inplace",
-                           str(notebook), f"--ExecutePreprocessor.timeout={args.timeout}",
+                           str(notebook), f"--ExecutePreprocessor.timeout={args.timeout_s}",
                            "--ExecutePreprocessor.store_widget_state=True"]).returncode != 0:
             raise ValueError("nbconvert --execute failed (see output above)")
     nb = json.loads(notebook.read_text())
@@ -698,7 +698,7 @@ def _add_show4dstem_args(parser: argparse.ArgumentParser) -> None:
 
     parser.add_argument("path", nargs="+",
                         help="A 4D-STEM master, a folder of masters, or several master files.")
-    parser.add_argument("--out", default=None, help="Output folder (default ~/Downloads).")
+    parser.add_argument("--save-dir", default=None, help="Output folder (default ~/Downloads).")
     parser.add_argument("--no-open", action="store_true", help="Write the file(s) but do not launch anything.")
     parser.add_argument("--serve", action="store_true",
                         help="Open via a local HTTP server even for self-contained files (tunnelable URL).")
@@ -742,7 +742,7 @@ def _show4dstem(args: argparse.Namespace) -> int:
         from quantem.widget.show4dstem.export import write_qem_bundle
 
         label = paths[0].stem if len(paths) == 1 else f"{len(paths)}_datasets"
-        out_dir = _out_dir(args.out) / f"{label}_show4dstem_webgpu"
+        out_dir = _out_dir(args.save_dir) / f"{label}_show4dstem_webgpu"
         _prepare_show4dstem_webgpu_output_dir(out_dir)
         launcher = write_qem_bundle(paths, out_dir, title=args.title or label)
         print(f"{len(paths)} .qem file(s), backend webgpu -> {out_dir}")
@@ -810,7 +810,7 @@ def _select_show4dstem_masters(masters: list[str], args: argparse.Namespace) -> 
 def _is_show4dstem_generated_master_link(path: pathlib.Path) -> bool:
     """Return whether *path* is a symlink created by a CLI WebGPU export.
 
-    Rerunning ``quantem show4dstem <source-folder> --out <source-folder>``
+    Rerunning ``quantem show4dstem <source-folder> --save-dir <source-folder>``
     must select the original masters, not the anonymous ``dataset_XX``
     links placed in its owned ``*_show4dstem_webgpu`` output folder.
     """
@@ -873,7 +873,7 @@ def _render_4dstem_notebook(masters: list[str], label: str, args: argparse.Names
             "Show4DSTEM(data)\n"
         )
     title = [f"# {label}\n", f"\n{len(masters)} master(s), full detector sampling."]
-    return _write_viewer_notebook(_out_dir(args.out) / f"{label}.ipynb", title, "viewer", source)
+    return _write_viewer_notebook(_out_dir(args.save_dir) / f"{label}.ipynb", title, "viewer", source)
 
 
 def _write_viewer_notebook(path: pathlib.Path, title: list[str], cell_id: str, source: str) -> pathlib.Path:
@@ -998,7 +998,7 @@ def _render_4dstem_webgpu_h5(
                 f"{observed}; expected {expected}"
             )
 
-    out_dir = _out_dir(args.out) / f"{label}_show4dstem_webgpu"
+    out_dir = _out_dir(args.save_dir) / f"{label}_show4dstem_webgpu"
     replaced = _prepare_show4dstem_webgpu_output_dir(out_dir)
     if replaced:
         print(f"replaced existing Show4DSTEM WebGPU export: {out_dir}")
@@ -1177,7 +1177,7 @@ def _render_4dstem(masters: list[str], args: argparse.Namespace) -> list[pathlib
     1 for full detector sampling) and packed into its own page."""
     from quantem.widget import Show4DSTEM
     from quantem.widget.adapters import gpu as gpu_adapter
-    out_dir = _out_dir(args.out)
+    out_dir = _out_dir(args.save_dir)
     export_dtype = args.dtype  # "auto" resolves per master once its counts are known (_lossless_pack_dtype)
     outputs = []
     iterator = masters
@@ -1221,11 +1221,11 @@ def _render_4dstem(masters: list[str], args: argparse.Namespace) -> list[pathlib
 
 # ---------------------------------------------------------------------------
 def _out_dir(out: str | None) -> pathlib.Path:
-    """Resolve the output directory (``--out`` or the default ``~/Downloads``)."""
+    """Resolve the output directory (``--save-dir`` or the default ``~/Downloads``)."""
     target = pathlib.Path(out).expanduser() if out else _default_out_dir()
     if target.suffix in {".html", ".ipynb"}:
-        # --out is the folder the outputs are written into; a file name would become a folder
-        raise ValueError(f"--out is the output folder; {target.name} looks like a file name, pass its folder")
+        # --save-dir is the folder the outputs are written into; a file name would become a folder
+        raise ValueError(f"--save-dir is the output folder; {target.name} looks like a file name, pass its folder")
     target.mkdir(parents=True, exist_ok=True)
     return target
 

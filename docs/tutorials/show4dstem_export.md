@@ -100,7 +100,7 @@ non-notebook user. It writes a folder-backed browser viewer rather than copying
 raw HDF5 into one huge HTML file:
 
 ```bash
-quantem show4dstem /data/session --backend webgpu --html --count 1 --out ~/Downloads
+quantem show4dstem /data/session --backend webgpu --html --count 1 --save-dir ~/Downloads
 ```
 
 Useful variants:
@@ -129,14 +129,14 @@ sampling. Use the CLI with `--html --detector-bin 1`:
 
 ```bash
 # Native detector sampling, browser WebGPU HDF5 folder.
-quantem show4dstem scan_001_master.h5 --backend webgpu --html --detector-bin 1 --dtype uint8 --out ~/Downloads
+quantem show4dstem scan_001_master.h5 --backend webgpu --html --detector-bin 1 --dtype uint8 --save-dir ~/Downloads
 
 # Native detector sampling for every master in a folder.
-quantem show4dstem /data/session --backend webgpu --html --count 7 --detector-bin 1 --dtype uint8 --out ~/Downloads
+quantem show4dstem /data/session --backend webgpu --html --count 7 --detector-bin 1 --dtype uint8 --save-dir ~/Downloads
 
 # Several native-sampling masters in one Dataset-slider viewer.
 quantem show4dstem scan_001_master.h5 scan_002_master.h5 \
-  --backend webgpu --html --detector-bin 1 --dtype uint8 --out ~/Downloads
+  --backend webgpu --html --detector-bin 1 --dtype uint8 --save-dir ~/Downloads
 ```
 
 This is the no-notebook path for a full interactive browser artifact. It keeps

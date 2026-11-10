@@ -52,12 +52,12 @@ from quantem.widget.utils.array import _b64_safe, _resize_image, bin2d, to_numpy
 from quantem.widget.utils.state_io import read_state
 from quantem.widget.utils.ui import (
     PANEL_WIDTHS,
-    UiMode,
+    DisplayMode,
     ViewerSize,
     reject_unknown_kwargs,
     resolve_columns,
     resolve_panel_width,
-    resolve_ui_mode,
+    resolve_mode,
 )
 
 _MAX_PANEL_PLAYBACK_FPS = 30.0
@@ -397,8 +397,8 @@ class Show2D(
     title : str, optional
         Gallery title above the panels.
     show_title : bool, optional
-        Draw the title; the ``ui_mode`` preset decides when omitted.
-    ui_mode : {"interactive", "presentation", "report"}, default "interactive"
+        Draw the title; the ``mode`` preset decides when omitted.
+    mode : {"interactive", "presentation", "report"}, default "interactive"
         Preset for which controls are shown; the ``show_*`` flags override it.
     cmap : str or list of str, default "inferno"
         Colormap, or one per panel.
@@ -444,8 +444,6 @@ class Show2D(
     rows : int, optional
         Desired initial rows per page; infer columns when supplied alone.
         If both are supplied, their capacity must hold every panel on a page.
-    ncols : int, optional
-        Deprecated alias for ``columns``. Do not combine it with rows or columns.
     size : {"small", "medium", "large", "xlarge"}, default "medium"
         Width of each image panel: 300, 450, 600 or 900 CSS pixels. Aspect
         ratio and source resolution are preserved; controls keep the shared font.
@@ -660,7 +658,7 @@ class Show2D(
     cmap = traitlets.Unicode("inferno").tag(sync=True)
     panel_cmaps = traitlets.List(traitlets.Unicode(), default_value=[]).tag(sync=True)
     panel_cmaps_memory = traitlets.List(traitlets.Unicode(), default_value=[]).tag(sync=True)
-    ncols = traitlets.Int(3).tag(sync=True)
+    columns = traitlets.Int(3).tag(sync=True)
     log_scale = traitlets.Bool(False).tag(sync=True)
     # Flip: show -image (a phase with atoms as minima reads with atoms as maxima); stats and export follow
     value_flip = traitlets.Bool(False).tag(sync=True)
@@ -721,14 +719,10 @@ class Show2D(
     image_flips_horizontal = traitlets.List(traitlets.Bool(), default_value=[]).tag(sync=True)
     image_flips_vertical = traitlets.List(traitlets.Bool(), default_value=[]).tag(sync=True)
 
-    @property
-    def columns(self) -> int:
-        """Image panels across each page; the saved layout uses the same value."""
-        return self.ncols
-
-    @columns.setter
-    def columns(self, value: int) -> None:
-        self.ncols = resolve_columns(self.panels_per_page or self.n_images, columns=value)
+    @traitlets.validate("columns")
+    def _validate_columns(self, proposal: dict) -> int:
+        """A layout of at least one column: the property it replaced checked the same."""
+        return resolve_columns(1, columns=proposal["value"])
 
     def __init__(
         self,
@@ -738,7 +732,7 @@ class Show2D(
         page_labels: Sequence[str | None] | None = None,
         title: str = "",
         show_title: bool | None = None,
-        ui_mode: UiMode = "interactive",
+        mode: DisplayMode = "interactive",
         cmap: str | Colormap | Sequence[str | Colormap] = Colormap.INFERNO,
         sampling: float | tuple[float, float] | list[float] | None = None,
         units: str | list[str] | None = None,
@@ -767,7 +761,6 @@ class Show2D(
         link_contrast: bool = True,
         columns: int | None = None,
         rows: int | None = None,
-        ncols: int | None = None,
         size: ViewerSize = "medium",
         panel_width_px: int | None = None,
         smooth: bool = False,
@@ -848,8 +841,8 @@ class Show2D(
                 "scale_bar_position must be 'bottom-right' or 'bottom-left'; "
                 f"got {scale_bar_position!r}"
             )
-        ui = resolve_ui_mode(
-            ui_mode,
+        ui = resolve_mode(
+            mode,
             defaults={
                 "show_title": True,
                 "show_controls": True,
@@ -1142,9 +1135,8 @@ class Show2D(
             else:
                 self.vmin = vmin
                 self.vmax = vmax
-            self.ncols = resolve_columns(
-                self.panels_per_page or self.n_images, columns=columns, rows=rows,
-                default=3, legacy_columns=ncols, legacy_name="ncols",
+            self.columns = resolve_columns(
+                self.panels_per_page or self.n_images, columns=columns, rows=rows, default=3,
             )
             self.panel_playback_fps = panel_playback_fps
             # Browser display denoise: a scalar knob applies to every panel, a

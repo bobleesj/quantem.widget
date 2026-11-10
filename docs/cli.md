@@ -40,7 +40,7 @@ WebGPU HDF5 folders use anonymous local links such as `dataset_00_master.h5`
 and `dataset_00_data_*.h5`; rerunning the CLI replaces the generated viewer
 folder so stale HTML and metadata do not survive.
 
-Outputs land in `~/Downloads` by default. Use `--out PATH` to choose another
+Outputs land in `~/Downloads` by default. Use `--save-dir PATH` to choose another
 writable folder.
 
 ## Show4DSTEM HTML export
@@ -49,7 +49,7 @@ Use the CLI when you want a quick browser artifact from raw masters:
 
 ```bash
 quantem show4dstem scan_001_master.h5 --backend webgpu --html --detector-bin 1
-quantem show4dstem ./session_masters --backend webgpu --html --count 7 --detector-bin 1 --out ~/Downloads
+quantem show4dstem ./session_masters --backend webgpu --html --count 7 --detector-bin 1 --save-dir ~/Downloads
 quantem show4dstem scan_001_master.h5 scan_002_master.h5 --backend webgpu --html --detector-bin 1
 ```
 
@@ -65,7 +65,7 @@ Use `--backend webgpu --html --detector-bin 1` when the user wants the full nati
 detector sampling path without opening Jupyter:
 
 ```bash
-quantem show4dstem /data/session --backend webgpu --html --count 7 --detector-bin 1 --dtype uint8 --out ~/Downloads
+quantem show4dstem /data/session --backend webgpu --html --count 7 --detector-bin 1 --dtype uint8 --save-dir ~/Downloads
 ```
 
 That command writes a browser folder with anonymous H5 symlinks plus
@@ -92,7 +92,7 @@ table.
 Pass existing `.qem` files directly when exporting encoded acquisitions:
 
 ```bash
-quantem show4dstem a.qem b.qem --html --out ./viewer
+quantem show4dstem a.qem b.qem --html --save-dir ./viewer
 ```
 
 This route writes a WebGPU viewer folder and links the unchanged inputs under
@@ -127,10 +127,10 @@ quantem github analysis_github.ipynb --no-execute
 | `--dtype auto/uint8/uint16` | HDF5 HTML dtype; Python packing defaults to `auto`, choosing uint8 when counts fit and uint16 otherwise. An explicit uint8 choice is for compact browsing. Native QEM keeps its stored dtype |
 | `--serve` | open via a local HTTP server even for self-contained files (tunnelable URL) |
 | `--html` | write the offline-WebGPU HTML instead of a notebook |
-| `--out PATH` | output file or directory (default `~/Downloads`) |
+| `--save-dir PATH` | output file or directory (default `~/Downloads`) |
 | `--no-open` | write the file(s) without launching a browser or Jupyter |
 | `--title`, `-v/--verbose` | page title; verbose progress |
-| `--no-execute`, `--quality Q`, `--max-width PX`, `--timeout S` | `github`: reuse saved outputs, JPEG quality, embedded picture width, per-cell execution timeout |
+| `--no-execute`, `--quality Q`, `--max-width PX`, `--timeout-s S` | `github`: reuse saved outputs, JPEG quality, embedded picture width, per-cell execution timeout |
 
 ## Backends
 

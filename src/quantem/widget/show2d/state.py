@@ -90,7 +90,7 @@ class Show2DState:
         "scale_bar_length", "scale_bar_label", "scale_bar_style", "show_zoom_indicator",
         "panel_width_px", "smooth", "initial_zoom", "zoom_row", "zoom_col", "view_box",
         "link_zoom", "link_pan", "link_contrast",
-        "diff_mode", "diff_reference", "ncols", "selected_idx", "selected_panels",
+        "diff_mode", "diff_reference", "columns", "selected_idx", "selected_panels",
         "roi_active", "roi_list", "roi_selected_idx", "profile_line",
         "image_rotations", "rotation_scope", "image_flips_horizontal", "image_flips_vertical",
         "denoise", "denoise_sigma", "denoise_bin", "denoise_scope", "show_denoise",

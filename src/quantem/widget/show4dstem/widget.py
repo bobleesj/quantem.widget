@@ -74,7 +74,7 @@ from quantem.widget.units import acquisition_calibration, per_axis, stated, wrap
 from quantem.widget.utils.array import device_array
 from quantem.widget.utils.state_io import read_state
 from quantem.widget.utils.ui import (
-    UiMode, ViewerSize, reject_unknown_kwargs, resolve_panel_width, resolve_ui_mode,
+    DisplayMode, ViewerSize, reject_unknown_kwargs, resolve_panel_width, resolve_mode,
 )
 
 BRIGHT_FIELD_RADIUS_FRACTION = 0.125  # bright-field radius as a fraction of the detector side before fitting
@@ -230,7 +230,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     sync_resize
         Resize both panels together when dragging a corner. Defaults to True,
         or False when ``dp_size`` or ``image_size`` is supplied.
-    view_mode, compare_cols, compare_grid_width_px, compare_max_panels, compare_group_mode, compare_dp_mode
+    view_mode, compare_columns, compare_grid_width_px, compare_max_panels, compare_group_mode, compare_dp_mode
         Comparison grid layout for several datasets: ``"multiple"`` shows one
         virtual image per dataset, ``compare_max_panels`` per page, with the
         diffraction pattern of the ``"selected"`` dataset or the ``"average"``.
@@ -358,7 +358,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     frame_reverse = traitlets.Bool(False).tag(sync=True)
     frame_boomerang = traitlets.Bool(False).tag(sync=True)
     view_mode = traitlets.Unicode("single").tag(sync=True)
-    compare_cols = traitlets.Int(0).tag(sync=True)
+    compare_columns = traitlets.Int(0).tag(sync=True)
     compare_grid_width_px = traitlets.Int(0).tag(sync=True)
     compare_max_panels = traitlets.Int(12).tag(sync=True)
     compare_group_mode = traitlets.Unicode("paged").tag(sync=True)
@@ -402,13 +402,13 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         frame_dim_label: str | None = None,
         frame_labels: list[str] | None = None,
         view_mode: str | None = None,
-        compare_cols: int = 0,
+        compare_columns: int = 0,
         compare_grid_width_px: int = 0,
         compare_max_panels: int = 12,
         compare_group_mode: str = "paged",
         compare_dp_mode: str | None = None,
         title: str = "",
-        ui_mode: UiMode = "interactive",
+        mode: DisplayMode = "interactive",
         show_title: bool | None = None,
         show_controls: bool | None = None,
         controls_collapsed: bool | None = None,
@@ -489,8 +489,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             notebook_preview_quality=notebook_preview_quality,
             notebook_preview_max_px=notebook_preview_max_px,
         )
-        ui = resolve_ui_mode(
-            ui_mode,
+        ui = resolve_mode(
+            mode,
             defaults={"show_title": True, "show_controls": True, "controls_collapsed": False,
                       "show_stats": True, "show_scale_bar": True},
             overrides={"show_title": show_title, "show_controls": show_controls,
@@ -520,7 +520,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         if sync_resize is None:
             sync_resize = dp_size is None and image_size is None
         for name, value in (("panel_width_px", panel_width_px), ("dp_panel_width_px", dp_panel_width_px),
-                            ("vi_panel_width_px", vi_panel_width_px), ("compare_cols", compare_cols),
+                            ("vi_panel_width_px", vi_panel_width_px), ("compare_columns", compare_columns),
                             ("compare_grid_width_px", compare_grid_width_px)):
             if int(value) < 0:
                 raise ValueError(f"{name} must be >= 0, got {value}")
@@ -689,7 +689,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self.view_mode = view_mode
         self.compare_dp_mode = compare_dp_mode
         self.compare_group_mode = compare_group_mode
-        self.panel_width_px, self.compare_cols = int(panel_width_px), int(compare_cols)
+        self.panel_width_px, self.compare_columns = int(panel_width_px), int(compare_columns)
         self.dp_panel_width_px, self.vi_panel_width_px = int(dp_panel_width_px), int(vi_panel_width_px)
         self.sync_resize = bool(sync_resize)
         self.compare_grid_width_px, self.compare_max_panels = int(compare_grid_width_px), int(compare_max_panels)
@@ -973,7 +973,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         "fft_vmin_pct", "fft_vmax_pct", "dp_vmin", "dp_vmax", "vi_vmin", "vi_vmax", "fft_auto", "show_fft",
         "fft_window", "show_controls", "controls_collapsed", "show_stats", "show_scale_bar", "panel_width_px",
         "dp_panel_width_px", "vi_panel_width_px", "sync_resize",
-        "dp_show_colorbar", "vi_auto_contrast", "vi_smooth", "view_mode", "compare_cols",
+        "dp_show_colorbar", "vi_auto_contrast", "vi_smooth", "view_mode", "compare_columns",
         "compare_grid_width_px", "compare_max_panels", "compare_group_mode", "compare_page_idx",
         "compare_dp_mode", "profile_width", "frame_idx", "frame_dim_label", "frame_loop", "frame_fps",
         "frame_reverse", "frame_boomerang",
@@ -1131,7 +1131,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         Returns a waiting viewer immediately when the receiver is idle. It does
         not arm or trigger acquisition. Pass ``first_timeout_s=120`` to wait for
         the first pattern before returning, as in earlier versions.
-        New scans appear at the top left, three per row (``compare_cols``); the selected scan stays selected.
+        New scans appear at the top left, three per row (``compare_columns``); the selected scan stays selected.
         Set ``newest_first=False`` for chronological display. Data and dataset
         indices always retain acquisition order.
 
@@ -1143,7 +1143,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             raise ValueError("refresh_s must be finite and positive.")
         if not math.isfinite(first_timeout_s) or first_timeout_s < 0:
             raise ValueError("first_timeout_s must be finite and nonnegative.")
-        viewer_kwargs.setdefault("compare_cols", 3)   # a steady grid while scans arrive; 0 chooses automatically
+        viewer_kwargs.setdefault("compare_columns", 3)   # a steady grid while scans arrive; 0 chooses automatically
         partial = hasattr(recording, "acquisitions")
         lock = getattr(recording, "lock", nullcontext())
 

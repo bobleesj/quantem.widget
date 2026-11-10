@@ -186,16 +186,16 @@ def compose_panel_grid(
     panel_titles: list[str] | None = None,
     show_panel_titles: bool = True,
     title_font_size: int = 11,
-    max_cols: int = 4,
+    columns: int = 4,
     panel_gap: int = 10,
     background: str | tuple[int, int, int] = "dark",
 ):
-    """Compose per-panel PIL images into the widget-style grid: ``max_cols`` columns,
+    """Compose per-panel PIL images into the widget-style grid: ``columns`` columns,
     ``panel_gap`` px of ``background`` between cells, each panel centered in its cell
     under its title."""
     from PIL import Image
     n_panels = len(images)
-    cols = n_panels if max_cols <= 0 else min(max(1, int(max_cols)), n_panels)
+    cols = min(max(1, int(columns)), n_panels)
     rows = int(math.ceil(n_panels / cols))
     cell_width = max(image.size[0] for image in images)
     cell_height = max(image.size[1] for image in images)

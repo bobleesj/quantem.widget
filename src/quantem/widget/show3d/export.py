@@ -344,7 +344,7 @@ class Show3DExport:
                     panel_titles=[self._static_panel_title(panel, frame_idx) for panel in panel_indices] if show_frame_labels else panel_titles,
                     show_panel_titles=include_panel_titles,
                     title_font_size=max(gif_utils.MIN_TITLE_FONT_SIZE, int(round(11 * scale))),
-                    max_cols=int(self.max_cols),
+                    columns=int(self.columns),
                     panel_gap=panel_gap,
                     background=background,
                 )

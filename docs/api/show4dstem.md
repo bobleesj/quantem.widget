@@ -66,7 +66,7 @@ viewer = Show4DSTEM(read_4dstem(path))
 viewer = Show4DSTEM(read_4dstem(path), scan_region=(128, 384, 128, 384))
 
 # Several acquisitions: one shared diffraction ROI, one virtual image per file.
-viewer = Show4DSTEM(read_4dstem([path1, path2, path3]), compare_cols=3)
+viewer = Show4DSTEM(read_4dstem([path1, path2, path3]), compare_columns=3)
 
 # A master by path: the same as Show4DSTEM(read_4dstem(path)).
 viewer = Show4DSTEM("/data/session/scan_master.h5")
@@ -273,15 +273,15 @@ from quantem.widget import Show4DSTEM, read_4dstem
 widget = Show4DSTEM(
     read_4dstem([path1, path2, path3, path4]),
     view_mode="multiple",
-    compare_cols=2,
+    compare_columns=2,
     compare_max_panels=4,
     compare_dp_mode="selected",
 )
 widget
 ```
 
-`compare_cols=0` lets the frontend pick a responsive layout. Positive
-`compare_cols` values are treated as the
+`compare_columns=0` lets the frontend pick a responsive layout. Positive
+`compare_columns` values are treated as the
 maximum grid columns on desktop; narrow/mobile viewports cap the grid at two
 columns so the tiles remain touch-friendly. A comparison of encoded
 acquisitions never stacks them into one 5D array; each tile reads its own
@@ -395,7 +395,7 @@ widget.export_html(
 Equivalent CLI for users who do not want a notebook:
 
 ```bash
-quantem show4dstem /data/session --backend webgpu --html --count 7 --detector-bin 1 --dtype uint8 --out ~/Downloads
+quantem show4dstem /data/session --backend webgpu --html --count 7 --detector-bin 1 --dtype uint8 --save-dir ~/Downloads
 ```
 
 Both `scan_bin` and `detector_bin` use mean binning, not summing. This keeps display
@@ -460,7 +460,7 @@ folder, and linked `tilt_NN_master.h5`/`tilt_NN_data_*.h5` files. On macOS,
 double-clicking the command starts a local range-capable server and opens the
 viewer page in Chrome. The page carries the browser widget-manager runtime, so
 the handoff does not depend on public CDNs or any network. Rerunning
-the same CLI into the same `--out` replaces the generated
+the same CLI into the same `--save-dir` replaces the generated
 `*_show4dstem_webgpu` viewer folder, which prevents stale HTML or stale links
 from surviving a regeneration.
 
@@ -539,10 +539,10 @@ Python round trip - see [Performance](../maintainer/widget-performance).
 | Virtual-image ROI | `vi_roi_mode`, `vi_roi_center_row`, `vi_roi_center_col` | Pick a real-space region to average its diffraction |
 | FFT toggle | `show_fft`, `fft_window` | Power spectrum of the virtual image, drawn with sharp pixels |
 | VI Smooth switch | `vi_smooth` | Off by default: sharp scan pixels; on: bilinear interpolation of the virtual image. The diffraction pattern is always drawn with sharp pixels |
-| Multiple grid | `view_mode="multiple"`, `compare_cols`, `compare_grid_width_px`, `compare_max_panels`, `compare_group_mode` | Shows ready frames/datasets as synchronized virtual images sharing the detector ROI and scan cursor; `compare_group_mode="all"` collapses pages into one dense grid |
+| Multiple grid | `view_mode="multiple"`, `compare_columns`, `compare_grid_width_px`, `compare_max_panels`, `compare_group_mode` | Shows ready frames/datasets as synchronized virtual images sharing the detector ROI and scan cursor; `compare_group_mode="all"` collapses pages into one dense grid |
 | Multiple DP source | `compare_dp_mode` | Shows either the average DP across visible multiple panels or the selected panel's DP |
 | Multiple panel state | `compare_panel_order`, `compare_hidden_panels`, `compare_starred_panels` (lists of panel indices) | Saves/reuses panel order, hidden panels, and starred picks across cells, state files, and HTML export |
-| Viewer chrome preset | `ui_mode` plus explicit `show_*` kwargs | Applies shared display presets; see [Viewer UI controls](viewer-ui) |
+| Viewer chrome preset | `mode` plus explicit `show_*` kwargs | Applies shared display presets; see [Viewer UI controls](viewer-ui) |
 | Control visibility | `show_controls`, `controls_collapsed` | Permanently remove controls or programmatically collapse/expand them for clean exports |
 | Title visibility | `show_title` | Top title row shows/hides |
 | Stats visibility | `show_stats` | DP, virtual-image, and FFT stats bars show/hide |

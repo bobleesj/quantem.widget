@@ -179,7 +179,7 @@ const SHOW3D_STANDALONE_VIEW_STATE_KEYS = [
   "loop",
   "loop_end",
   "loop_start",
-  "max_cols",
+  "columns",
   "page_idx",
   "panel_annotations",
   "panel_cmaps",
@@ -1363,7 +1363,7 @@ function Show3D() {
       reorderGhostRafRef.current = null;
     }
   }, []);
-  const [maxCols, setMaxCols] = useModelState<number>("max_cols");
+  const [maxCols, setMaxCols] = useModelState<number>("columns");
   const [linkPanels, setLinkPanels] = useModelState<boolean>("link_panels");
   const [showResizeHandles] = useModelState<boolean>("show_resize_handles");
   const allowResizeControls = showResizeHandles !== false;
@@ -2661,7 +2661,7 @@ function Show3D() {
       ? Math.min(maxCols, panelCount, MAX_PANEL_COLUMNS)
       : Math.min(panelCount, MAX_PANEL_COLUMNS);
     // Honor the scientist's column choice by shrinking square panels to fit the current surface,
-    // for every panel count: otherwise a 3-panel stack shows `Cols 2` while keeping max_cols 3 or 4
+    // for every panel count: otherwise a 3-panel stack shows `Cols 2` while keeping columns 3 or 4
     // and jumps to three columns at an unrelated repaint.
     if (rootLayoutWidth > 0) {
       return Math.max(180, Math.min(PANEL_WIDTHS.medium, Math.floor(rootLayoutWidth / requestedCols)));
@@ -3741,7 +3741,7 @@ function Show3D() {
   const requestedCanvasW = isMultiPanelSource
     ? Math.round(sourcePanelWidth * requestedDisplayScale * layoutCols)
     : Math.round((rotSwap ? height : width) * requestedDisplayScale);
-  // Grid layout: when max_cols wraps panels into multiple rows, canvasH grows to fit `rows` rows.
+  // Grid layout: when columns wraps panels into multiple rows, canvasH grows to fit `rows` rows.
   const requestedSingleRowHeight = Math.round((rotSwap ? width : height) * requestedDisplayScale);
   const layoutGap = layoutPanelCount > 1 ? (panelGapPx) : 0;
   const requestedSlotWidth = (requestedCanvasW - layoutGap * (layoutCols - 1)) / layoutCols;
@@ -8213,7 +8213,7 @@ function Show3D() {
 
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
     // Ignore clicks in empty grid cells (partial last row when N isn't a
-    // multiple of max_cols). Otherwise the click attributes to the last
+    // multiple of columns). Otherwise the click attributes to the last
     // real panel and zoom/pan jumps unexpectedly.
     const panelForSelection = panelIdxFromEvent(e);
     if (panelForSelection < 0) return;
@@ -8456,7 +8456,7 @@ function Show3D() {
 
     // Cursor readout: convert screen position to image pixel coordinates.
     // Skip when hovering an empty grid cell (partial last row when nPanels
-    // isn't a multiple of max_cols) so dead space doesn't flash row/col
+    // isn't a multiple of columns) so dead space doesn't flash row/col
     // numbers from a phantom panel.
     const canvas = canvasRef.current;
     const hoverPanelIdx = panelIdxFromEvent(e);

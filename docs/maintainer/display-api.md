@@ -88,8 +88,8 @@ coordinates: array coordinates remain `(row, col)`.
 New comparison galleries default to two columns with automatic rows. When an
 API supports both directions, distinguish omitted layout arguments from
 explicit ones internally so a default column count cannot conflict with an
-explicit `rows` request. Preserve legacy layout defaults during a naming-only
-migration unless a behavior change is separately approved.
+explicit `rows` request. A rename keeps the layout defaults unless a behavior
+change is separately approved.
 
 ## Short calls first, detailed control when needed
 
@@ -117,31 +117,20 @@ viewer. Per-image colormaps and histogram limits belong to that viewer's
 existing panel controls. Document whether contrast is linked across panels;
 do not add a parallel detector-specific histogram API.
 
-## Migration and review
+## Renames and review
 
-The library migration currently covers these entry points. Core QuantEM and
-tutorial updates remain separate work:
+| API | Surface |
+| --- | --- |
+| `detector.show` | `size`, `rows`, `columns`, `cmap`, `save`; two columns by default |
+| `Show2D` | `size`, `columns`, `rows`; three columns by default |
+| `Show3D` | `size`, `columns`, `rows`; four columns by default |
+| `Show4DSTEM` | `size`, `compare_columns` |
 
-| API | Existing surface | Migration direction |
-| --- | --- | --- |
-| `detector.show` | `size`, `rows`, `columns`, `cmap`, `save` | Two columns by default |
-| `detector_fit.show` | `size`, `cmap`, `save`; advanced `figsize` | Single plot; medium by default |
-| `Show2D` | `size`, `columns`, `rows`; deprecated `ncols` | Preserve three-column default and saved state |
-| `Show3D` | `size`, `columns`, `rows`; deprecated `max_cols` | Preserve four-column default, legacy zero and saved state |
-| Core `show_2d` | Nested arrays, `axsize`, optional `figsize` | Add named size and optional layout through the existing function |
-| SSB focus and trial galleries | `size`, `columns`, `rows`; focus retains deprecated `max_cols` | Named per-panel size; keep fitted arrays unchanged |
-| SSB result and rotation views | `size`, `cmap`, `save`; advanced `axsize` | Rows/columns for galleries; fixed rotation/comparison layout |
-
-For a published API, support old keywords for a documented transition, emit
-deprecation warnings, and reject calls supplying both old and new aliases.
-Keep both paths on one implementation. Unreleased APIs without external users
-can be renamed directly. Do not change a serialized recipe without a migration
-path.
-
-Before updating a tutorial, verify the installed signature supports its calls.
-Update docstrings, examples, errors and relevant agent guidance together.
-Test old/new keyword parity, defaults, invalid values, partial last rows and
-saved output. Verify representative static and interactive layouts, including
+A rename has no transition: no alias, no deprecated keyword, no reader of the old
+key. It reaches every caller in every repository at once; a saved record gets a
+schema bump, one rewrite script that keeps `<name>.before`, and a CHANGELOG
+"Renamed" table. Update docstrings, examples, errors and agent guidance in the
+same change. Test defaults, invalid values, partial last rows and saved output. Verify representative static and interactive layouts, including
 a narrow viewport, and confirm display options leave scientific arrays intact.
 Keep design documentation distinct from evidence of a completed runtime change.
 

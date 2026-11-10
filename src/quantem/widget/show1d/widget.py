@@ -25,7 +25,7 @@ from quantem.widget.show1d.state import Show1DState
 from quantem.widget.state import SavedStateMixin
 from quantem.widget.utils.array import _b64_safe, to_numpy
 from quantem.widget.utils.state_io import read_state
-from quantem.widget.utils.ui import UiMode, reject_unknown_kwargs, resolve_ui_mode
+from quantem.widget.utils.ui import DisplayMode, reject_unknown_kwargs, resolve_mode
 
 # Okabe-Ito palette: distinguishable for every common colour-vision deficiency
 _DEFAULT_COLORS = ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9", "#F0E442", "#999999"]
@@ -95,7 +95,7 @@ class Show1D(Show1DState, Show1DExport, SavedStateMixin, HtmlExportMixin, Static
         epochs where a tick at 2.5 has no meaning.
     log_scale : bool, default False
         Logarithmic y display; non-positive values are skipped in the plot.
-    ui_mode : {"interactive", "presentation", "report", "minimal"}, default "interactive"
+    mode : {"interactive", "presentation", "report", "minimal"}, default "interactive"
         Shared viewer UI preset. Explicit ``show_*`` / ``controls_collapsed``
         keywords override the preset.
     plot_height_px, side_panel_width_px : int
@@ -248,7 +248,7 @@ class Show1D(Show1DState, Show1DExport, SavedStateMixin, HtmlExportMixin, Static
         y_label: str = "",
         x_integer: bool = False,
         log_scale: bool = False,
-        ui_mode: UiMode = "interactive",
+        mode: DisplayMode = "interactive",
         plot_height_px: int = 320,
         side_panel_width_px: int = 360,
         image_cmap: str = "viridis",
@@ -267,7 +267,7 @@ class Show1D(Show1DState, Show1DExport, SavedStateMixin, HtmlExportMixin, Static
     ) -> None:
         reject_unknown_kwargs(type(self), kwargs, owned=self._CONSTRUCTOR_TRAITS)
         overrides = {key: kwargs.pop(key, None) for key in _UI_DEFAULTS}
-        kwargs.update(resolve_ui_mode(ui_mode, defaults=_UI_DEFAULTS, overrides=overrides))
+        kwargs.update(resolve_mode(mode, defaults=_UI_DEFAULTS, overrides=overrides))
         # a state this widget cannot load is refused before the model opens: a registered widget stays alive, holding its data
         state = None if state is None else read_state(state, "Show1D", self._STATE_KEYS)
         # Before super().__init__ so any get_state during comm-open sees it.

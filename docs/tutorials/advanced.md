@@ -100,7 +100,7 @@ images = np.stack(
 Show2D(
     images,
     labels=["raw", "filtered", "residual"],
-    ncols=3,
+    columns=3,
     marker_colors=["#60a5fa", "#34d399", "#f87171"],
     marker_style="around",
     panel_annotations={
@@ -415,7 +415,7 @@ rich_titles = [
 Show2D(
     [raw, denoised, residual],
     panel_title_spans=rich_titles,
-    ncols=3,
+    columns=3,
     show_stats=True,
 )
 
@@ -473,7 +473,7 @@ w = Show3D(
         [{"math": r"\lambda=0.03"}, {"text": " raw"}],
         [{"math": r"\chi^2"}, {"text": "/pixel residual"}],
     ],
-    ui_mode="presentation",
+    mode="presentation",
 )
 w.export_html("regularization_review.html", encoding="uint8")
 ```
@@ -574,7 +574,7 @@ for i, sigma in enumerate([0, 2, 4, 6]):
 Show2D(
     images,
     labels=labels,
-    ncols=2,
+    columns=2,
     cmap="inferno",
     inset_plots=insets,
     scale_bar_position="bottom-left",

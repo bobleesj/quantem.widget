@@ -2326,7 +2326,7 @@ function Show4DSTEM() {
   const [frameReverse, setFrameReverse] = useModelState<boolean>("frame_reverse");
   const [frameBoomerang, setFrameBoomerang] = useModelState<boolean>("frame_boomerang");
   const [viewMode, setViewMode] = useModelState<string>("view_mode");
-  const [compareCols, setCompareCols] = useModelState<number>("compare_cols");
+  const [compareCols, setCompareCols] = useModelState<number>("compare_columns");
   const [compareVirtualImageBytes] = useModelState<DataView>("compare_virtual_image_bytes");
   const [streamCompareImages, setStreamCompareImages] = React.useState<DataView | null | undefined>(
     () => initialStreamPanels(model));

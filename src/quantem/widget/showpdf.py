@@ -32,19 +32,6 @@ _PDF_REQUIREMENT = (
     "max_iter=...), from electronmicroscopy/quantem pull request 248."
 )
 
-# Removed constructor keywords and what to use instead; passing one raises TypeError with
-# the hint instead of being silently ignored by traitlets.
-_REMOVED_KWARGS = {
-    "density_mode": "the density is never estimated; pass density_value (atoms/Å³) instead",
-    "line_max_bins": "renamed to linescan_max_bins",
-    "_offline": "renamed to offline, which only exported HTML files set",
-    "theme": "removed; the widget follows the notebook theme",
-    "disabled_tools": "removed",
-    "hidden_tools": "removed",
-    "k_width": "removed; the k window's taper width is fixed",
-    "r_min": "removed; the r grid always starts at 0",
-}
-
 # Status hints for an output that needs the number density, which is never estimated.
 _DENSITY_HINT_DAMPING = "Set the density to apply damping and compute g(r)."
 _DENSITY_HINT_GR = "Set the density to compute g(r)."
@@ -176,9 +163,7 @@ def _reject_unknown_kwargs(cls, kwargs):
     traits = set(cls.class_trait_names())
     unknown = sorted(k for k in kwargs if k not in traits)
     if unknown:
-        key = unknown[0]
-        hint = _REMOVED_KWARGS.get(key, "check for typos or a renamed parameter")
-        raise TypeError(f"{cls.__name__}() got unexpected keyword argument {key!r}: {hint}.")
+        raise TypeError(f"{cls.__name__}() got unexpected keyword argument {unknown[0]!r}: check for typos or a renamed parameter.")
 
 
 def _is_whole_number(value):

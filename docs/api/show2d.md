@@ -18,9 +18,7 @@ viewer.columns = 3
 Use `rows=2` instead to calculate columns from the number of images per page.
 If both are supplied, the grid must hold every panel. `size` describes each
 image panel: small 300, medium 450, large 600 or xlarge 900 CSS pixels.
-The default remains three columns for existing notebooks. `ncols` still works
-with a deprecation warning; do not combine it with `columns` or `rows`.
-Existing saved layout state remains readable.
+The default is three columns.
 
 ```{eval-rst}
 .. autoclass:: quantem.widget.show2d.Show2D
@@ -49,7 +47,7 @@ no console error, no NaN frame).
 | FFT window toggle | `fft_window` | Apodization on/off (ringing at edges differs) |
 | FFT quality labels | `fft_metrics` | Compact in-panel label reports FFT sharpness, peak count, and peak SNR from the cached FFT magnitude |
 | FFT zoom / pan | Browser-local per FFT panel; FFT `Link Zoom` and `Link Pan` controls | Wheel or pinch zoom updates an always-visible `N.N×` badge in that FFT panel; reset returns Show2D's `2.0×` FFT default |
-| Viewer chrome preset | `ui_mode` plus explicit `show_*` kwargs | Applies shared display presets; see [Viewer UI controls](viewer-ui) |
+| Viewer chrome preset | `mode` plus explicit `show_*` kwargs | Applies shared display presets; see [Viewer UI controls](viewer-ui) |
 | Control visibility | `show_controls`, `controls_collapsed` | Permanently remove controls or temporarily collapse them behind the top GUI toggle |
 | Title visibility | `show_title` | Top title row shows/hides |
 | Stats visibility | `show_stats` | Mean/min/max/std readout shows/hides |
@@ -221,7 +219,7 @@ readback through `roi_list`.
 
 ## Presentation and export chrome
 
-`ui_mode="presentation"` starts with controls collapsed so the scientific image
+`mode="presentation"` starts with controls collapsed so the scientific image
 gets the first view. It still leaves a compact `Controls` button for adjusting
 the widget and an `Export` button for saving the current standalone HTML:
 
@@ -229,7 +227,7 @@ the widget and an `Export` button for saving the current standalone HTML:
 w = Show2D(
     [raw, residual],
     labels=[r"$\lambda=0.03$ raw", r"$\chi^2$/pixel"],
-    ui_mode="presentation",
+    mode="presentation",
     show_stats=True,
 )
 w.export_html("lambda_sweep.html", encoding="uint8")
@@ -470,7 +468,7 @@ w.save("defect_a.json")
 Show2D([raw, corrected, residual], state="defect_a.json")
 ```
 
-The file is `{"schema": "quantem.widget-state/2", "widget_name", "widget_version",
+The file is `{"schema": "quantem.widget-state/3", "widget_name", "widget_version",
 "state"}`, the same for every widget with `save`. A file of another schema
 (or of an earlier release, which has none) and a state key the widget does not
 save raise `ValueError` before anything is applied; an earlier file is not

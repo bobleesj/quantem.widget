@@ -64,7 +64,7 @@ def test_panels_slice_the_concatenated_frame_and_keep_native_sources():
 
 def test_paged_input_visits_one_page_of_panels_at_a_time():
     pages = np.stack([_ramp(5, 16, offset=10.0 * page) for page in range(3)]).reshape(3, 1, 5, 16, 16).repeat(4, axis=1)
-    widget = Show3D(pages, panel_titles=["raw", "f", "r", "p"], page_labels=["a", "b", "c"], max_cols=4, verbose=False)
+    widget = Show3D(pages, panel_titles=["raw", "f", "r", "p"], page_labels=["a", "b", "c"], columns=4, verbose=False)
     assert (widget.n_pages, widget.panels_per_page, widget.n_panels, widget.n_slices) == (3, 4, 12, 5)
     assert widget.panel_titles[:4] == ["raw", "f", "r", "p"] and widget._visible_panels == [0, 1, 2, 3]
     widget.page_idx = 2
@@ -289,13 +289,13 @@ def test_saved_notebook_state_keeps_a_preview_instead_of_pixels():
 def test_static_preview_matches_a_show2d_gallery_pixel_for_pixel():
     rng = np.random.default_rng(18)
     stacks = [rng.random((4, 96, 112), dtype=np.float32) + panel * 0.1 for panel in range(4)]
-    widget = Show3D(*stacks, panel_titles=[f"P{p + 1}" for p in range(4)], max_cols=2, panel_gap_px=3, panel_width_px=180, sampling=0.12, units="nm", verbose=False)
+    widget = Show3D(*stacks, panel_titles=[f"P{p + 1}" for p in range(4)], columns=2, panel_gap_px=3, panel_width_px=180, sampling=0.12, units="nm", verbose=False)
     widget.slice_idx = 2
     widget.hidden_panels = [1]
     reference = Show2D(
         [widget._get_display_panel_frame(panel, 2) for panel in (0, 2, 3)],
         labels=[widget._static_panel_title(panel, 2) for panel in (0, 2, 3)],
-        ncols=2,
+        columns=2,
         panel_gap_px=3,
         panel_width_px=180,
         sampling=widget.pixel_size,

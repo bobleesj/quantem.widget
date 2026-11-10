@@ -739,8 +739,8 @@ class Show2DStaticPng:
         css_w = self._static_canvas_css_px()
         overlays = self._static_overlay_texts(specs, css_px=css_w)
         has_roi_zoom = any(bool(spec.get("roi_zoom_panel")) for spec in specs)
-        ncols = min(n_panels, 4) if has_roi_zoom else max(1, min(self.ncols, n_panels))
-        nrows = (n_panels + ncols - 1) // ncols
+        columns = min(n_panels, 4) if has_roi_zoom else max(1, min(self.columns, n_panels))
+        nrows = (n_panels + columns - 1) // columns
         # cells sized to the panels' cropped aspect so every image fills its
         # cell exactly: a taller cell would pad panels with white and make the
         # horizontal gutters read wider than the vertical ones
@@ -754,7 +754,7 @@ class Show2DStaticPng:
         cell_h_in = cell_w_in * aspect
         gap_in = gap_frac * cell_w_in
         outer_in = outer_frac * cell_w_in
-        fig_w_in = ncols * cell_w_in + (ncols - 1) * gap_in + 2 * outer_in
+        fig_w_in = columns * cell_w_in + (columns - 1) * gap_in + 2 * outer_in
         fig_h_in = nrows * cell_h_in + (nrows - 1) * gap_in + 2 * outer_in
         # Build an unmanaged Figure rather than registering one through
         # pyplot. In a live Jupyter kernel this renderer runs from a
@@ -785,7 +785,7 @@ class Show2DStaticPng:
             )
         # wspace/hspace are fractions of cell width/height; both resolve to
         # the same gap_in inches so the white gutters match to the pixel
-        grid = fig.add_gridspec(nrows, ncols, wspace=gap_frac,
+        grid = fig.add_gridspec(nrows, columns, wspace=gap_frac,
                                 hspace=gap_frac / aspect,
                                 left=left, right=right, bottom=bottom, top=top)
         font_family = static_overlay_font()
@@ -793,7 +793,7 @@ class Show2DStaticPng:
         # device px wide, so every CSS-px size renders scaled by max_px/css_w
         points_per_css_px = (max_px / css_w) * 72.0 / dpi
         for idx, (spec, window, (label, zoom_text, bar_text, bar_css)) in enumerate(zip(specs, windows, overlays)):
-            ax = fig.add_subplot(grid[idx // ncols, idx % ncols])
+            ax = fig.add_subplot(grid[idx // columns, idx % columns])
             ax.axis("off")
             row0, row1, col0, col1 = window
             rgb = self._static_window_rgb(spec, window, factor=max(1, math.ceil(max(row1 - row0, col1 - col0) / max_px)))

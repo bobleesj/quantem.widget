@@ -1,7 +1,7 @@
 # Viewer UI Controls
 
 QuantEM viewers use the same names for common display chrome. Use explicit
-keyword arguments for durable APIs, and use `ui_mode` as a convenience preset
+keyword arguments for durable APIs, and use `mode` as a convenience preset
 for common sharing contexts. Maintainer-only frontend wording and review rules
 live in [Widget UI protocol](../maintainer/widget-ui-protocol).
 
@@ -35,17 +35,17 @@ scale; their export resolution is controlled independently by figure DPI.
 
 | Preset | Why it exists | Behavior |
 |---|---|---|
-| `ui_mode="interactive"` | Normal notebook analysis. | Full widget UI, controls open, default annotations visible. |
-| `ui_mode="presentation"` | Shared HTML that should open cleanly but remain adjustable. | Controls start collapsed behind `Controls`; stats, resize handles, and zoom badges are hidden where supported. Titles, panel labels, and scale bars stay visible. |
-| `ui_mode="report"` | Clean figure in a report or manuscript-style notebook. | Controls are removed with no GUI recovery button; stats, resize handles, and zoom badges are hidden. Titles, panel labels, and scale bars stay visible. |
-| `ui_mode="minimal"` | Bare visual/GIF-like output. | Title, controls, stats, panel titles, scale bars, resize handles, zoom badges, and equivalent optional chrome are hidden where supported. |
+| `mode="interactive"` | Normal notebook analysis. | Full widget UI, controls open, default annotations visible. |
+| `mode="presentation"` | Shared HTML that should open cleanly but remain adjustable. | Controls start collapsed behind `Controls`; stats, resize handles, and zoom badges are hidden where supported. Titles, panel labels, and scale bars stay visible. |
+| `mode="report"` | Clean figure in a report or manuscript-style notebook. | Controls are removed with no GUI recovery button; stats, resize handles, and zoom badges are hidden. Titles, panel labels, and scale bars stay visible. |
+| `mode="minimal"` | Bare visual/GIF-like output. | Title, controls, stats, panel titles, scale bars, resize handles, zoom badges, and equivalent optional chrome are hidden where supported. |
 
 Explicit keyword arguments override the preset:
 
 ```python
 Show2D(
     images,
-    ui_mode="presentation",
+    mode="presentation",
     show_panel_titles=True,
     show_scale_bar=True,
 )
@@ -59,7 +59,7 @@ only syncs the name as a trait takes it as an attribute after construction
 
 | Name | Constructor keyword of | Attribute only | Meaning |
 |---|---|---|---|
-| `ui_mode` | Show1D, Show2D, Show3D, Show4DSTEM | | Preset for the rows below; explicit keywords override it. |
+| `mode` | Show1D, Show2D, Show3D, Show4DSTEM | | Preset for the rows below; explicit keywords override it. |
 | `show_title` | Show1D, Show2D, Show3D, Show3DSlices, Show4DSTEM | | Show or hide the top title row. |
 | `show_controls` | Show1D, Show2D, Show4DSTEM | Show3D, Show3DSlices | Expose controls at all. Set `False` for a permanently clean display with no GUI recovery button. |
 | `controls_collapsed` | Show1D, Show2D, Show4DSTEM | Show3D, Show3DSlices | Start with controls hidden behind a top `Controls` button. |
@@ -81,20 +81,20 @@ Use this for shared HTML reports where collaborators should see clean figures
 first but can still reopen controls:
 
 ```python
-widget = Show3D(data, ui_mode="presentation")
+widget = Show3D(data, mode="presentation")
 ```
 
 Use this for static-looking report embeds where controls should not be
 recoverable but scientific context should remain:
 
 ```python
-widget = Show3D(data, ui_mode="report")
+widget = Show3D(data, mode="report")
 ```
 
 Use this for the cleanest visual output:
 
 ```python
-widget = Show3D(data, ui_mode="minimal")
+widget = Show3D(data, mode="minimal")
 ```
 
 Prefer explicit overrides instead of new one-off names. For example, use
@@ -151,7 +151,7 @@ visible grid slots, so hidden panels do not leave ghost group borders.
 Show2D(
     images,
     labels=status_titles,
-    ncols=3,
+    columns=3,
     marker_colors=["#60a5fa", "#34d399", "#f87171"],
     marker_style="around",
     row_markers={0: "#60a5fa"},

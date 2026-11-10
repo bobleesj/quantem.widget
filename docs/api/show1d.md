@@ -17,7 +17,7 @@ exports. The Reset toolbar action restores the initial plot dimensions.
 
 ## Viewer UI
 
-`Show1D` supports the shared `ui_mode`, `show_title`, `show_controls`,
+`Show1D` supports the shared `mode`, `show_title`, `show_controls`,
 `controls_collapsed`, `show_stats`, `show_legend`, and `show_grid` names. See
 [Viewer UI controls](viewer-ui). The toggles are synced traits and pass through
 the constructor as keywords (`Show1D(data, show_legend=False)`).

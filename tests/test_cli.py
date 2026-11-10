@@ -403,7 +403,7 @@ def test_user_errors_print_one_line_and_bugs_keep_their_traceback(tmp_path, monk
     np.save(tmp_path / "scan.npy", np.ones((4, 4, 8, 8), np.uint16))
     monkeypatch.setattr(gpu_adapter, "accelerator_ready", lambda: False)
     monkeypatch.setattr(reader, "ceiling", lambda device=None: 1000)
-    assert cli.main(["show4dstem", str(tmp_path / "scan.npy"), "--html", "--no-open", "--out", str(tmp_path / "out")]) == 1
+    assert cli.main(["show4dstem", str(tmp_path / "scan.npy"), "--html", "--no-open", "--save-dir", str(tmp_path / "out")]) == 1
     lines = capsys.readouterr().err.splitlines()
     assert lines[0].startswith("quantem: skipped scan: scan.npy: the dense (4, 4, 8, 8) array needs")
     assert lines[1:] == ["quantem: every master failed to export (see messages above)"]
@@ -550,7 +550,7 @@ def test_show4dstem_html_over_qem_files_writes_the_streaming_folder(tmp_path, mo
 
     monkeypatch.setattr("quantem.widget.show4dstem.export.write_qem_bundle", fake_bundle)
     monkeypatch.setattr(cli, "_open_show4dstem_command", lambda command, *, no_open: seen.update(opened=command))
-    assert cli.main(["show4dstem", *map(str, paths), "--html", "--out", str(tmp_path / "out"), "--no-open"]) == 0
+    assert cli.main(["show4dstem", *map(str, paths), "--html", "--save-dir", str(tmp_path / "out"), "--no-open"]) == 0
     assert seen["files"] == paths
     assert seen["out_dir"] == tmp_path / "out" / "2_datasets_show4dstem_webgpu" and seen["title"] == "2_datasets"
     assert seen["opened"] == seen["out_dir"] / "Show4DSTEM.command"
@@ -659,7 +659,7 @@ def test_render_show4dstem_notebook_reads_every_selected_master(tmp_path):
 def test_show4dstem_subcommand_writes_notebook(tmp_path):
     (tmp_path / "scan_master.h5").write_bytes(b"\x00")
     dest = tmp_path / "out"
-    assert cli.main(["show4dstem", str(tmp_path / "scan_master.h5"), "--no-open", "--out", str(dest)]) == 0
+    assert cli.main(["show4dstem", str(tmp_path / "scan_master.h5"), "--no-open", "--save-dir", str(dest)]) == 0
     assert list(dest.glob("*.ipynb"))
 
 
@@ -673,7 +673,7 @@ def test_show4dstem_html_cli_threads_export_dtype(tmp_path, monkeypatch) -> None
     seen = []
     export = Show4DSTEM.export_html
     monkeypatch.setattr(Show4DSTEM, "export_html", lambda self, path, **kwargs: seen.append(kwargs["dtype"]) or export(self, path, **kwargs))
-    command = ["show4dstem", str(tmp_path / "scan.npy"), "--html", "--no-open", "--out", str(tmp_path / "out")]
+    command = ["show4dstem", str(tmp_path / "scan.npy"), "--html", "--no-open", "--save-dir", str(tmp_path / "out")]
     assert cli.main([*command, "--dtype", "uint16"]) == 0 and seen == ["uint16"]
     with pytest.raises(SystemExit):
         cli.main([*command, "--dtype", "u16"])
@@ -729,7 +729,7 @@ def test_show4dstem_html_refuses_a_payload_no_page_can_hold_before_reading(tmp_p
         handle.require_group("entry/data")["data_000001"] = h5py.ExternalLink("scan_data_000001.h5", "entry/data/data")
     monkeypatch.setattr(cli, "_HTML_PAYLOAD_LIMIT", 16 * 8 * 8 - 1)
     monkeypatch.setattr(cli, "_master_to_binned_numpy", lambda *args, **kwargs: pytest.fail("read before refusing"))
-    command = ["show4dstem", str(tmp_path / "scan_master.h5"), "--html", "--no-open", "--out", str(tmp_path / "out")]
+    command = ["show4dstem", str(tmp_path / "scan_master.h5"), "--html", "--no-open", "--save-dir", str(tmp_path / "out")]
 
     assert cli.main(command) == 1
     err = capsys.readouterr().err
@@ -746,7 +746,7 @@ def test_show4dstem_cli_max_gb_reads_what_the_ceiling_refused(tmp_path, monkeypa
     monkeypatch.setattr(gpu_adapter, "accelerator_ready", lambda: False)
     real_ceiling = reader.ceiling  # the dense file read sees a tiny ceiling; the viewer's GPU copy the real one
     monkeypatch.setattr(reader, "ceiling", lambda device=None: 1000 if str(device or "cpu") == "cpu" else real_ceiling(device))
-    command = ["show4dstem", str(tmp_path / "scan.npy"), "--html", "--no-open", "--out", str(tmp_path / "out")]
+    command = ["show4dstem", str(tmp_path / "scan.npy"), "--html", "--no-open", "--save-dir", str(tmp_path / "out")]
     assert cli.main(command) == 1
     assert "--max-gb for the quantem command" in capsys.readouterr().err
     assert cli.main([*command, "--max-gb", "1"]) == 0
@@ -801,7 +801,7 @@ def test_show4dstem_cli_html_bin_announces_the_detector_binning(tmp_path, monkey
 
     np.save(tmp_path / "scan.npy", np.ones((4, 4, 8, 8), np.uint16))
     monkeypatch.setattr(gpu_adapter, "accelerator_ready", lambda: False)
-    command = ["show4dstem", str(tmp_path / "scan.npy"), "--html", "--detector-bin", "2", "--no-open", "--out", str(tmp_path / "out")]
+    command = ["show4dstem", str(tmp_path / "scan.npy"), "--html", "--detector-bin", "2", "--no-open", "--save-dir", str(tmp_path / "out")]
     assert cli.main(command) == 0
     assert "detector binned 2x2 (mean of each block), 8x8 -> 4x4; pass --detector-bin 1 for the full detector" in capsys.readouterr().out
 
@@ -814,7 +814,7 @@ def test_show4dstem_cli_html_auto_dtype_keeps_counts_above_255(tmp_path, monkeyp
     counts[..., 3:5, 3:5] = np.arange(16, dtype=np.uint16).reshape(4, 4)[..., None, None] + 400
     np.save(tmp_path / "binned.npy", counts)
     monkeypatch.setattr(gpu_adapter, "accelerator_ready", lambda: False)
-    command = ["show4dstem", str(tmp_path / "binned.npy"), "--html", "--no-open", "--out", str(tmp_path / "out")]
+    command = ["show4dstem", str(tmp_path / "binned.npy"), "--html", "--no-open", "--save-dir", str(tmp_path / "out")]
     assert cli.main(command) == 0
     out = capsys.readouterr().out
     assert "counts reach 415, packed as uint16" in out
@@ -824,11 +824,11 @@ def test_show4dstem_cli_html_auto_dtype_keeps_counts_above_255(tmp_path, monkeyp
 
 
 def test_show4dstem_cli_out_refuses_a_file_name(tmp_path, capsys):
-    """--out is a folder; `--out x.html` used to create a folder named x.html."""
+    """--save-dir is a folder; `--save-dir x.html` used to create a folder named x.html."""
     np.save(tmp_path / "scan.npy", np.ones((4, 4, 8, 8), np.uint16))
-    command = ["show4dstem", str(tmp_path / "scan.npy"), "--html", "--no-open", "--out", str(tmp_path / "x.html")]
+    command = ["show4dstem", str(tmp_path / "scan.npy"), "--html", "--no-open", "--save-dir", str(tmp_path / "x.html")]
     assert cli.main(command) == 1
-    assert "--out is the output folder; x.html looks like a file name" in capsys.readouterr().err
+    assert "--save-dir is the output folder; x.html looks like a file name" in capsys.readouterr().err
     assert not (tmp_path / "x.html").exists()
 
 
@@ -840,6 +840,6 @@ def test_show4dstem_backend_takes_auto_or_webgpu_only(tmp_path, capsys):
     with pytest.raises(SystemExit):
         cli.main(["show4dstem", str(master), "--backend", "cuda", "--no-open"])
     assert "invalid choice: 'cuda'" in capsys.readouterr().err
-    assert cli.main(["show4dstem", str(master), "--no-open", "--out", str(tmp_path / "out")]) == 0
+    assert cli.main(["show4dstem", str(master), "--no-open", "--save-dir", str(tmp_path / "out")]) == 0
     notebook = json.loads(next((tmp_path / "out").glob("*.ipynb")).read_text())
     assert "backend" not in json.dumps(notebook).replace(str(tmp_path), "")

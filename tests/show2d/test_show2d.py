@@ -201,10 +201,10 @@ def test_rotating_an_rgb_panel_turns_its_color_block_with_it():
     widget.image_rotations = [0, 0]
     np.testing.assert_array_equal(np.frombuffer(widget.frame_bytes[: 3 * 20 * 40 * 4], dtype=np.float32).reshape(20, 40, 3), rgb)
 
-def test_ui_mode_presets_and_unknown_kwargs():
-    report = Show2D(_frame(), ui_mode="report", verbose=False)
+def test_mode_presets_and_unknown_kwargs():
+    report = Show2D(_frame(), mode="report", verbose=False)
     assert (report.show_controls, report.show_stats, report.show_title) == (False, False, True)
-    presentation = Show2D(_frame(), ui_mode="presentation", show_stats=True, verbose=False)
+    presentation = Show2D(_frame(), mode="presentation", show_stats=True, verbose=False)
     assert presentation.show_controls is True and presentation.controls_collapsed is True
     assert presentation.show_stats is True  # explicit flags beat the preset
     with pytest.raises(TypeError, match="pixel_size_angstrom"):
@@ -215,15 +215,15 @@ def test_drift_plot_keywords_center_and_panel_gap_px(capsys):
     # quantem's drift plots: plot_combined(interactive=True) passes center=,
     # drift.show() passes the panel gap with the calibration.
     image = _frame(0, (256, 256))
-    combined = Show2D([image, image], labels=["0 deg", "90 deg"], ncols=2, panel_width_px=300, display_bin=1, zoom=4,
-                      center=(40, 200), ui_mode="report")
+    combined = Show2D([image, image], labels=["0 deg", "90 deg"], columns=2, panel_width_px=300, display_bin=1, zoom=4,
+                      center=(40, 200), mode="report")
     assert (combined.zoom_row, combined.zoom_col) == (40.0, 200.0)
     # center is in full-resolution pixels; the browser reads the binned preview's pixels
     binned = Show2D(image, zoom=4, center=(40, 200), display_bin=2, verbose=False)
     assert (binned.zoom_row, binned.zoom_col) == (20.0, 100.0)
     assert Show2D(image, center=None).zoom_row is None
-    shown = Show2D([image] * 3, ncols=3, panel_gap_px=0, panel_width_px=200, sampling=0.1, units="nm",
-                   labels=["before", "affine", "nonrigid"], zoom=1, ui_mode="interactive")
+    shown = Show2D([image] * 3, columns=3, panel_gap_px=0, panel_width_px=200, sampling=0.1, units="nm",
+                   labels=["before", "affine", "nonrigid"], zoom=1, mode="interactive")
     assert (shown.panel_gap_px, shown.pixel_size, shown.pixel_unit) == (0, 0.1, "nm")
     assert Show2D([image] * 2, panel_gap_px=6).panel_gap_px == 6
     capsys.readouterr()
@@ -654,7 +654,7 @@ def test_state_loads_from_a_file_and_refuses_another_widgets_envelope(tmp_path: 
     fresh.load_state_dict(tmp_path / "view.json")
     assert fresh.log_scale is True
     with pytest.raises(ValueError, match="'Show3D'"):
-        Show2D(_frame(), state={"schema": "quantem.widget-state/2", "widget_name": "Show3D", "state": {"log_scale": True}}, verbose=False)
+        Show2D(_frame(), state={"schema": "quantem.widget-state/3", "widget_name": "Show3D", "state": {"log_scale": True}}, verbose=False)
 
 
 def test_offline_quantization_announces_itself(capsys):

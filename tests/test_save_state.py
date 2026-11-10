@@ -658,7 +658,7 @@ def test_show2d_static_gallery_avoids_pyplot_figure_manager(monkeypatch):
     widget = Show2D(
         [rng.random((96, 96), dtype=np.float32) for _ in range(4)],
         labels=["Ba", "Ti", "O", "Sr"],
-        ncols=2,
+        columns=2,
         cmap="inferno",
         save_state=False,
         verbose=False,

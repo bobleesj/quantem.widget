@@ -52,9 +52,9 @@ If unsure whether something is private, leave it out and ask.
 
 Before designing or changing a public display API, read the
 [Display API standard](docs/maintainer/display-api.md). Use named `size` presets
-and plain `rows` / `columns` for new layout controls. Preserve existing notebook
-calls through a tested compatibility migration; a design standard is not proof
-that an old API already accepts the new keywords.
+and plain `rows` / `columns` for new layout controls. A rename keeps no alias,
+deprecated keyword or old-key reader: it updates every caller, and a saved record
+gets a schema bump and a rewrite script.
 
 ## Tests
 

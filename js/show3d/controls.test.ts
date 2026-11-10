@@ -45,7 +45,7 @@ class Model {
       frequency_filter_cutoffs: [], frequency_filter_centers: [], frequency_filter_widths: [], frequency_filter_scope: "all",
       show_frequency_filter: false, show_fft: false, fft_layout: "bottom", fft_overlay_size: 0.35, fft_overlay_zoom: 1,
       fft_window: true, pixel_size: 0, pixel_unit: "px", show_scale_bar: true, show_panel_titles: true, panel_width_px: 0,
-      max_cols: 4, panel_gap_px: 0, n_pages: 1, page_idx: 0, panels_per_page: 0, view_state: {},
+      columns: 4, panel_gap_px: 0, n_pages: 1, page_idx: 0, panels_per_page: 0, view_state: {},
       ...overrides,
     };
   }
@@ -283,7 +283,7 @@ it("releases every GPU slot of a replaced stack, the moving-average slot include
 it("lays out panels that share one source frame by num_panel_cols, not by width / n_panels", async () => {
   // Show3D(stack, stack, stack) sends one frame of `width` columns for three slots. width / n_panels, the
   // fallback for a concatenated frame, is a third of a panel there, so only num_panel_cols gives the layout.
-  await mount(new Model({ n_panels: 3, shared_panel_source: true, num_panel_cols: SIZE, max_cols: 3 }));
+  await mount(new Model({ n_panels: 3, shared_panel_source: true, num_panel_cols: SIZE, columns: 3 }));
   const image = el.querySelector<HTMLCanvasElement>('canvas[data-quantem-scientific-output="show3d-image"]')!;
   expect(image.width / image.height).toBeCloseTo(3, 1);
 });
@@ -292,7 +292,7 @@ it("leaves a settled multi-panel histogram idle until the frame changes", async 
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const schedule = vi.spyOn(window, "setTimeout");
   const model = new Model({
-    n_panels: 3, width: 3 * SIZE, num_panel_cols: SIZE, max_cols: 3,
+    n_panels: 3, width: 3 * SIZE, num_panel_cols: SIZE, columns: 3,
     _offline_float_stack: new DataView(new Float32Array(FRAMES * SIZE * 3 * SIZE).fill(1).buffer),
   });
   await mount(model);
@@ -311,7 +311,7 @@ it("reorders a panel among its own widget's panels when another Show3D on the pa
   // Two three-panel widgets, both in reorder mode. Panel 1 of the first is dropped in a gap below its row,
   // nearest its own panel 3 but nearer still the second widget's panel 1.
   const packed = (frames: number) => new DataView(new Float32Array(frames * SIZE * 3 * SIZE).fill(1).buffer);
-  const options = { n_panels: 3, width: 3 * SIZE, num_panel_cols: SIZE, _offline_float_stack: packed(FRAMES), max_cols: 3 };
+  const options = { n_panels: 3, width: 3 * SIZE, num_panel_cols: SIZE, _offline_float_stack: packed(FRAMES), columns: 3 };
   const first = new Model(options);
   const second = new Model(options);
   const secondEl = document.createElement("div");

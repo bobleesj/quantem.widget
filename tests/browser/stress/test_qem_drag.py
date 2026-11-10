@@ -131,7 +131,7 @@ from quantem.widget import Show4DSTEM
 import time
 loaded = io.load({[str(path) for path in paths]!r}, device={device}, verbose=False)
 viewer = Show4DSTEM(loaded, view_mode="multiple", compare_group_mode="all",
-    compare_max_panels={count}, compare_cols=5, compare_grid_width_px=1200,
+    compare_max_panels={count}, compare_columns=5, compare_grid_width_px=1200,
     panel_width_px=320, sync_resize=False, show_fft=False)
 query_times = []
 query = viewer._compare_images

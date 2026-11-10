@@ -3,36 +3,21 @@
 import json
 import math
 import numbers
-import warnings
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
 import traitlets
 
-UiMode = Literal["interactive", "presentation", "report", "minimal"]
+DisplayMode = Literal["interactive", "presentation", "report", "minimal"]
 ViewerSize = Literal["small", "medium", "large", "xlarge"]
 PANEL_WIDTHS: dict[str, int] = json.loads(
     (Path(__file__).parent.parent / "panel_sizes.json").read_text(encoding="utf-8")
 )
 
 
-def resolve_columns(
-    count: int, *, columns: int | None = None, rows: int | None = None,
-    default: int = 2, legacy_columns: int | None = None,
-    legacy_name: str = "ncols",
-) -> int:
-    """Resolve a gallery layout without changing its stored frontend vocabulary."""
-    if legacy_columns is not None:
-        if columns is not None or rows is not None:
-            raise ValueError(f"Use columns or rows, or the legacy {legacy_name}, not both.")
-        warnings.warn(
-            f"{legacy_name} is deprecated; use columns instead. It remains supported during the transition.",
-            DeprecationWarning, stacklevel=3,
-        )
-        columns = legacy_columns
-        if legacy_name == "max_cols" and columns == 0:
-            columns = max(1, count)
+def resolve_columns(count: int, *, columns: int | None = None, rows: int | None = None, default: int = 2) -> int:
+    """Columns of a gallery of ``count`` panels: ``columns`` as given, else enough for ``rows``, else ``default``."""
     for name, value in (("columns", columns), ("rows", rows)):
         if value is not None and (
             isinstance(value, bool) or not isinstance(value, numbers.Integral) or value < 1
@@ -108,22 +93,22 @@ UI_MODE_DEFAULTS: dict[str, dict[str, bool]] = {
 }
 
 
-def resolve_ui_mode(
-    ui_mode: UiMode | str,
+def resolve_mode(
+    mode: DisplayMode | str,
     *,
     defaults: Mapping[str, object],
     overrides: Mapping[str, object],
 ) -> dict[str, object]:
     """Resolve a viewer UI preset with explicit keyword overrides.
 
-    ``ui_mode`` applies broad defaults first. Values in ``overrides`` win when
+    ``mode`` applies broad defaults first. Values in ``overrides`` win when
     they are not ``None`` so callers can use a preset and still opt individual
     controls back in.
     """
-    mode = str(ui_mode or "interactive").strip().lower()
+    mode = str(mode or "interactive").strip().lower()
     if mode not in UI_MODE_DEFAULTS:
         choices = ", ".join(repr(choice) for choice in UI_MODE_DEFAULTS)
-        raise ValueError(f"ui_mode must be one of {choices}, got {ui_mode!r}")
+        raise ValueError(f"mode must be one of {choices}, got {mode!r}")
 
     resolved = dict(defaults)
     resolved.update(

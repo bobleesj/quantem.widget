@@ -161,7 +161,7 @@ const SHOW2D_STANDALONE_VIEW_STATE_KEYS = [
   "log_scale",
   "marker_colors",
   "marker_style",
-  "ncols",
+  "columns",
   "page_idx",
   "panel_annotations",
   "panel_cmaps",
@@ -805,7 +805,7 @@ function Show2D() {
   const [cmap, setCmap] = useModelState<string>("cmap");
   const [panelCmaps, setPanelCmaps] = useModelState<string[]>("panel_cmaps");
   const [panelCmapsMemory, setPanelCmapsMemory] = useModelState<string[]>("panel_cmaps_memory");
-  const [ncols, setNcols] = useModelState<number>("ncols");
+  const [ncols, setNcols] = useModelState<number>("columns");
   const panelCmapFor = React.useCallback((idx: number) => {
     const value = panelCmaps && idx >= 0 && idx < panelCmaps.length ? panelCmaps[idx] : "";
     return value || cmap || "inferno";
