@@ -4862,61 +4862,77 @@ function Show3D() {
         scheduleTick();
         return;
       }
-      lastFrameTime = tickNow - Math.max(0, elapsed - intervalMs);
+      // Advance by elapsed time, not one frame per display refresh: at 120 fps on a 60 Hz screen
+      // that is two frames a refresh, so playback keeps the requested speed (one frame a refresh
+      // played "120" at 60 fps). Capped so a stalled tab does not leap far ahead.
+      const steps = Math.max(1, Math.min(8, Math.floor((elapsed + framePacingToleranceMs) / intervalMs)));
+      lastFrameTime = tickNow - Math.max(0, elapsed - steps * intervalMs);
 
-      let next: number;
-      if (settings.playbackPath && settings.playbackPath.length > 0) {
-        const pp = settings.playbackPath;
-        let pi = pathIdxRef.current;
-        if (settings.boomerang) {
-          // Loop remains the master repeat control. When a scientist turns
-          // Loop off, Bounce should shape motion only until the path endpoint;
-          // it must not keep ping-ponging forever.
-          // Each endpoint is shown once, as in grid-mode boomerang, not skipped on the turn.
-          pi += bounceDirRef.current;
-          if (pi >= pp.length) {
-            if (!settings.loop) { setPlaying(false); return; }
-            bounceDirRef.current = -1;
-            pi = pp.length - 1;
-          } else if (pi < 0) {
-            if (!settings.loop) { setPlaying(false); return; }
-            bounceDirRef.current = 1;
-            pi = 0;
-          }
-        } else {
-          pi += (settings.reverse ? -1 : 1);
-          if (pi >= pp.length) { if (!settings.loop) { setPlaying(false); return; } pi = 0; }
-          if (pi < 0) { if (!settings.loop) { setPlaying(false); return; } pi = pp.length - 1; }
-        }
-        pi = Math.max(0, Math.min(pp.length - 1, pi));
-        pathIdxRef.current = pi;
-        next = pp[pi];
-      } else {
-        const rangeStart = settings.loop ? Math.max(0, Math.min(settings.loopStart, settings.nSlices - 1)) : 0;
-        const rangeEnd = settings.loop ? Math.max(rangeStart, Math.min(settings.loopEnd, settings.nSlices - 1)) : settings.nSlices - 1;
-        const prev = Number.isFinite(playbackIdxRef.current)
-          ? Math.round(playbackIdxRef.current)
-          : Math.max(rangeStart, Math.min(rangeEnd, Math.round(displaySliceIdx || 0)));
-
-        if (settings.boomerang) {
-          next = prev + bounceDirRef.current;
-          if (next > rangeEnd) {
-            if (!settings.loop) { setPlaying(false); return; }
-            bounceDirRef.current = -1;
-            next = prev - 1 >= rangeStart ? prev - 1 : prev;
-          } else if (next < rangeStart) {
-            if (!settings.loop) { setPlaying(false); return; }
-            bounceDirRef.current = 1;
-            next = prev + 1 <= rangeEnd ? prev + 1 : prev;
-          }
-        } else {
-          next = prev + (settings.reverse ? -1 : 1);
-          if (settings.reverse) {
-            if (next < rangeStart) { if (!settings.loop) { setPlaying(false); return; } next = rangeEnd; }
+      const rangeStart = settings.loop ? Math.max(0, Math.min(settings.loopStart, settings.nSlices - 1)) : 0;
+      const rangeEnd = settings.loop ? Math.max(rangeStart, Math.min(settings.loopEnd, settings.nSlices - 1)) : settings.nSlices - 1;
+      // One playback step from `prev`: the next frame index, or null when playback ends here.
+      const advanceOnce = (prev: number): number | null => {
+        if (settings.playbackPath && settings.playbackPath.length > 0) {
+          const pp = settings.playbackPath;
+          let pi = pathIdxRef.current;
+          if (settings.boomerang) {
+            // Loop remains the master repeat control. When a scientist turns
+            // Loop off, Bounce should shape motion only until the path endpoint;
+            // it must not keep ping-ponging forever.
+            // Each endpoint is shown once, as in grid-mode boomerang, not skipped on the turn.
+            pi += bounceDirRef.current;
+            if (pi >= pp.length) {
+              if (!settings.loop) return null;
+              bounceDirRef.current = -1;
+              pi = pp.length - 1;
+            } else if (pi < 0) {
+              if (!settings.loop) return null;
+              bounceDirRef.current = 1;
+              pi = 0;
+            }
           } else {
-            if (next > rangeEnd) { if (!settings.loop) { setPlaying(false); return; } next = rangeStart; }
+            pi += (settings.reverse ? -1 : 1);
+            if (pi >= pp.length) { if (!settings.loop) return null; pi = 0; }
+            if (pi < 0) { if (!settings.loop) return null; pi = pp.length - 1; }
+          }
+          pi = Math.max(0, Math.min(pp.length - 1, pi));
+          pathIdxRef.current = pi;
+          return pp[pi];
+        } else {
+          if (settings.boomerang) {
+            let next = prev + bounceDirRef.current;
+            if (next > rangeEnd) {
+              if (!settings.loop) return null;
+              bounceDirRef.current = -1;
+              next = prev - 1 >= rangeStart ? prev - 1 : prev;
+            } else if (next < rangeStart) {
+              if (!settings.loop) return null;
+              bounceDirRef.current = 1;
+              next = prev + 1 <= rangeEnd ? prev + 1 : prev;
+            }
+            return next;
+          } else {
+            let next = prev + (settings.reverse ? -1 : 1);
+            if (settings.reverse) {
+              if (next < rangeStart) { if (!settings.loop) return null; next = rangeEnd; }
+            } else {
+              if (next > rangeEnd) { if (!settings.loop) return null; next = rangeStart; }
+            }
+            return next;
           }
         }
+      };
+      let next = Number.isFinite(playbackIdxRef.current)
+        ? Math.round(playbackIdxRef.current)
+        : Math.max(rangeStart, Math.min(rangeEnd, Math.round(displaySliceIdx || 0)));
+      for (let step = 0; step < steps; step++) {
+        const advanced = advanceOnce(next);
+        if (advanced === null) {
+          // Without Loop the end frame is shown before stopping, even when it is reached mid-step.
+          if (step === 0) { setPlaying(false); return; }
+          break;
+        }
+        next = advanced;
       }
 
       // The embedded stack owns playback. Select its resident GPU slot when
