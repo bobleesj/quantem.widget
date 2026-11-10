@@ -19,7 +19,7 @@ from quantem.widget.datasets import (
 
 Images and stacks come back as quantem core `Dataset2d` and `Dataset3d`
 (`show2d_gold`, `show3d_gold`), and the 4D-STEM scan
-as every 4D-STEM file reads (`read_4dstem`): a `quantem.gpu.io.Dataset4dstemGPU`
+as every 4D-STEM file reads (`read_4dstem`): a `quantem.gpu.io.Dataset4dstem`
 when quantem.gpu is installed and a GPU is present, else a quantem core
 `Dataset4dstem` (`show4dstem_gold`). `showpdf_ta` returns a quantem core
 `Dataset4dstem` with its detector calibrated in 1/Å, and

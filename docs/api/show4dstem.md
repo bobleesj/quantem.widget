@@ -27,12 +27,12 @@ from quantem.widget import Show4DSTEM, read_4dstem
 input:
 
 - a file path (`*_master.h5`, HDF5 or `.npy`) opens as `read_4dstem(path)`
-  does: a `quantem.gpu.io.Dataset4dstemGPU` when `quantem.widget[cuda]` or
+  does: a `quantem.gpu.io.Dataset4dstem` when `quantem.widget[cuda]` or
   `[mps]` is installed and a GPU is present, else a quantem core
   `Dataset4dstem` read whole into host memory (one printed line with the time
   taken; a file larger than 80% of the available memory is refused, never
   binned or cropped) and reduced on `device=`;
-- a `Dataset4dstemGPU` (from `read_4dstem` on a GPU or `quantem.gpu.io.load`)
+- a `Dataset4dstem` (from `read_4dstem` on a GPU or `quantem.gpu.io.load`)
   opens as a live view over its GPU storage;
 - a quantem core `Dataset4dstem` (numpy- or tensor-backed) or the widget's
   stand-in opens as its array or tensor, with its name as the title and its
@@ -148,12 +148,12 @@ from quantem.gpu import detector
 from quantem.gpu.io import load
 
 loaded = load(path)
-center, radius = detector.fit_probe(detector.mean(loaded))
-Show4DSTEM(loaded, bright_field_center_px=center, bright_field_radius_px=radius)
+disk = detector.bright_field_disk(detector.mean(loaded))
+Show4DSTEM(loaded, bright_field_center_px=disk.bright_field_center_px, bright_field_radius_px=disk.bright_field_radius_px)
 ```
 
 The center is `(row, col)` and the radius is in detector pixels. Supplying
-both skips the viewer's automatic disk estimation. `fit_probe` estimates disk
+both skips the viewer's automatic disk estimation. `bright_field_disk` estimates disk
 geometry, not the complex probe or its aberrations. `detector.mean` and the
 other `quantem.gpu.detector` products (`bf`, `adf`, `masked_sum`, or a
 `detector.prepare(loaded)` session for repeated queries) read the encoded

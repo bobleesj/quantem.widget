@@ -52,7 +52,7 @@ data = io.load(os.environ['QUANTEM_SSB_RELEASE_SOURCE'], verbose=False)
 for name, value in {calibration!r}.items():
     setattr(data.calibration, name, value)
 if data.calibration.detector_sampling_mrad is None and data.calibration.detector_sampling_inv_A is None:
-    data.calibration.fit_detector_sampling()
+    data.calibration.detector_sampling()
 ssb = DirectPtycho(data)
 started = time.perf_counter()
 fit = ssb.aberrations(trials=200, seed=42, compare_standard=False)

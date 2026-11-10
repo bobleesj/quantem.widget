@@ -1,7 +1,7 @@
 """Show4DSTEM: scan position, virtual detector and diffraction pattern of a 4D-STEM scan.
 
 One class opens every input the tutorials use: a file path (read with
-``read_4dstem``), a ``quantem.gpu.io.Dataset4dstemGPU`` (kept on its GPU, read
+``read_4dstem``), a ``quantem.gpu.io.Dataset4dstem`` (kept on its GPU, read
 in bounded windows), a quantem core ``Dataset4dstem``, a list of either (one
 virtual image per dataset under a shared detector), a NumPy
 array or a Torch tensor (dense, on the tensor's device), or a folder of linked
@@ -9,7 +9,7 @@ HDF5 masters or .qem acquisitions read by the browser itself (``h5_urls`` or
 ``qem_urls``, the WebGPU folder exports).
 
 quantem.gpu and quantem core are reached only through
-``quantem.widget.adapters``. A file becomes a ``Dataset4dstemGPU`` when
+``quantem.widget.adapters``. A file becomes a ``Dataset4dstem`` when
 quantem.gpu is installed and a GPU is present, else ``show4dstem.reader``
 reads it densely onto the compute device (``read_4dstem`` gives the same
 counts as a quantem core ``Dataset4dstem``); the viewer shows the same numbers
@@ -173,7 +173,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     ----------
     data
         A file path (``*_master.h5``, HDF5 or ``.npy``), a dataset from
-        ``read_4dstem`` (a ``Dataset4dstemGPU`` or a quantem core
+        ``read_4dstem`` (a ``Dataset4dstem`` or a quantem core
         ``Dataset4dstem``), a list of datasets, a 4D ``(scan_row, scan_col,
         det_row, det_col)`` or 5D ``(n_datasets, ...)`` array or tensor, or a
         3D ``(positions, det_row, det_col)`` flat scan with ``scan_shape``. A
@@ -212,8 +212,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         from it, and a keyword that contradicts a recorded value raises.
     bright_field_center_px, bright_field_radius_px
         Bright-field disk centre ``(row, col)`` and edge radius in detector pixels. Omitted, the disk a
-        dataset recorded with ``data.calibration.fit_detector_sampling()``, else that same fit
-        (``quantem.gpu.detector.fit_bright_field_disk``) of the mean pattern: the BF, ABF, ADF and
+        dataset recorded with ``data.calibration.detector_sampling()``, else that same fit
+        (``quantem.gpu.detector.bright_field_disk``) of the mean pattern: the BF, ABF, ADF and
         HAADF presets are multiples of this radius.
     precompute_virtual_images
         Compute the four preset images up front so preset clicks are instant.
@@ -565,7 +565,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         bounded = gpu_adapter.is_acquisition(data) or series
         datasets = listed and all(core_adapter.is_dataset(item, ndim=4) for item in data)
         recorded = dict.fromkeys(CALIBRATION_KEYS)
-        recorded_disk = None  # the bright-field disk data.calibration.fit_detector_sampling() recorded
+        recorded_disk = None  # the bright-field disk data.calibration.detector_sampling() recorded
         if prepared:
             recorded = {key: data.metadata.get(key) for key in CALIBRATION_KEYS}
             recorded_disk = gpu_adapter.recorded_bright_field_disk(data.metadata)
@@ -749,7 +749,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 (self.bright_field_center_row_px, self.bright_field_center_col_px), self.bright_field_radius_px = recorded_disk
             else:
                 self.bright_field_center_row_px, self.bright_field_center_col_px, self.bright_field_radius_px = fit_disk(
-                    self._session(0).mean_dp(), (self.det_rows, self.det_cols), BRIGHT_FIELD_RADIUS_FRACTION
+                    self._session(0).mean_pattern(), (self.det_rows, self.det_cols), BRIGHT_FIELD_RADIUS_FRACTION
                 )
         if precompute_virtual_images and self.n_frames == 1:
             self._precompute_presets()
@@ -1240,7 +1240,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             if disk is not None:
                 center, radius = disk
             else:
-                row, col, radius = fit_disk(self._session(0).mean_dp(),
+                row, col, radius = fit_disk(self._session(0).mean_pattern(),
                                             (self.det_rows, self.det_cols), BRIGHT_FIELD_RADIUS_FRACTION)
                 center = (row, col)
         self.bright_field_center_row_px, self.bright_field_center_col_px = (
@@ -1760,7 +1760,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                                  "(detector_sampling_mrad=) so it follows from the bright-field disk edge.")
             # quantem.gpu's rule: the disk edge sits at the semiangle. The equal-area edge radius
             # of an elliptical disk takes the geometric mean of the two detector steps.
-            edge_radius_px = gpu_adapter.disk_edge_radius(self._session(int(self.frame_idx)).mean_dp())
+            edge_radius_px = gpu_adapter.disk_edge_radius(self._session(int(self.frame_idx)).mean_pattern())
             semiangle = edge_radius_px * math.sqrt(detector_sampling_mrad[0] * detector_sampling_mrad[1])
             print(f"Show4DSTEM: semiangle_mrad is not recorded; Compute SSB uses {semiangle:.3f} mrad, the bright-field "
                   f"disk edge ({edge_radius_px:.2f} px, quantem.gpu.detector.disk_edge_radius) times the detector step. "

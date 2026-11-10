@@ -3,7 +3,7 @@
 Image and scan loaders take a friendly ``size`` name and return a calibrated quantem
 dataset (or a folder of files), so the tutorials never ship data in git: a
 quantem core ``Dataset2d``/``Dataset3d`` for images and stacks, and for the
-4D-STEM scan a ``quantem.gpu.io.Dataset4dstemGPU`` on a GPU or a quantem core
+4D-STEM scan a ``quantem.gpu.io.Dataset4dstem`` on a GPU or a quantem core
 ``Dataset4dstem`` elsewhere (the widget's stand-in where quantem core cannot
 install).
 """
@@ -240,7 +240,7 @@ def show4dstem_gold(
     ``4dstem/gold_128_npy_bin8``; ``"small"`` and
     ``"medium"`` keep every 4th or 2nd scan position and say so in one line.
     The file is read as every 4D-STEM file is (``read_4dstem``): a
-    ``quantem.gpu.io.Dataset4dstemGPU`` that stays on the GPU when quantem.gpu
+    ``quantem.gpu.io.Dataset4dstem`` that stays on the GPU when quantem.gpu
     and a GPU are present, else a quantem core ``Dataset4dstem``.
     """
 

@@ -89,17 +89,17 @@ ds = io.read_image("overview.emd")          # quantem core Dataset2d
 arr = ds.array                               # the pixels; ds.sampling and ds.units carry the calibration
 Show2D(ds)
 
-data = io.read_4dstem("scan_master.h5")      # Dataset4dstemGPU on a GPU, quantem core Dataset4dstem elsewhere
+data = io.read_4dstem("scan_master.h5")      # Dataset4dstem on a GPU, quantem core Dataset4dstem elsewhere
 Show4DSTEM(data)
 ```
 
 | Data | quantem.gpu and a GPU | No GPU route | Intel Mac, Windows on ARM |
 |---|---|---|---|
-| 4D-STEM file (`read_4dstem`, `datasets.show4dstem_gold`) | `quantem.gpu.io.Dataset4dstemGPU` | quantem core `Dataset4dstem` | stand-in |
+| 4D-STEM file (`read_4dstem`, `datasets.show4dstem_gold`) | `quantem.gpu.io.Dataset4dstem` | quantem core `Dataset4dstem` | stand-in |
 | Image (`read_image`, `read_images`, `datasets.show2d_gold`) | quantem core `Dataset2d` | quantem core `Dataset2d` | stand-in |
 | Image stack (`read_image_stack`, `datasets.show3d_gold`) | quantem core `Dataset3d` | quantem core `Dataset3d` | stand-in |
 
-On a GPU, a 4D-STEM file is a `Dataset4dstemGPU`, not a torch tensor:
+On a GPU, a 4D-STEM file is a `Dataset4dstem`, not a torch tensor:
 
 - counts are unsigned (uint16, uint32), and torch cannot add, multiply or
   take the max of those;

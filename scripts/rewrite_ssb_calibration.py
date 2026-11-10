@@ -41,7 +41,10 @@ method ``"ssb"``. Calibration /8 and stars /5 use quantem.gpu's names: ``upsampl
 ``reconstruction.method`` and ``reconstruction_method``). The regional fit records name their
 search budget ``trials`` (was ``num_trials``), and calibration /8 holds no ``phase_estimator``:
 SSB has one estimator, the phase of the mean wave, so the key is dropped (a retired
-``"mean_phase"`` or ``"complex_wave"`` with it). No number changes.
+``"mean_phase"`` or ``"complex_wave"`` with it). quantem.gpu's ``save_calibration`` wrote
+``reconstruction_method`` beside ``reconstruction_options``; /8 holds the one ``reconstruction``
+dict ShowPtycho writes, ``{"method": ..., "phase_damp": ..., ...}``, so such a file, /8 included,
+is folded into it. No number changes.
 
     python scripts/rewrite_ssb_calibration.py --dry-run path/to/calibration.json
     python scripts/rewrite_ssb_calibration.py path/to/calibration.json path/to/showptycho_stars.json
@@ -163,6 +166,9 @@ def rewrite(earlier, path: pathlib.Path | None = None, data: pathlib.Path | None
         current = portable(current, pathlib.Path.cwd() / "calibration.json" if path is None else path, data)
     if current is not None and current.get("schema") in (CALIBRATION_SCHEMA, STARS_SCHEMA, SHOW4DSTEM_SCHEMA):
         current = current_names(current)
+    if current is not None and "reconstruction_method" in current:
+        options = current.pop("reconstruction_options", None) or {}
+        current["reconstruction"] = {"method": current.pop("reconstruction_method"), **options}
     return current, notes
 
 
@@ -246,6 +252,8 @@ def path_layout(earlier) -> tuple[dict | None, list[str]]:
         return earlier, []
     if earlier.get("schema") in NAMES_RENAMED:
         return {**earlier, "schema": NAMES_RENAMED[earlier["schema"]]}, []
+    if earlier.get("schema") == CALIBRATION_SCHEMA and "reconstruction_method" in earlier:
+        return dict(earlier), []
     if earlier.get("schema") in (CALIBRATION_SCHEMA, STARS_SCHEMA, SNAPSHOTS_SCHEMA, BROWSER_CALIBRATION_SCHEMA, SHOW4DSTEM_SCHEMA):
         return None, []
     later = {"quantem.ssb-calibration/4": PATH_CALIBRATION_SCHEMA, "quantem.ssb-stars/1": PATH_STARS_SCHEMA,

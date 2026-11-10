@@ -864,7 +864,7 @@ def _render_4dstem_notebook(masters: list[str], label: str, args: argparse.Names
             f"Show4DSTEM({masters[0]!r})\n"
         )
     else:
-        # one Dataset4dstemGPU per master on a GPU, one quantem core Dataset4dstem each elsewhere
+        # one Dataset4dstem per master on a GPU, one quantem core Dataset4dstem each elsewhere
         source = (
             "from quantem.widget import Show4DSTEM, read_4dstem\n"
             "\n"
