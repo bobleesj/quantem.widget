@@ -464,3 +464,18 @@ def test_device_info_on_an_intel_mac_names_no_cpu_as_the_gpu_and_prints_the_noti
     assert report["device"] == "Apple Metal (MPS) - the GPU of this Intel Mac"
     assert device.resolve_device("auto") == "mps"
     assert capsys.readouterr().out.count("on this Intel Mac the widgets compute") == 1
+
+
+def test_resolve_device_takes_a_gpu_number(monkeypatch):
+    """device=1 is the second visible CUDA GPU; on a Mac device=0 is the Apple GPU."""
+    import torch
+
+    from quantem.widget.device import resolve_device
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 2)
+    assert resolve_device(1) == "cuda:1"
+    assert resolve_device(0) == "cuda:0"
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+    assert resolve_device(0) == "mps"

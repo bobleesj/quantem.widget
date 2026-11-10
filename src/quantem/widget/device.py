@@ -35,7 +35,7 @@ NO_GPU_PATH = (
 _printed: set[str] = set()
 
 
-def resolve_device(device: str | torch.device | None = "auto", data=None) -> str:
+def resolve_device(device: int | str | torch.device | None = "auto", data=None) -> str:
     """Resolve ``device=`` to the device a widget computes on, as a torch device string.
 
     The strings, order and announcement are those of
@@ -64,6 +64,10 @@ def resolve_device(device: str | torch.device | None = "auto", data=None) -> str
     >>> resolve_device("cpu")
     'cpu'
     """
+    if isinstance(device, int) and not isinstance(device, bool):
+        # device=0 or 1 names a visible GPU: CUDA device N, or on a Mac the one Apple GPU.
+        apple = device == 0 and torch.backends.mps.is_available() and not torch.cuda.is_available()
+        device = "mps" if apple else f"cuda:{device}"
     requested = "auto" if device is None else str(device).strip().lower()
     if isinstance(data, torch.Tensor) and requested in ("", "auto"):
         return device_name(data.device)
