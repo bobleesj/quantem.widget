@@ -23,9 +23,7 @@ warnings.filterwarnings("ignore", message=r"(?s).*HF_TOKEN.*")
 warnings.filterwarnings("ignore", message=r"anywidget: Live-reloading feature is disabled")
 
 _LAZY_EXPORTS: dict[str, tuple[str, str | None]] = {
-    "ChooseLattice": ("quantem.widget.choose_lattice", "ChooseLattice"),
     "ScanControl": ("quantem.widget.scan_control", "ScanControl"),
-    "ShowCIF": ("quantem.widget.showcif", "ShowCIF"),
     "ShowGPU": ("quantem.widget.showgpu", "ShowGPU"),
     "Show1D": ("quantem.widget.show1d", "Show1D"),
     "Plot2D": ("quantem.widget.plot2d", "Plot2D"),
@@ -33,9 +31,6 @@ _LAZY_EXPORTS: dict[str, tuple[str, str | None]] = {
     "Show3D": ("quantem.widget.show3d", "Show3D"),
     "Show3DSlices": ("quantem.widget.show3dslices", "Show3DSlices"),
     "Show4DSTEM": ("quantem.widget.show4dstem", "Show4DSTEM"),
-    "ShowDiffraction": ("quantem.widget.showdiffraction", "ShowDiffraction"),
-    "Phase": ("quantem.widget.showdiffraction", "Phase"),
-    "library_phase": ("quantem.widget.showdiffraction", "library_phase"),
     "ShowPDF": ("quantem.widget.showpdf", "ShowPDF"),
     "ShowPtycho": ("quantem.widget.showptycho", "ShowPtycho"),
     "read_4dstem": ("quantem.widget.show4dstem.reader", "read_4dstem"),
@@ -127,7 +122,6 @@ def free_gpu(verbose: bool = True) -> float:
 
 
 __all__ = [
-    "ChooseLattice",
     "ScanControl",
     "ShowGPU",
     "Show1D",
@@ -136,10 +130,6 @@ __all__ = [
     "Show3D",
     "Show3DSlices",
     "Show4DSTEM",
-    "ShowCIF",
-    "Phase",
-    "ShowDiffraction",
-    "library_phase",
     "ShowPDF",
     "ShowPtycho",
     "read_4dstem",

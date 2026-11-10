@@ -15,7 +15,7 @@ import re
 
 import numpy as np
 import pytest
-from quantem.widget import Plot2D, Show1D, Show2D, Show3D, Show3DSlices, Show4DSTEM, ShowDiffraction
+from quantem.widget import Plot2D, Show1D, Show2D, Show3D, Show3DSlices, Show4DSTEM
 from quantem.widget.show4dstem.export import export_clone
 
 
@@ -64,7 +64,6 @@ STATE_WIDGETS = {
     "Show3D": (lambda: Show3D(np.arange(256, dtype=np.float32).reshape(4, 8, 8), verbose=False), "cmap", "viridis"),
     "Show3DSlices": (lambda: Show3DSlices(np.arange(256, dtype=np.float32).reshape(4, 8, 8)), "cmap", "viridis"),
     "Show4DSTEM": (lambda: Show4DSTEM(np.ones((4, 4, 8, 8), dtype=np.uint16), verbose=False), "dp_colormap", "viridis"),
-    "ShowDiffraction": (lambda: ShowDiffraction(np.ones((16, 16), dtype=np.float32), verbose=False), "dp_colormap", "viridis"),
 }
 
 

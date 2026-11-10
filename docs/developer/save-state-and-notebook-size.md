@@ -24,7 +24,7 @@ Show2D, Show3D, Show4DSTEM and ShowPDF, support these choices:
   GPU acquisition owner, or provide computations that require a live kernel.
 
 These are opt-in protocols, not parameters guaranteed on every widget.
-ChooseLattice has no `save_state` argument. Show3DSlices and ShowDiffraction use
+Show3DSlices uses
 state-file and HTML-export protocols without the static-preview mixins. Plot2D
 uses the shared mixins with a fixed PNG preview. Check the widget's current
 constructor and export API before choosing a persistence mode.

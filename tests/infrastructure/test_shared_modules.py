@@ -262,7 +262,7 @@ def test_widget_modules_do_not_redefine_shared_helpers():
 
 
 def test_export_traits_come_from_the_mixin():
-    for name in ("show2d", "show3d", "show4dstem", "show1d", "showdiffraction", "show3dslices"):
+    for name in ("show2d", "show3d", "show4dstem", "show1d", "show3dslices"):
         for path in widget_sources(name):
             text = path.read_text()
             assert not re.search(r"^    export_(request|status|enabled|payload|payload_id|filename) = traitlets", text, re.M), path.name

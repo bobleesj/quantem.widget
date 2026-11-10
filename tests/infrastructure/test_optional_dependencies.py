@@ -73,7 +73,6 @@ from pathlib import Path
 import h5py
 import hdf5plugin
 import numpy as np
-from ase import Atoms
 
 import quantem.widget as qw
 from quantem.widget import device
@@ -106,13 +105,9 @@ widgets = [
     qw.Show3DSlices(rng.random((8, 8, 8)).astype(np.float32)),
     qw.Show4DSTEM(counts, device="cpu"),
     qw.Show4DSTEM(scan, device="cpu"),
-    qw.ShowDiffraction(rng.random((2, 32, 32)).astype(np.float32), device="cpu"),
-    qw.ShowCIF(Atoms("Si2", scaled_positions=[(0, 0, 0), (0.25, 0.25, 0.25)], cell=[5.43] * 3, pbc=True)),
     qw.Plot2D(image[:4, :6], x=np.arange(6), y=np.arange(4)),
-    qw.ChooseLattice(image),
     qw.ShowPtycho(np.exp(1j * image).astype(np.complex64), sampling=0.2),
 ]
-widgets[6].denoise = "nlm"  # scikit-image, as the ShowDiffraction tutorial uses it
 dense = widgets[5]
 assert dense._session(0).masked_sum(np.ones((16, 16), bool)).tolist() == counts.sum(axis=(2, 3)).astype(np.float32).tolist()
 ptycho = widgets[-1]
@@ -144,10 +139,9 @@ def test_every_widget_imports_and_constructs_without_quantem_or_quantem_gpu(tmp_
 
 
 # Distribution names whose import name differs.
-DISTRIBUTION = {"PIL": "pillow", "skimage": "scikit_image", "IPython": "ipython"}
+DISTRIBUTION = {"PIL": "pillow", "IPython": "ipython"}
 # Imported only inside the function that needs them, with an install message or a fallback.
 OPTIONAL = {
-    "abtem": "ShowCIF potential preview, the [crystal] extra",
     "cupy": "gpu_info and vram_status on CUDA, brought by quantem.gpu[cuda]",
     "quantem": "quantem.gpu, and quantem core where it installs, guarded at the top of their adapter modules",
     "ipyfilechooser": "FolderPicker, used by quantem.live",

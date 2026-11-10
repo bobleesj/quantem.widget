@@ -7,5 +7,3 @@ jupyter-book>=1.0,<2
 # click handlers; _static/nav-toggle-fix.js rewires the visible button and
 # scripts/check_docs_nav_toggle.py guards the built pages in CI.
 ipywidgets
-# ShowCIF tutorial's potential preview projects atoms with abTEM's Lobato parametrization
-abtem>=1.0

@@ -15,8 +15,8 @@ and the source data ([Zenodo](https://zenodo.org/records/18167694)).
 
 ## Start with an interactive demo
 
-The [crystal-to-volume demo route](tutorials/demo.md) connects **ShowCIF**,
-**Show3D**, and **Show3DSlices**. Inspect a model, then compare depth planes. Each notebook explains
+The [volume demo route](tutorials/demo.md) connects **Show3D** and
+**Show3DSlices**: play through a stack, then compare depth planes. Each notebook explains
 what to change in the widget and what the preview does, and does not, represent.
 
 ## Start with ARINA 4D-STEM in Jupyter
@@ -83,10 +83,7 @@ The portable viewer loader is not a guarantee of GPU execution. See
 | `Show3DSlices` | Linked top and oblique cuts through a 3D volume | [tutorial](tutorials/show3dslices) · [API](api/show3dslices) |
 | `Show4DSTEM` | 4D-STEM: live virtual detectors, multi-master review, and WebGPU HTML export | [tutorial](tutorials/show4dstem) · [export](tutorials/show4dstem_export) · [API](api/show4dstem) |
 | `ShowPtycho` | Ptychography aberration review: phase, FFT, BF-count tradeoffs, and WebGPU folder export | [API](api/showptycho) |
-| `ShowDiffraction` | 2D/3D diffraction d-spacing: Bragg spots, rings, center finding, k calibration | [tutorial](tutorials/showdiffraction) · [API](api/showdiffraction) |
 | `ShowPDF` | Pair distribution function analysis (I(k), F(k), G(r), g(r)) of masked, probe, or line regions of a 4D-STEM scan | [API](api/showpdf) |
-| `ShowCIF` | Unit cells, specimen tilt, and projected potential/phase previews | [tutorial](tutorials/showcif.ipynb) · [API](api/showcif.md) |
-| `ChooseLattice` | Pick an origin and two lattice vectors on a 2D image | [tutorial](tutorials/choose_lattice) · [API](api/choose-lattice) |
 
 The [Tutorials](tutorials/download_data) walk through each widget on real public
 data where practical, with compact synthetic data only where it keeps an example

@@ -55,7 +55,6 @@ if len(wheels) != 1:
     raise SystemExit(f"expected one wheel, found {wheels}")
 wheel = wheels[0]
 required = {
-    "quantem/widget/static/chooselattice.js",
     "quantem/widget/static/scancontrol.js",
     "quantem/widget/static/engine-manifest.json",
     "quantem/widget/static/show1d.js",
@@ -64,8 +63,6 @@ required = {
     "quantem/widget/static/show3d.js",
     "quantem/widget/static/show3dslices.js",
     "quantem/widget/static/show4dstem.js",
-    "quantem/widget/static/showcif.js",
-    "quantem/widget/static/showdiffraction.js",
     "quantem/widget/static/showpdf.js",
     "quantem/widget/static/showptycho.js",
 }

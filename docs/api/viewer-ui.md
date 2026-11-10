@@ -60,10 +60,10 @@ only syncs the name as a trait takes it as an attribute after construction
 | Name | Constructor keyword of | Attribute only | Meaning |
 |---|---|---|---|
 | `ui_mode` | Show1D, Show2D, Show3D, Show4DSTEM | | Preset for the rows below; explicit keywords override it. |
-| `show_title` | Show1D, Show2D, Show3D, Show3DSlices, Show4DSTEM, ShowDiffraction | | Show or hide the top title row. |
-| `show_controls` | Show1D, Show2D, Show4DSTEM, ShowDiffraction | Show3D, Show3DSlices | Expose controls at all. Set `False` for a permanently clean display with no GUI recovery button. |
-| `controls_collapsed` | Show1D, Show2D, Show4DSTEM, ShowDiffraction | Show3D, Show3DSlices | Start with controls hidden behind a top `Controls` button. |
-| `show_stats` | Show1D, Show2D, Show3D, Show4DSTEM, ShowDiffraction | | Show or hide mean/min/max/std readouts where the widget renders or computes them. |
+| `show_title` | Show1D, Show2D, Show3D, Show3DSlices, Show4DSTEM | | Show or hide the top title row. |
+| `show_controls` | Show1D, Show2D, Show4DSTEM | Show3D, Show3DSlices | Expose controls at all. Set `False` for a permanently clean display with no GUI recovery button. |
+| `controls_collapsed` | Show1D, Show2D, Show4DSTEM | Show3D, Show3DSlices | Start with controls hidden behind a top `Controls` button. |
+| `show_stats` | Show1D, Show2D, Show3D, Show4DSTEM | | Show or hide mean/min/max/std readouts where the widget renders or computes them. |
 | `show_panel_titles` | Show2D | Show3D | Show labels on individual image/volume panels. |
 | `panel_title_font_size`, `panel_title_style` | Show2D | | Font size and JSON-safe title chrome (background, text color, border color/width, padding, radius, max width) for per-panel labels. |
 | `panel_title_spans` | Show2D | | Structured colored text spans for panel-title status words; Show3D takes the same spans as `panel_titles` entries. |

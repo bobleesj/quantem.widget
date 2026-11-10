@@ -362,8 +362,8 @@ def test_detector_bin_mean_divides_the_exact_count_total_once():
 
 @pytest.mark.skipif(not torch.backends.mps.is_available(), reason="needs Apple MPS")
 def test_widgets_reduce_counts_exactly_on_mps():
-    """Show4DSTEM and ShowDiffraction on MPS give the CPU numbers, past int32 totals per pixel."""
-    from quantem.widget import Show4DSTEM, ShowDiffraction
+    """Show4DSTEM on MPS gives the CPU numbers, past int32 totals per pixel."""
+    from quantem.widget import Show4DSTEM
 
     counts = np.random.default_rng(8).integers(0, 65536, (200, 200, 8, 8)).astype(np.int32)
     counts[:, :, 3, 4] = 65535  # 40000 x 65535 needs more than int32
@@ -378,11 +378,6 @@ def test_widgets_reduce_counts_exactly_on_mps():
                                       detector_bin_mean(torch.as_tensor(counts[:4]), 2))
     finally:
         widget.close()
-    pattern = np.zeros((64, 64), np.uint16)
-    pattern[20:30, 34:44] = 60000
-    on_mps = ShowDiffraction(pattern, device="mps", verbose=False)
-    on_cpu = ShowDiffraction(pattern, device="cpu", verbose=False)
-    assert (on_mps.bright_field_center_row_px, on_mps.bright_field_center_col_px) == (on_cpu.bright_field_center_row_px, on_cpu.bright_field_center_col_px) == (24.5, 38.5)
 
 
 def test_free_gpu_is_quantem_gpu_release_cached_memory_when_quantem_gpu_is_installed(monkeypatch):

@@ -118,11 +118,9 @@ tensors on any device.
 
 ## Try the interactive demos
 
-Follow the [crystal-to-volume demo route](docs/tutorials/demo.md): inspect a
-crystal with **ShowCIF**, then explore depth using **Show3D** and **Show3DSlices**.
-The notebooks include runnable models, physical units, and controls to try.
-The ShowCIF potential preview needs the `crystal` extra (abTEM); new APIs
-require a source build containing them. The guide includes setup and browser requirements.
+Follow the [volume demo route](docs/tutorials/demo.md): explore depth using **Show3D** and
+**Show3DSlices**. The notebooks include runnable models, physical units, and controls to try.
+The guide includes setup and browser requirements.
 
 ## Widgets
 
@@ -135,11 +133,8 @@ require a source build containing them. The guide includes setup and browser req
 | `Show3DSlices` | Inspect linked top and oblique cuts through a 3D volume | [tutorial](https://electronmicroscopy.github.io/quantem.widget/tutorials/show3dslices.html) · [API](https://electronmicroscopy.github.io/quantem.widget/api/show3dslices.html) |
 | `Show4DSTEM` | Live virtual detectors, multi-dataset review, and WebGPU HTML export | [tutorial](https://electronmicroscopy.github.io/quantem.widget/tutorials/show4dstem.html) · [export guide](https://electronmicroscopy.github.io/quantem.widget/tutorials/show4dstem_export.html) · [API](https://electronmicroscopy.github.io/quantem.widget/api/show4dstem.html) |
 | `ShowPtycho` | Interactive direct phase and aberration review | [API](https://electronmicroscopy.github.io/quantem.widget/api/showptycho.html) |
-| `ShowDiffraction` | Measure diffraction spots, rings, spacing, and angles | [tutorial](https://electronmicroscopy.github.io/quantem.widget/tutorials/showdiffraction.html) · [API](https://electronmicroscopy.github.io/quantem.widget/api/showdiffraction.html) |
 | `ShowPDF` | Pair distribution function analysis of 4D-STEM data by scan region | [API](https://electronmicroscopy.github.io/quantem.widget/api/showpdf.html) |
-| `ChooseLattice` | Select an origin and lattice vectors | [API](https://electronmicroscopy.github.io/quantem.widget/api/choose-lattice.html) |
 | `ScanControl` | Connect, set up and run scans; detector files | [API](docs/api/scan-control.md) |
-| `ShowCIF` | Crystal repeats, columns, tilt, and projected potential/phase previews | [tutorial](docs/tutorials/showcif.ipynb) · [API](docs/api/showcif.md) |
 
 ## Documentation
 

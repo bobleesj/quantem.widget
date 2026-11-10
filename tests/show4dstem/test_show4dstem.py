@@ -22,7 +22,7 @@ import pytest
 import torch
 from PIL import Image
 
-from quantem.widget import Show4DSTEM, ShowDiffraction, device
+from quantem.widget import Show4DSTEM, device
 from quantem.widget.adapters import gpu as gpu_adapter
 from quantem.widget.adapters.core import make_dataset
 from quantem.widget.show4dstem import preview, reader
@@ -1588,39 +1588,29 @@ def test_the_bright_field_radius_has_one_name_in_keyword_trait_and_state():
     # keyword, trait and state key were bf_radius; the name every package uses is bright_field_radius_px (detector pixels)
     counts = _counts(3, scan=(4, 4))
     viewer = Show4DSTEM(counts, bright_field_center_px=(7.5, 7.5), bright_field_radius_px=3.0, precompute_virtual_images=False)
-    pattern = ShowDiffraction(counts[0, 0].astype(np.float32), bright_field_center_px=(7.5, 7.5), bright_field_radius_px=3.0, verbose=False)
-    for widget in (viewer, pattern):
-        assert widget.bright_field_radius_px == 3.0 and widget.state_dict()["bright_field_radius_px"] == 3.0
-        assert "bright_field_radius_px" in widget.get_state() and not widget.has_trait("bf_radius")
-        with pytest.raises(ValueError, match=r"does not save: \['bf_radius'\]"):
-            widget.load_state_dict({"bf_radius": 2.0})
+    assert viewer.bright_field_radius_px == 3.0 and viewer.state_dict()["bright_field_radius_px"] == 3.0
+    assert "bright_field_radius_px" in viewer.get_state() and not viewer.has_trait("bf_radius")
+    with pytest.raises(ValueError, match=r"does not save: \['bf_radius'\]"):
+        viewer.load_state_dict({"bf_radius": 2.0})
     viewer.close()
-    for Widget, data in ((Show4DSTEM, counts), (ShowDiffraction, counts[0, 0].astype(np.float32))):
-        with pytest.raises(TypeError, match="unexpected keyword argument 'bf_radius'"):
-            Widget(data, bf_radius=3.0)
+    with pytest.raises(TypeError, match="unexpected keyword argument 'bf_radius'"):
+        Show4DSTEM(counts, bf_radius=3.0)
 
 
-def test_the_bright_field_centre_has_one_name_in_keyword_traits_and_state(tmp_path):
+def test_the_bright_field_centre_has_one_name_in_keyword_traits_and_state():
     # keyword center=(row, col) with traits and state keys center_row, center_col; the vocabulary name is bright_field_center_px
     counts = _counts(3, scan=(4, 4))
     viewer = Show4DSTEM(counts, bright_field_center_px=(6.5, 8.5), bright_field_radius_px=3.0, precompute_virtual_images=False)
-    pattern = ShowDiffraction(counts[0, 0].astype(np.float32), bright_field_center_px=(6.5, 8.5), bright_field_radius_px=3.0, verbose=False)
-    for widget in (viewer, pattern):
-        assert (widget.bright_field_center_row_px, widget.bright_field_center_col_px) == (6.5, 8.5)
-        state = widget.state_dict()
-        assert (state["bright_field_center_row_px"], state["bright_field_center_col_px"]) == (6.5, 8.5)
-        assert {"bright_field_center_row_px", "bright_field_center_col_px"} <= set(widget.get_state())
-        assert not widget.has_trait("center_row") and not widget.has_trait("center_col")
-        with pytest.raises(ValueError, match=r"does not save: \['center_row', 'center_col'\]"):
-            widget.load_state_dict({"center_row": 2.0, "center_col": 2.0})
+    assert (viewer.bright_field_center_row_px, viewer.bright_field_center_col_px) == (6.5, 8.5)
+    state = viewer.state_dict()
+    assert (state["bright_field_center_row_px"], state["bright_field_center_col_px"]) == (6.5, 8.5)
+    assert {"bright_field_center_row_px", "bright_field_center_col_px"} <= set(viewer.get_state())
+    assert not viewer.has_trait("center_row") and not viewer.has_trait("center_col")
+    with pytest.raises(ValueError, match=r"does not save: \['center_row', 'center_col'\]"):
+        viewer.load_state_dict({"center_row": 2.0, "center_col": 2.0})
     viewer.close()
-    for Widget, data in ((Show4DSTEM, counts), (ShowDiffraction, counts[0, 0].astype(np.float32))):
-        with pytest.raises(TypeError, match="unexpected keyword argument 'center'"):
-            Widget(data, center=(6.5, 8.5))
-    # the measurements file names the two coordinates the same way
-    pattern.save(tmp_path / "state.json")
-    metadata = json.loads(ShowDiffraction.measurements_from_state(tmp_path / "state.json", tmp_path / "measurements.json").read_text())["metadata"]
-    assert (metadata["bright_field_center_row_px"], metadata["bright_field_center_col_px"]) == (6.5, 8.5) and "center_row" not in metadata
+    with pytest.raises(TypeError, match="unexpected keyword argument 'center'"):
+        Show4DSTEM(counts, center=(6.5, 8.5))
 
 
 def test_static_preview_labels_the_detector_bar_in_its_own_unit(monkeypatch):

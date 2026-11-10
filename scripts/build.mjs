@@ -22,11 +22,8 @@ const widgets = [
   "show3d",
   "show3dslices",
   "show4dstem",
-  "showdiffraction",
   "showpdf",
   "showptycho",
-  "chooselattice",
-  "showcif",
   "showgpu",
   "scancontrol",
 ];

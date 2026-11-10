@@ -13,7 +13,7 @@ quantem show4dstem a.qem b.qem --html           # native QEM files   -> browser 
 quantem github tutorial_github.ipynb --no-execute # optional static copy for GitHub preview
 ```
 
-Everything else (Show2D, Show3D, ShowDiffraction, ShowPtycho exports, notebook
+Everything else (Show2D, Show3D, ShowPtycho exports, notebook
 HTML) is a Python call on the widget: `widget.export_html(...)`, or
 `jupyter nbconvert --to html notebook.ipynb` for a whole notebook.
 

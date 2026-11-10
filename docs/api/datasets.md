@@ -103,7 +103,7 @@ without that new resolver. Native detector acquisitions are opened with
 `quantem.gpu.io.load`; the Ducky monitor and EMD image session are different
 input types, not raw 4D-STEM acquisitions.
 
-Show3DSlices, ShowCIF and Plot2D generate their small
+Show3DSlices and Plot2D generate their small
 teaching inputs locally. Keep those recipes in the software repository.
 Use Hugging Face for reusable input data, numeric metadata, checksums, credit
 and minimal data cards. Keep notebook code, helpers, training overrides,
@@ -111,12 +111,6 @@ checkpoints and rendered reports in their owning software or private results
 repository. This migration reuses existing public inputs; it adds no new
 scientific data or private files.
 See [Contribute tutorial data](../tutorials/contribute_data.md).
-
-## Diffraction example
-
-The ShowDiffraction notebook uses a labeled deterministic synthetic magnetite
-control. No measured Fe3O4 pattern is published, so there is no download helper
-for that missing input. Open your own measured image with `ShowDiffraction`.
 
 ## Pair distribution function example
 
