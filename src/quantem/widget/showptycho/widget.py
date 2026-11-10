@@ -1700,17 +1700,7 @@ class ShowPtycho(anywidget.AnyWidget):
         if self._launch_calibration is not None and not self._launch_calibration_shown:
             from IPython.display import display
 
-            from quantem.gpu.io import metadata_display as labels  # quantem.gpu's one calibration label set
-
-            def format_value(value):
-                if isinstance(value, tuple):
-                    if len(value) == 2 and value[0] == value[1]:
-                        return f"{value[0]:.8g}"
-                    return "(" + ", ".join(f"{item:.8g}" for item in value) + ")"
-                return f"{value:.8g}" if isinstance(value, float) else value
-
-            calibration = self._launch_calibration
-            table = calibration[["Value", "Source"]].copy()
+            table = self._launch_calibration[["Value", "Source"]].copy()
             display(table.rename_axis("Parameter").style.set_caption("DirectPtycho calibration"))
 
             self._launch_calibration_shown = True

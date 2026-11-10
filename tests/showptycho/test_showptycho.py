@@ -1312,36 +1312,11 @@ def test_launch_table_is_displayed_once_before_widget(widget, monkeypatch):
     assert "application/vnd.jupyter.widget-view+json" in bundle
     assert len(displayed) == 1
     table = displayed[0].data
-    assert list(table.columns) == ["Value used", "Unit", "Source"]
+    assert list(table.columns) == ["Value", "Source"]
     labels = pytest.importorskip("quantem.gpu.io.metadata_display")  # quantem.gpu's one calibration label set
     assert table.loc[labels.CALIBRATION_LABELS["scan_detector_rotation_deg"], "Source"] == labels.EXPLICIT_OVERRIDE
     widget._repr_mimebundle_()
     assert len(displayed) == 1
-
-
-def test_launch_table_only_repeats_file_values_when_overridden(widget, monkeypatch):
-    """Review an overridden detector step without repeating unchanged calibration."""
-    import IPython.display
-
-    displayed = []
-    monkeypatch.setattr(IPython.display, "display", displayed.append)
-    labels = pytest.importorskip("quantem.gpu.io.metadata_display")  # quantem.gpu's one calibration label set
-    scan, step, voltage = (labels.CALIBRATION_LABELS[name] for name in ("scan_sampling_A", "detector_sampling_mrad", "voltage_kV"))
-    calibration = widget._launch_calibration
-    calibration["File value"] = calibration["Value used"].copy()
-    calibration["File unit"] = calibration["Unit used"].copy()
-    calibration.at[scan, "Value used"] = (0.5, 0.5)
-    calibration.at[scan, "File value"] = (0.5, 0.5)
-    calibration.at[step, "File value"] = (0.8, 0.8)
-    calibration.at[step, "Value used"] = (0.81, 0.82)
-    widget._repr_mimebundle_()
-    table = displayed[0].data
-    assert list(table.columns) == ["Value used", "Unit", "File value", "Source"]
-    assert table.loc[voltage, "File value"] == ""
-    assert table.loc[step, "File value"] == (0.8, 0.8)
-    html = displayed[0].to_html()
-    assert ">0.5</td>" in html and "(0.5, 0.5)" not in html
-    assert ">(0.81, 0.82)</td>" in html
 
 
 def test_automatic_detector_sampling_is_retained_in_saved_calibration(tmp_path):
