@@ -11,7 +11,7 @@ import Stack from "@mui/material/Stack";
 import Select from "@mui/material/Select";
 import MenuItem from "@mui/material/MenuItem";
 import Menu from "@mui/material/Menu";
-import Slider from "@mui/material/Slider";
+import Slider from "../shared/Slider";
 import Button from "@mui/material/Button";
 import Switch from "@mui/material/Switch";
 import Tooltip from "@mui/material/Tooltip";

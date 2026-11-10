@@ -19,7 +19,7 @@ import Select from "@mui/material/Select";
 import MenuItem from "@mui/material/MenuItem";
 import Menu from "@mui/material/Menu";
 import Switch from "@mui/material/Switch";
-import Slider from "@mui/material/Slider";
+import Slider from "../shared/Slider";
 import Button from "@mui/material/Button";
 import IconButton from "@mui/material/IconButton";
 import Badge from "@mui/material/Badge";
