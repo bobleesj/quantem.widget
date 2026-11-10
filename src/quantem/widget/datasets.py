@@ -100,7 +100,8 @@ def show1d_ducky(
     """Download reconstruction snapshots for the synthetic Ducky example.
 
     The returned folder contains ``show1d_monitor.jsonl`` and snapshot ``.npy``
-    files. Open it with :meth:`quantem.widget.Show1D.from_monitor_file`.
+    files: one JSON event per line (``iteration``, ``losses``, ``snapshots``) for
+    :class:`quantem.widget.Show1D` and its ``snapshot``.
 
     The original ``Trademark ducky dataset`` simulation tutorial is by
     Georgios Varnavides (October 23, 2025). These files contain subsequent

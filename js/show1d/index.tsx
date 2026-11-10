@@ -111,7 +111,7 @@ type PlotThumbnailHitArea = {
 
 // The interactive traits Reset puts back to their values when the widget first settled.
 const RESET_TRAITS = [
-  "controls_collapsed", "log_scale", "show_stats", "show_legend", "starred_snapshot_image_labels",
+  "controls_collapsed", "log_scale", "show_stats", "show_legend",
   "plot_height_px", "plot_width_px", "side_panel_width_px", "snapshot_panel_width_px", "focused_trace",
   "x_range", "y_range", "selected_snapshot_idx", "selected_snapshot_group_idx", "bookmarked_snapshot_groups",
   "hidden_snapshot_image_labels", "show_snapshot_histogram", "show_snapshot_fft", "snapshot_fft_layout",

@@ -10,7 +10,7 @@ const INITIAL: Record<string, unknown> = {
   x_bytes: new DataView(new ArrayBuffer(0)),
   n_traces: 2, n_points: 4, labels: ["particle", "support"], colors: ["#0072B2", "#D55E00"],
   show_grid: true, show_controls: true, line_width: 1.5, x_label: "angle", x_unit: "mrad", y_label: "I", y_unit: "",
-  controls_collapsed: false, log_scale: false, show_stats: false, show_legend: true, starred_snapshot_image_labels: [],
+  controls_collapsed: false, log_scale: false, show_stats: false, show_legend: true,
   plot_height_px: 320, plot_width_px: 400, side_panel_width_px: 360, snapshot_panel_width_px: 0, focused_trace: -1,
   x_range: [], y_range: [], selected_snapshot_idx: -1, selected_snapshot_group_idx: -1, bookmarked_snapshot_groups: [],
   hidden_snapshot_image_labels: [], show_snapshot_histogram: true, show_snapshot_fft: false, snapshot_fft_layout: "overlay",

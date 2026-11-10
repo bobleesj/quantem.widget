@@ -33,7 +33,7 @@ class Show1DState:
         "snapshot_real_space_zoom", "snapshot_real_space_center", "snapshot_fft_zoom", "snapshot_fft_center",
         "image_cmap", "pixel_size", "pixel_unit", "show_scale_bar",
         "snapshot_playing", "snapshot_fps", "snapshot_loop", "snapshot_bounce",
-        "starred_snapshot_image_labels", "hidden_snapshot_image_labels",
+        "hidden_snapshot_image_labels",
         "profile_line", "profile_width",
     )
 

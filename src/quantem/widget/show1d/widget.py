@@ -190,7 +190,6 @@ class Show1D(Show1DState, Show1DExport, SavedStateMixin, HtmlExportMixin, Static
     selected_snapshot_group_idx = traitlets.Int(-1).tag(sync=True)
     bookmarked_snapshot_groups = traitlets.List(traitlets.Int()).tag(sync=True)
 
-    starred_snapshot_image_labels = traitlets.List(traitlets.Unicode()).tag(sync=True)
     hidden_snapshot_image_labels = traitlets.List(traitlets.Unicode()).tag(sync=True)
 
     show_snapshots = traitlets.Bool(True).tag(sync=True)
@@ -391,7 +390,7 @@ class Show1D(Show1DState, Show1DExport, SavedStateMixin, HtmlExportMixin, Static
             raise ValueError(f"bookmarked_snapshot_groups must contain non-negative indices, got {indices[0]}")
         return indices
 
-    @traitlets.validate("starred_snapshot_image_labels", "hidden_snapshot_image_labels")
+    @traitlets.validate("hidden_snapshot_image_labels")
     def _validate_image_labels(self, proposal: dict) -> list[str]:
         """One entry per label key, so ``lambda_1`` and ``lambda 1`` are not starred twice."""
         return _unique_labels(proposal["value"])
