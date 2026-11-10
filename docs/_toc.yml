@@ -86,7 +86,6 @@ parts:
           - file: api/showcif
           - file: api/html-export
           - file: api/io
-          - file: api/load
       - file: developer/widget-creation
         title: Creating a widget
       - file: developer/platforms

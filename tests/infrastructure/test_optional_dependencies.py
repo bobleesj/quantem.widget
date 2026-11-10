@@ -144,7 +144,7 @@ def test_every_widget_imports_and_constructs_without_quantem_or_quantem_gpu(tmp_
 
 
 # Distribution names whose import name differs.
-DISTRIBUTION = {"PIL": "pillow", "skimage": "scikit_image", "yaml": "pyyaml", "IPython": "ipython"}
+DISTRIBUTION = {"PIL": "pillow", "skimage": "scikit_image", "IPython": "ipython"}
 # Imported only inside the function that needs them, with an install message or a fallback.
 OPTIONAL = {
     "abtem": "ShowCIF potential preview, the [crystal] extra",
@@ -152,7 +152,6 @@ OPTIONAL = {
     "quantem": "quantem.gpu, and quantem core where it installs, guarded at the top of their adapter modules",
     "ipyfilechooser": "FolderPicker, used by quantem.live",
     "playwright": "quantem github widget screenshots",
-    "yaml": "dataset.yaml, read by quantem.live",
     "tqdm": "progress bars when it is installed",
 }
 # Declared without a Python import: a tifffile codec plugin and the JupyterLab widget manager.

@@ -43,7 +43,7 @@ console error. Leave the tested notebook open for me and summarize exactly what
 was verified and what was not.
 ```
 
-See [Loading data](api/load.md) and the
+See [IO](api/io.md) and the
 [Show4DSTEM API](api/show4dstem.md) for the underlying interfaces.
 
 ## Create a widget from a notebook or description

@@ -112,8 +112,8 @@ Call `data.close()` after the last use. Scripted jobs can use
 list of encoded acquisitions, one per file; `Show4DSTEM(io.load(paths))` opens
 them as a comparison grid labelled by file, and `Show4DSTEM(series[1])` opens
 one of them. `io.load(path, backend="cuda", device=1)` selects a CUDA device; a
-Mac loads onto MPS. See [load](load.md) for the function reference and the GPU
-guide for multi-device storage policies.
+Mac loads onto MPS. The QuantEM.GPU I/O guide is the function reference and
+describes multi-device storage policies.
 
 ## Read a scan region
 
