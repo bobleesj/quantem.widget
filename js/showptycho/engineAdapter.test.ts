@@ -14,7 +14,8 @@ describe("the units at the engine boundary", () => {
       reducedBrightField: false, computeLoss: true, diagnosticOnly: true, signal: controller.signal,
       sample: { tiltRowMrad: 3, tiltColMrad: -4, depthSpreadNm: 12 },
     });
-    expect(calls[0][3]).toMatchObject({ upsampling: 1, phaseEstimator: "mean_phase",
+    expect(calls[0][3]).not.toHaveProperty("phaseEstimator");
+    expect(calls[0][3]).toMatchObject({ upsample: 1,
       numBrightFieldPixels: 9000, computeLoss: true, signal: controller.signal,
       sample: { sampleTiltMrad: [3, -4], depthSpreadA: 120 } });
   });
@@ -31,7 +32,7 @@ describe("the units at the engine boundary", () => {
     expect([c10, c12]).toEqual([30, 10]);
     expect(phi12).toBeCloseTo(Math.PI / 2, 12);
     expect(options).toEqual({
-      preview: true, numBrightFieldPixels: 7, computeLoss: false, scanDetectorRotationDeg: 10, upsampling: 2,
+      preview: true, numBrightFieldPixels: 7, computeLoss: false, scanDetectorRotationDeg: 10, upsample: 2,
       // magnitudes in Angstrom, azimuths in degrees under the same names
       higherOrder: { C21_A: 50, phi21_deg: 45, C30_A: 20 },
       // the depth spread of the model in Angstrom, the tilt as [row, col]

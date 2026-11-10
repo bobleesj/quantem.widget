@@ -20,6 +20,7 @@ names are removed; nothing is accepted under two spellings.
 | calls to quantem.gpu `SSB`, `fit_aberrations()`, `aberrations(num_trials=)`, `reconstruct()`, `session.aberrations`, `upsampling=`, `phase_damping=`, `amplitude_damping=`, `method="ssb"` | `DirectPtycho`, `aberrations()`, `aberrations(trials=)`, `run()`, `session.known_aberrations`, `upsample=`, `phase_damp=`, `amplitude_damp=`, `method="phase_of_mean"` | Show4DSTEM Compute SSB, ShowPtycho, tests, docs |
 | `quantem.gpu.optics.physics.ssb_upsampling_factor` | `ssb_upsample_factor` | docs and tests |
 | the adapter's private option translation (`_library_options`) | removed | widget options reach quantem.gpu unchanged |
+| quantem.gpu WebGPU engine option `upsampling`; the release-time loss sent `phaseEstimator: "mean_phase"` | `upsample`; the loss request sends `upsample: 1` and no estimator | `js/showptycho/engineAdapter.ts` (gpu-ref.txt pins the quantem.gpu commit with the new option) |
 | Show4DSTEM `compute_ssb(num_trials=)`, trait `ssb_compute_num_trials`, request and record key `num_trials` | `compute_ssb(trials=)`, `ssb_compute_trials`, `trials` | keyword, Python trait and browser model key, Compute SSB record |
 | ShowPtycho `fit_regions(num_trials=)`, `DirectSession.fit_regions(num_trials=)`, Crop+Refit request and regional fit record key `num_trials` | `trials=`, `trials` | keyword, browser requests and progress, `local_tilt` fit records |
 

@@ -4,7 +4,7 @@
  * The engine under `js/.generated/engine` is copied from quantem.gpu and shares the widget's names:
  * it reads `snapshots/cal.json` and the bright-field source exactly as ShowPtycho.export writes them
  * (`num_bright_field_pixels`, `scan_detector_rotation_deg`, `detector_sampling_mrad`, ...), takes the
- * options `numBrightFieldPixels`, `scanDetectorRotationDeg`, `upsampling` (the widget's `upsample`), and reports
+ * options `numBrightFieldPixels`, `scanDetectorRotationDeg`, `upsample`, and reports
  * `numBrightFieldPixels` and `scanDetectorRotationDeg` back. Its arithmetic is in Angstrom and radians,
  * so `reconstruct` converts the aberrations once, here: nm to Angstrom for C10, C12, the higher-order
  * magnitudes and the depth spread, degrees to radians for phi12. `src/quantem/widget/adapters/gpu.py`
@@ -65,9 +65,10 @@ export function reconstruct(engine: WebGPUSSBBackend, request: ReconstructionReq
     preview: request.reducedBrightField, numBrightFieldPixels: request.numBrightFieldPixels, computeLoss: request.computeLoss,
     scanDetectorRotationDeg: request.scanDetectorRotationDeg,
     // the engine itself rejects a factor other than 1, 2, 4 or 8, so the narrowing cast is safe
-    upsampling: request.upsample as WebGPUReconstructionOptions["upsampling"],
+    upsample: request.upsample as WebGPUReconstructionOptions["upsample"],
     higherOrder, ...(sample ? { sample } : {}),
-    ...(request.diagnosticOnly ? { phaseEstimator: "mean_phase" as const, upsampling: 1 as const } : {}),
+    // the loss is a native-grid diagnostic; the caller keeps its displayed phase
+    ...(request.diagnosticOnly ? { upsample: 1 as const } : {}),
     ...(request.signal ? { signal: request.signal } : {}),
   };
   return engine.reconstruct(
