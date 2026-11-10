@@ -76,7 +76,7 @@ def __dir__() -> list[str]:
     return sorted((set(globals()) - {"os", "warnings", "import_module"}) | set(_LAZY_EXPORTS))
 
 
-def free_gpu(verbose: bool = True) -> float:
+def release_cached_memory(verbose: bool = True) -> float:
     """Return cached GPU memory to the driver after you ``del`` your big objects; returns the GB released.
 
     With quantem.gpu installed (``quantem.widget[cuda]`` or ``[mps]``) this is
@@ -90,7 +90,7 @@ def free_gpu(verbose: bool = True) -> float:
     as used and the next load runs out of it. It cannot drop references you still hold, so ``del`` first.
 
     >>> del widget, merged          # drop every reference first
-    >>> free_gpu()
+    >>> release_cached_memory()
     GPU 0: released 2.1 GB, 32.0 GB in use, 69.9 GB free
     2.147483648
     """
@@ -138,5 +138,5 @@ __all__ = [
     "read_images",
     "device_info",
     "profile",
-    "free_gpu",
+    "release_cached_memory",
 ]

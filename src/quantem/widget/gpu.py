@@ -19,7 +19,7 @@ NVIDIA RTX PRO 6000 (95.0 GB)
   VRAM: 82.6 GB available of 95.0 GB
   CuPy pool: 8.2 GB in use, 3.1 GB cached
 
-Use :func:`quantem.widget.free_gpu` for cross-backend cache release.
+Use :func:`quantem.widget.release_cached_memory` for cross-backend cache release.
 """
 
 # CuPy is imported lazily inside gpu_info so a widget install without a
