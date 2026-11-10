@@ -20,22 +20,33 @@ names are removed; nothing is accepted under two spellings.
 | calls to quantem.gpu `SSB`, `fit_aberrations()`, `aberrations(num_trials=)`, `reconstruct()`, `session.aberrations`, `upsampling=`, `phase_damping=`, `amplitude_damping=`, `method="ssb"` | `DirectPtycho`, `aberrations()`, `aberrations(trials=)`, `run()`, `session.known_aberrations`, `upsample=`, `phase_damp=`, `amplitude_damp=`, `method="phase_of_mean"` | Show4DSTEM Compute SSB, ShowPtycho, tests, docs |
 | `quantem.gpu.optics.physics.ssb_upsampling_factor` | `ssb_upsample_factor` | docs and tests |
 | the adapter's private option translation (`_library_options`) | removed | widget options reach quantem.gpu unchanged |
+| Show4DSTEM `compute_ssb(num_trials=)`, trait `ssb_compute_num_trials`, request and record key `num_trials` | `compute_ssb(trials=)`, `ssb_compute_trials`, `trials` | keyword, Python trait and browser model key, Compute SSB record |
+| ShowPtycho `fit_regions(num_trials=)`, `DirectSession.fit_regions(num_trials=)`, Crop+Refit request and regional fit record key `num_trials` | `trials=`, `trials` | keyword, browser requests and progress, `local_tilt` fit records |
+
+Removed (no replacement): ShowPtycho's `phase_estimator=` keyword (SSB has one
+estimator, the phase of the mean wave; the method is `method="phase_of_mean"`),
+the restore path for a save naming the retired `"mean_phase"` or
+`"complex_wave"`, and `fit_regions(refinement=)`; Show4DSTEM's
+`compute_ssb(objective=)` and the earlier optimizer names `"newton"`, `"bfgs"`
+and `"nelder-mead"` for `refinement` (it takes `"auto"` or None). Each raises
+instead of printing a line.
 
 Saved records: ShowPtycho's `calibration.json` is `quantem.ssb-calibration/8`
 and `showptycho_stars.json` is `quantem.ssb-stars/5`. They name the output
 factor `upsample` with `upsample_mode`, the method `"phase_of_mean"` (in
 `reconstruction.method`, and in `reconstruction_method` of a file written by
 quantem.gpu's `save_calibration`), and the strengths `phase_damp` and
-`amplitude_damp`. ShowPtycho reads /8 only. Rewrite an earlier file once (the
+`amplitude_damp`; regional fit records name `trials`, and calibration /8 holds
+no `phase_estimator`. ShowPtycho reads /8 only. Rewrite an earlier file once (the
 earlier file is kept as `<name>.before`):
 
     python scripts/rewrite_ssb_calibration.py --dry-run path/to/calibration.json
     python scripts/rewrite_ssb_calibration.py path/to/calibration.json path/to/showptycho_stars.json
 
 The script carries calibration /4 to /7 and stars /1 to /4 over (a /5
-calibration with a session identity needs its data beside it or `--data PATH`).
-No number changes. Show4DSTEM's Compute SSB record
-(`quantem.show4dstem-ssb-calibration/3`) and the exported
+calibration with a session identity needs its data beside it or `--data PATH`),
+and Show4DSTEM's Compute SSB record to `quantem.show4dstem-ssb-calibration/4`
+(`num_trials` is `trials`). No number changes. The exported
 `quantem.ssb-snapshots/2` and `quantem.ssb-browser-calibration/3` hold none of
 the renamed names and keep their versions.
 

@@ -594,7 +594,7 @@ class DirectSession:
 
     def fit_regions(self, regions: list[dict], parameters: dict, *,
                     upsample: int,
-                    num_trials: int = 200,
+                    trials: int = 200,
                     progress: Callable[[dict], None] | None = None) -> dict:
         """Jointly fit regional models and crop their full-scan reconstructions.
 
@@ -640,7 +640,7 @@ class DirectSession:
                     progress({"label": region["label"], "region_id": region["id"],
                               "region_index": region_index, "region_count": len(regions),
                               "stage": stage, "repeat": repeat, "repeats": 1,
-                              "num_trials": int(num_trials),
+                              "trials": int(trials),
                               "elapsed_s": time.perf_counter() - started})
             report("preparing", 0)
             with ssb.select_region(
@@ -650,7 +650,7 @@ class DirectSession:
                 report("joint_fit", 1)
                 fitted = regional.aberrations(
                     search="standard",
-                    tilt=True, trials=int(num_trials),
+                    tilt=True, trials=int(trials),
                     tilt_limit_mrad=REGION_TILT_LIMIT_MRAD,
                     check_rotation=False, compare_standard=False,
                     compute_loss=False, seed=REGION_FIT_SEED, verbose=False, show=False)
@@ -689,7 +689,7 @@ class DirectSession:
                 "fit_seconds": time.perf_counter() - region_started,
                 "bound_hit": bool(bound_hit),
                 "fit_record": {"method": "joint optics, tilt and depth", "fits": [fit],
-                               "backend": ssb.backend, "num_trials": int(num_trials)},
+                               "backend": ssb.backend, "trials": int(trials)},
                 "reconstruction": {
                     "scan_shape": list(ssb.scan_shape), "scan_offset": list(self.scan_offset),
                     "scan_region": None,

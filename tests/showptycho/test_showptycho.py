@@ -474,7 +474,7 @@ def test_higher_order_tilt_uses_automatic_sampling_and_saves_the_same_model(tmp_
         assert expected.shape == (768, 768)
         widget.save_trigger += 1
         saved = json.loads(Path(widget.calibration_path).read_text())
-        assert saved["phase_estimator"] == "phase_of_mean"
+        assert "phase_estimator" not in saved
         assert saved["upsample"] == 3
         assert saved["upsample_mode"] == "auto"
         assert saved["sample_tilt_mrad"] == sample["sample_tilt_mrad"]
@@ -896,9 +896,9 @@ def test_browser_memory_budget_fits_every_bf_pixel_at_full_scan_resolution():
 
 
 def test_crop_refit_validates_the_region_and_a_session_keeps_its_own_sampling(widget, ssb):
-    widget.crop_refit_request_json = json.dumps({"scan_region": [0, 16, 0, 16], "num_trials": 1})
+    widget.crop_refit_request_json = json.dumps({"scan_region": [0, 16, 0, 16], "trials": 1})
     assert widget.crop_refit_status.startswith("Crop refit failed: SSB refit crops must be at least 32x32")
-    widget.crop_refit_request_json = json.dumps({"scan_region": [0, 64, 100, 164], "num_trials": 1})
+    widget.crop_refit_request_json = json.dumps({"scan_region": [0, 64, 100, 164], "trials": 1})
     assert "outside the 128x128 scan" in widget.crop_refit_status
     assert widget.ssb_session and widget.session_note == "" and widget.amplitude_bytes == b""
     with pytest.raises(ValueError, match="scan_sampling_A"):
@@ -923,7 +923,7 @@ def test_crop_and_refit_keeps_the_acquisition_and_reopens_as_a_scan_region_sessi
         with gpu.DirectPtycho(data, aberrations=START, **calibration) as ssb:
             viewer = ShowPtycho(ssb, save_dir=tmp_path)
             assert viewer.crop_refit_available
-            viewer.crop_refit_request_json = json.dumps({"scan_region": list(region), "num_trials": 2})
+            viewer.crop_refit_request_json = json.dumps({"scan_region": list(region), "trials": 2})
             assert viewer.crop_refit_status.startswith("Refit complete: [16:112, 8:104]")
             crop = viewer._ssb.ssb
             assert crop is not ssb and crop.scan_region == region and crop.input_scan_shape == (96, 96)
@@ -1018,7 +1018,7 @@ def test_the_rewrite_script_carries_earlier_calibration_files_over(tmp_path):
         345.5, [0.5, 0.5], {"file_name": "scan_master.h5", "relative_path": None})
     assert (current["sample_tilt_mrad"], current["propagator_tilt_mrad"], current["depth_spread_nm"]) == ([3.0, -4.0], [2.3, -4.5], 12.0)
     current = json.loads(fitted.read_text())
-    assert current["schema"] == "quantem.show4dstem-ssb-calibration/3"  # Show4DSTEM's record, not ShowPtycho's
+    assert current["schema"] == "quantem.show4dstem-ssb-calibration/4"  # Show4DSTEM's record, not ShowPtycho's
     assert current["refinement"] == "nelder-mead" and "refine" not in current
     # Compute SSB fitted at tilt 0 until /3; the tilt-corrected fit is its default now
     tilt_zero = {"tilt": False, "sample_tilt_mrad": None, "depth_spread_nm": None, "tilt_fit_gain": None}
@@ -1028,8 +1028,8 @@ def test_the_rewrite_script_carries_earlier_calibration_files_over(tmp_path):
     layout_2 = tmp_path / "layout_2_ssb_calibration.json"
     layout_2.write_text(json.dumps({"schema": "quantem.show4dstem-ssb-calibration/2", "refinement": "nelder-mead", "loss": 0.3}))
     subprocess.run([sys.executable, str(script), str(layout_1), str(layout_2)], capture_output=True, text=True, check=True)
-    assert json.loads(layout_1.read_text()) == {"schema": "quantem.show4dstem-ssb-calibration/3", "refinement": None, "loss": 0.2, **tilt_zero}
-    assert json.loads(layout_2.read_text()) == {"schema": "quantem.show4dstem-ssb-calibration/3", "refinement": "nelder-mead", "loss": 0.3, **tilt_zero}
+    assert json.loads(layout_1.read_text()) == {"schema": "quantem.show4dstem-ssb-calibration/4", "refinement": None, "loss": 0.2, **tilt_zero}
+    assert json.loads(layout_2.read_text()) == {"schema": "quantem.show4dstem-ssb-calibration/4", "refinement": "nelder-mead", "loss": 0.3, **tilt_zero}
     # the angle below 180 degrees and its reversal flag become the one physical angle
     assert (current["scan_detector_rotation_deg"], current["detector_sampling_mrad"], current["num_bright_field_pixels"]) == (345.5, [1.5, 1.5], 52)
     assert current["aberrations"] == pytest.approx({"C10_nm": 12.0, "C12_nm": 3.0, "phi12_deg": 30.0}) and current["source"]["acquisition_index"] == 0
@@ -1115,16 +1115,19 @@ def test_the_rewrite_script_carries_layout_4_records_to_the_canonical_names(tmp_
     assert "already in the current layout" in again.stdout
 
 
-def test_the_rewrite_script_carries_layouts_6_and_7_to_quantem_gpu_names(tmp_path):
+def test_the_rewrite_script_carries_layouts_6_and_7_and_show4dstem_3_to_quantem_gpu_names(tmp_path):
     # calibration /6 and /7 and stars /3 and /4 named the output factor, its mode and the direct strengths
     # upsampling_factor / upsampling, upsampling_mode, phase_damping and amplitude_damping, and the method "ssb"
     script = Path(__file__).resolve().parents[2] / "scripts" / "rewrite_ssb_calibration.py"
     files = {
         "calibration.json": {"schema": "quantem.ssb-calibration/7", "upsampling": 3, "upsampling_mode": "auto", "loss": 0.1,
+                             "phase_estimator": "mean_phase",
                              "reconstruction": {"method": "complex", "phase_damping": 0.07, "amplitude_damping": 0.15},
-                             "local_tilt": {"fits": [{"id": "a", "reconstruction": {"upsampling": 2}}]}},
+                             "local_tilt": {"fits": [{"id": "a", "reconstruction": {"upsampling": 2},
+                                                      "fit_record": {"num_trials": 200}}]}},
         "gpu_calibration.json": {"schema": "quantem.ssb-calibration/7", "upsample": 2, "upsample_mode": "auto",
-                                 "reconstruction_method": "ssb", "reconstruction_options": {}},
+                                 "phase_estimator": "phase_of_mean", "reconstruction_method": "ssb", "reconstruction_options": {}},
+        "show4dstem_ssb_calibration.json": {"schema": "quantem.show4dstem-ssb-calibration/3", "num_trials": 200, "loss": 0.2},
         "layout_6.json": {"schema": "quantem.ssb-calibration/6", "upsampling_factor": 4, "upsampling_mode": "explicit",
                           "reconstruction": {"method": "phase", "phase_regularization": 0.03}},
         "showptycho_stars.json": {"schema": "quantem.ssb-stars/4", "stars": [{"id": "a", "reconstruction": {"method": "ssb"}},
@@ -1136,10 +1139,12 @@ def test_the_rewrite_script_carries_layouts_6_and_7_to_quantem_gpu_names(tmp_pat
     assert json.loads((tmp_path / "calibration.json").read_text()) == {
         "schema": "quantem.ssb-calibration/8", "upsample": 3, "upsample_mode": "auto", "loss": 0.1,
         "reconstruction": {"method": "complex", "phase_damp": 0.07, "amplitude_damp": 0.15},
-        "local_tilt": {"fits": [{"id": "a", "reconstruction": {"upsample": 2}}]}}
+        "local_tilt": {"fits": [{"id": "a", "reconstruction": {"upsample": 2}, "fit_record": {"trials": 200}}]}}
     assert json.loads((tmp_path / "gpu_calibration.json").read_text()) == {
         "schema": "quantem.ssb-calibration/8", "upsample": 2, "upsample_mode": "auto",
         "reconstruction_method": "phase_of_mean", "reconstruction_options": {}}
+    assert json.loads((tmp_path / "show4dstem_ssb_calibration.json").read_text()) == {
+        "schema": "quantem.show4dstem-ssb-calibration/4", "trials": 200, "loss": 0.2}
     assert json.loads((tmp_path / "layout_6.json").read_text()) == {
         "schema": "quantem.ssb-calibration/8", "upsample": 4, "upsample_mode": "explicit",
         "reconstruction": {"method": "phase", "phase_damp": 0.03}}
@@ -1203,13 +1208,10 @@ def test_auto_sampling_matches_core_and_save_keeps_resolved_factor(widget, ssb, 
     assert saved["upsample"] == 1 and saved["upsample_mode"] == "explicit"
 
 
-def test_the_retired_estimator_keyword_says_so_once_and_changes_nothing(ssb, tmp_path, capsys):
-    """phase_estimator='phase_of_mean' is what SSB computes: one line says the keyword is retired."""
-    view = ShowPtycho(ssb, save_dir=tmp_path, phase_estimator="phase_of_mean")
+def test_save_records_the_method_and_no_estimator(ssb, tmp_path):
+    """SSB has one estimator, the phase of the mean wave: Save names the method and holds no phase_estimator."""
+    view = ShowPtycho(ssb, save_dir=tmp_path)
     try:
-        assert capsys.readouterr().out.splitlines()[0] == (
-            "ShowPtycho: phase_estimator is retired; SSB always reconstructs the phase of the mean wave "
-            "('phase_of_mean'). Omit it.")
         view.upsample = "auto"
         expected, _ = ssb.preview(
             dict(ssb.known_aberrations), upsample=view.auto_upsample, compute_loss=True,
@@ -1220,20 +1222,12 @@ def test_the_retired_estimator_keyword_says_so_once_and_changes_nothing(ssb, tmp
         view.display_negate_phase = True
         view.save_trigger += 1
         record = json.loads(Path(view.calibration_path).read_text())
-        assert record["phase_estimator"] == "phase_of_mean"  # readers of earlier versions require the key
+        assert "phase_estimator" not in record
         assert record["reconstruction"] == {"method": "phase_of_mean"}
         assert record["upsample"] == view.auto_upsample
         np.testing.assert_array_equal(_shown(view), -expected)
     finally:
         view.close()
-
-
-def test_the_estimator_keyword_refuses_other_names():
-    with pytest.raises(ValueError, match="phase_estimator is retired"):
-        ShowPtycho(np.ones((8, 8)), phase_estimator="unknown")
-    for retired in ("mean_phase", "complex_wave"):
-        with pytest.raises(ValueError, match=f"phase_estimator='{retired}' was retired"):
-            ShowPtycho(np.ones((8, 8)), phase_estimator=retired)
 
 
 def test_local_ssb_results_follow_current_optics_without_replacing_the_session(ssb, tmp_path):
@@ -1787,41 +1781,6 @@ def test_a_matching_save_replaces_a_supplied_model_unless_restore_is_false(tmp_p
         viewer = ShowPtycho(ssb, save_dir=tmp_path, restore=False)
         assert viewer.fitted_C10_nm == 7 and viewer.calibration_status == ""
         viewer.close()
-
-
-@pytest.mark.parametrize("retired", ["mean_phase", "complex_wave"])
-def test_a_save_naming_a_retired_estimator_restores_its_optics_and_says_so(tmp_path, capsys, retired):
-    """quantem.gpu retired these estimators: such a save still opens, never asks for one, and keeps its file."""
-    gpu = pytest.importorskip("quantem.gpu")
-    source = tmp_path / "scan.npy"
-    np.save(source, _counts())
-    calibration = dict(voltage_kV=300, semiangle_mrad=20,
-                       scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5, 5))
-    with gpu.DirectPtycho.open(str(source), aberrations=START, **calibration) as ssb:
-        viewer = ShowPtycho(ssb, save_dir=tmp_path)
-        expected = _shown(viewer).copy()
-        viewer.save_trigger += 1
-        viewer.close()
-    path = tmp_path / "calibration.json"
-    path.write_text(json.dumps({**json.loads(path.read_text()), "phase_estimator": retired}))
-    for requested in (None, "phase_of_mean"):
-        with gpu.DirectPtycho.open(str(source), aberrations={**START, "C10_nm": 7}, **calibration) as ssb:
-            capsys.readouterr()
-            viewer = ShowPtycho(ssb, save_dir=tmp_path, phase_estimator=requested)
-            assert viewer.fitted_C10_nm == 3 and viewer.calibration_status == "Restored saved full-field fit"
-            np.testing.assert_array_equal(_shown(viewer), expected)            # the phase of the mean wave
-            printed = [line for line in capsys.readouterr().out.strip().splitlines()
-                       if "phase_estimator is retired" not in line]
-            assert len(printed) == 2 and printed[0].startswith("ShowPtycho: restored calibration.json saved ")
-            assert printed[1] == (f"ShowPtycho: calibration.json was saved with the retired {retired} estimator "
-                                  "and loads as saved; previews and Save use phase_of_mean, the phase of the mean wave.")
-            assert json.loads(path.read_text())["phase_estimator"] == retired  # opening does not relabel the file
-            viewer.close()
-    with gpu.DirectPtycho.open(str(source), aberrations=START, **calibration) as ssb:
-        viewer = ShowPtycho(ssb, save_dir=tmp_path)
-        viewer.save_trigger += 1
-        viewer.close()
-    assert json.loads(path.read_text())["phase_estimator"] == "phase_of_mean"  # Save records what was shown
 
 
 @pytest.mark.parametrize("saved_kind", ["crop", "older save"])

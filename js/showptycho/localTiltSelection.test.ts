@@ -77,7 +77,7 @@ test('clicking a result targets its own rectangle, bounds and refit', async () =
       action: 'fit', only_changed: true, force_region: 'region-3', regions,
     });
     expect((el.querySelector('[aria-label="Delete Region 2"]') as HTMLButtonElement).disabled).toBe(true);
-    act(()=>model.set('local_tilt_reply_json',JSON.stringify({status:'running',stage:'joint_fit',label:'Region 3',num_trials:200,repeat:1,repeats:1})));
+    act(()=>model.set('local_tilt_reply_json',JSON.stringify({status:'running',stage:'joint_fit',label:'Region 3',trials:200,repeat:1,repeats:1})));
     expect(el.textContent).toContain('Refitting Region 3 · 200 trials + refinement');
     expect(el.textContent).not.toContain('repeat 1/');
     act(()=>model.set('local_tilt_reply_json',JSON.stringify({status:'complete',signature:JSON.stringify(regions)})));

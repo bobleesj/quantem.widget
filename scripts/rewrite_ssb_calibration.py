@@ -11,10 +11,11 @@ so this script carries the earlier file kinds over:
   (``quantem.ssb-snapshots/1``, ``quantem.ssb-browser-calibration/2``)
 - ``*_ssb_calibration.json`` from Show4DSTEM (``schema`` "quantem.ssb.calibration.v1", or
   ``quantem.show4dstem-ssb-calibration/1``, whose ``refine`` flag is now ``refinement``:
-  ``"nelder-mead"`` or None, or ``/2``). Layouts up to /2 recorded the standard fit at tilt 0,
+  ``"nelder-mead"`` or None, ``/2`` or ``/3``). Layouts up to /2 recorded the standard fit at tilt 0,
   the only one Compute SSB ran then; /3 records the sample model of the phase (``tilt``,
   ``sample_tilt_mrad``, ``depth_spread_nm``, ``tilt_fit_gain``), so an earlier file gets
   ``tilt`` false and the other three None. Compute SSB now fits tilt-corrected by default.
+  /4 names the search budget ``trials`` (was ``num_trials``).
 
 The calibration /4, stars /1, snapshots /1 and cal.json /2 layouts named the display-only phase sign ``flip_phase`` (now
 ``display_negate_phase``) and, in regional fits, the scan-frame tilt
@@ -37,7 +38,10 @@ Calibration /6 and stars /3 named the output factor ``upsampling_factor`` (quant
 ``upsampling_mode``), ``phase_damping`` and ``amplitude_damping``, and both called the conventional
 method ``"ssb"``. Calibration /8 and stars /5 use quantem.gpu's names: ``upsample``,
 ``upsample_mode``, ``phase_damp``, ``amplitude_damp`` and the method ``"phase_of_mean"`` (in
-``reconstruction.method`` and ``reconstruction_method``). No number changes.
+``reconstruction.method`` and ``reconstruction_method``). The regional fit records name their
+search budget ``trials`` (was ``num_trials``), and calibration /8 holds no ``phase_estimator``:
+SSB has one estimator, the phase of the mean wave, so the key is dropped (a retired
+``"mean_phase"`` or ``"complex_wave"`` with it). No number changes.
 
     python scripts/rewrite_ssb_calibration.py --dry-run path/to/calibration.json
     python scripts/rewrite_ssb_calibration.py path/to/calibration.json path/to/showptycho_stars.json
@@ -58,22 +62,26 @@ import pathlib
 CALIBRATION_SCHEMA = "quantem.ssb-calibration/8"
 STARS_SCHEMA = "quantem.ssb-stars/5"
 # the layouts before quantem.gpu's names, carried over by renaming keys and the conventional method
+SHOW4DSTEM_SCHEMA = "quantem.show4dstem-ssb-calibration/4"
 NAMES_RENAMED = {"quantem.ssb-calibration/6": CALIBRATION_SCHEMA, "quantem.ssb-calibration/7": CALIBRATION_SCHEMA,
-                 "quantem.ssb-stars/3": STARS_SCHEMA, "quantem.ssb-stars/4": STARS_SCHEMA}
-# calibration /5-/7 and stars /2-/4 spellings -> their /8 and /5 names
+                 "quantem.ssb-stars/3": STARS_SCHEMA, "quantem.ssb-stars/4": STARS_SCHEMA,
+                 "quantem.show4dstem-ssb-calibration/3": SHOW4DSTEM_SCHEMA}
+# calibration /5-/7, stars /2-/4 and Show4DSTEM /1-/3 spellings -> their /8, /5 and /4 names
 CURRENT_KEYS = {"phase_regularization": "phase_damp", "phase_damping": "phase_damp",
                 "amplitude_regularization": "amplitude_damp", "amplitude_damping": "amplitude_damp",
                 "upsampling_factor": "upsample", "upsample_factor": "upsample", "upsampling": "upsample",
-                "upsampling_mode": "upsample_mode"}
+                "upsampling_mode": "upsample_mode", "num_trials": "trials"}
 # the keys whose value names the reconstruction method, "ssb" before /8
 METHOD_KEYS = ("method", "reconstruction_method")
+# keys the current layouts no longer hold
+DROPPED_KEYS = ("phase_estimator",)
 
 
 def current_names(value):
     """``value`` with every earlier key and the method ``"ssb"`` renamed, recursively: the record /8 reads."""
     if isinstance(value, dict):
         return {CURRENT_KEYS.get(key, key): "phase_of_mean" if key in METHOD_KEYS and item == "ssb" else current_names(item)
-                for key, item in value.items()}
+                for key, item in value.items() if key not in DROPPED_KEYS}
     if isinstance(value, list):
         return [current_names(item) for item in value]
     return value
@@ -82,7 +90,6 @@ PATH_CALIBRATION_SCHEMA = "quantem.ssb-calibration/5"
 PATH_STARS_SCHEMA = "quantem.ssb-stars/2"
 SNAPSHOTS_SCHEMA = "quantem.ssb-snapshots/2"
 BROWSER_CALIBRATION_SCHEMA = "quantem.ssb-browser-calibration/3"
-SHOW4DSTEM_SCHEMA = "quantem.show4dstem-ssb-calibration/3"
 # Show4DSTEM layouts up to /2 fitted at tilt 0 and recorded no sample model
 SHOW4DSTEM_TILT_ZERO = {"tilt": False, "sample_tilt_mrad": None, "depth_spread_nm": None, "tilt_fit_gain": None}
 RENAMED = {"flip_phase": "display_negate_phase", "tilt_mrad": "sample_tilt_mrad",
@@ -154,7 +161,7 @@ def rewrite(earlier, path: pathlib.Path | None = None, data: pathlib.Path | None
     current, notes = path_layout(earlier)
     if current is not None and current.get("schema") in (PATH_CALIBRATION_SCHEMA, PATH_STARS_SCHEMA):
         current = portable(current, pathlib.Path.cwd() / "calibration.json" if path is None else path, data)
-    if current is not None and current.get("schema") in (CALIBRATION_SCHEMA, STARS_SCHEMA):
+    if current is not None and current.get("schema") in (CALIBRATION_SCHEMA, STARS_SCHEMA, SHOW4DSTEM_SCHEMA):
         current = current_names(current)
     return current, notes
 
@@ -264,7 +271,7 @@ def path_layout(earlier) -> tuple[dict | None, list[str]]:
             "scan_detector_rotation_flipped": False, "voltage_kV": calibration["voltage_kV"], "semiangle_mrad": calibration["semiangle_mrad"],
             "scan_sampling_A": calibration["scan_sampling_A"], "detector_sampling_mrad": calibration["det_sampling_mrad"],
             "bright_field_radius_px": calibration["bf_radius"], "bright_field_intensity_threshold": calibration["bf_intensity_threshold"],
-            "num_bright_field_pixels": calibration["bf_pixels"], "num_trials": run["n_trials"],
+            "num_bright_field_pixels": calibration["bf_pixels"], "trials": run["n_trials"],
             "refinement": "nelder-mead" if run["refine"] else None,
             "manual_locked": run["manual_locked"], **SHOW4DSTEM_TILT_ZERO,
             "seed": run["seed"], "loss": run["loss"], "elapsed_s": run["elapsed_s"],

@@ -1943,7 +1943,7 @@ function Explore() {
     setCropSelecting(false);
     setCropRefitPending(true);
     setCropRefitRequestJson(JSON.stringify({
-      id: Date.now(), scan_region: scanCrop, num_trials: 200,
+      id: Date.now(), scan_region: scanCrop, trials: 200,
     }));
   }, [cropRefitAvailable, scanCrop, setCropRefitRequestJson]);
   const cropSummary = React.useMemo(() => {

@@ -1170,7 +1170,7 @@ def test_compute_ssb_reads_the_optics_the_dataset_records(monkeypatch, tmp_path)
     assert widget.ssb_compute_scan_detector_rotation_deg == 345.5
     saved = json.loads(widget.ssb_compute_calibration_json)
     # its own schema: the record differs from ShowPtycho's calibration.json (source, no session_identity)
-    assert saved["schema"] == "quantem.show4dstem-ssb-calibration/3"
+    assert saved["schema"] == "quantem.show4dstem-ssb-calibration/4"
     assert (saved["scan_detector_rotation_deg"], saved["scan_detector_rotation_flipped"]) == (345.5, True)
     assert saved["aberrations"] == {"C10_nm": 12.0, "C12_nm": 3.0, "phi12_deg": 30.0}
     assert (saved["scan_sampling_A"], saved["detector_sampling_mrad"], saved["voltage_kV"]) == ([0.4, 0.6], [1.5, 1.5], 300.0)
@@ -1184,7 +1184,7 @@ def test_compute_ssb_reads_the_optics_the_dataset_records(monkeypatch, tmp_path)
 
     downloaded = tmp_path / "calibration.json"
     downloaded.write_text(widget.ssb_compute_calibration_json)
-    with pytest.raises(ValueError, match="quantem.show4dstem-ssb-calibration/3' is not ShowPtycho's"):
+    with pytest.raises(ValueError, match="quantem.show4dstem-ssb-calibration/4' is not ShowPtycho's"):
         read_calibration(downloaded, {}, (0, 128, 0, 128), CALIBRATION_SCHEMA)
     widget._ssb_phase(aberrations=saved["aberrations"], scan_detector_rotation_deg=saved["scan_detector_rotation_deg"], lock_aberrations=True)
     assert seen["scan_detector_rotation_deg"] == 345.5 and seen["aberrations"] == {"C10_nm": 12.0, "C12_nm": 3.0, "phi12_deg": 30.0}
@@ -1245,7 +1245,7 @@ def test_compute_ssb_uses_the_estimated_rotation_rather_than_zero():
     # Compute SSB passed scan_detector_rotation_deg=0.0, so the fit could only pick 0 or 180 degrees
     widget = _ssb_widget(_rotated_counts(30.0))
     try:
-        widget.compute_ssb(num_trials=4, refinement=None)
+        widget.compute_ssb(trials=4, refinement=None)
         rotation = widget.ssb_compute_scan_detector_rotation_deg
         assert min(abs(rotation - 30.0), abs(rotation - 210.0)) < 1.0
         assert json.loads(widget.ssb_compute_calibration_json)["scan_detector_rotation_flipped"] is False
@@ -1263,7 +1263,7 @@ def test_compute_ssb_dpc_maps_follow_the_scan_axes_for_a_flipped_detector(flippe
     counts = _rotated_counts(30.0, flipped=flipped)
     widget = _ssb_widget(counts)
     try:
-        widget.compute_ssb(num_trials=4, refinement=None)
+        widget.compute_ssb(trials=4, refinement=None)
         record = json.loads(widget.ssb_compute_calibration_json)
         assert record["scan_detector_rotation_flipped"] is flipped
         maps = np.frombuffer(widget.vi_product_maps_bytes, np.float32).reshape(-1, 128, 128)
@@ -1434,7 +1434,7 @@ def test_compute_ssb_names_its_refinement_as_quantem_gpu_does(capsys):
     widget = _ssb_widget(_rotated_counts(30.0))
     try:
         assert (widget.ssb_compute_refinement, widget.ssb_compute_tilt) == ("auto", True)
-        widget.compute_ssb(num_trials=2)
+        widget.compute_ssb(trials=2)
         record = json.loads(widget.ssb_compute_calibration_json)
         # the tilt-corrected fit refines with quantem.gpu's exact-gradient fifth-order refinement
         assert record["refinement"] == "bfgs" and record["tilt"] is True
@@ -1446,7 +1446,7 @@ def test_compute_ssb_names_its_refinement_as_quantem_gpu_does(capsys):
         assert record["objective"] == "agreement"
         widget.ssb_compute_refinement = "auto"
         with pytest.raises(ValueError, match="refinement must be 'auto' or None"):
-            widget.compute_ssb(num_trials=2, refinement="lbfgs")
+            widget.compute_ssb(trials=2, refinement="lbfgs")
         assert not hasattr(widget, "ssb_compute_refine") and not hasattr(widget, "ssb_compute_objective")
     finally:
         widget.close()
@@ -1511,7 +1511,7 @@ def test_compute_ssb_fits_tilt_corrected_by_default_and_tilt_false_on_request(mo
         assert options["search"] == "standard"
         assert not {"search_ranges", "refine_lock", "fixed_aberrations"} & set(options)
         record = json.loads(widget.ssb_compute_calibration_json)
-        assert record["schema"] == "quantem.show4dstem-ssb-calibration/3" and record["objective"] == "agreement"
+        assert record["schema"] == "quantem.show4dstem-ssb-calibration/4" and record["objective"] == "agreement"
         assert (record["tilt"], record["sample_tilt_mrad"], record["depth_spread_nm"], record["tilt_fit_gain"]) == (True, [1.5, -2.0], 6.0, 0.1)
         assert record["refinement"] == "newton"  # what quantem.gpu selected, never "auto"
         assert "tilt-corrected: (+1.5, -2.0) mrad" in widget.ssb_compute_status
@@ -1552,18 +1552,13 @@ def test_compute_ssb_fits_tilt_corrected_by_default_and_tilt_false_on_request(mo
         widget.compute_ssb(aberrations={"C10_nm": 5.0}, lock_aberrations=True)
         assert calls[-1][1]["sample_tilt_mrad"] is None
         assert json.loads(widget.ssb_compute_calibration_json)["objective"] is None
-        # the retired choices say so once and run the model fit with quantem.gpu's refinement
-        capsys.readouterr()
-        widget.compute_ssb(tilt=False, objective="phase_variance", refinement="nelder-mead")
-        assert capsys.readouterr().out.splitlines() == [
-            "Show4DSTEM: compute_ssb(objective='phase_variance') is retired; Compute SSB fits the SSB model's "
-            "agreement with the data.",
-            "Show4DSTEM: compute_ssb(refinement='nelder-mead') is retired; using refinement='auto', quantem.gpu's "
-            "exact-derivative refinement."]
-        assert calls[-1][1]["tilt"] is False and "objective" not in calls[-1][1] and calls[-1][1]["refinement"] == "auto"
-        assert json.loads(widget.ssb_compute_calibration_json)["objective"] == "agreement"
+        # objective= and the earlier optimizer names are gone: quantem.gpu has one objective and one refinement
+        with pytest.raises(TypeError, match="objective"):
+            widget.compute_ssb(tilt=False, objective="phase_variance")
+        with pytest.raises(ValueError, match="refinement must be 'auto' or None"):
+            widget.compute_ssb(tilt=False, refinement="nelder-mead")
         # the frontend sends the switch with its request
-        widget.ssb_compute_request = json.dumps({"action": "compute_ssb", "num_trials": 20, "tilt": False,
+        widget.ssb_compute_request = json.dumps({"action": "compute_ssb", "trials": 20, "tilt": False,
                                                  "refinement": None})
         deadline = time.time() + 10
         while widget.ssb_compute_busy or not calls[-1][1].get("trials") == 20:

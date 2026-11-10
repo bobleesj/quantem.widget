@@ -248,13 +248,9 @@ correction has been fitted. This does not rotate the scan or align depth slices.
 ## Reusing the reviewed phase
 
 SSB reconstructs one phase, the phase of the mean wave, on CUDA and MPS,
-including higher-order aberrations. Save records it as
-`"phase_estimator": "phase_of_mean"` with the resolved sampling factor and
-optics, so another reconstruction can start from the same phase. The
-`phase_estimator` keyword is retired: `"phase_of_mean"` prints one line and
-changes nothing, and the retired `"mean_phase"` and `"complex_wave"` raise. A
-`calibration.json` saved with one of them still restores its optics, with one
-printed line.
+including higher-order aberrations. Save records it as the method
+`"phase_of_mean"` (in `reconstruction.method`) with the resolved sampling factor
+and optics, so another reconstruction can start from the same phase.
 
 ## Output sampling
 
@@ -403,7 +399,7 @@ The display-only phase sign is
 converted; `scripts/rewrite_ssb_calibration.py` in the repository carries
 earlier calibration, star and snapshot files over once (a `/5` calibration
 with a session identity needs its data beside it or `--data PATH`). A
-Show4DSTEM Compute SSB download (`quantem.show4dstem-ssb-calibration/3`) is
+Show4DSTEM Compute SSB download (`quantem.show4dstem-ssb-calibration/4`) is
 another record and is not restored as `calibration.json`.
 quantem.gpu's SSB engines compute in Angstrom and radians; the widget converts
 once, in `quantem.widget.adapters.gpu`. Slider ranges are C10 +-40 nm and C12
@@ -550,7 +546,7 @@ Each changed region runs one standard fit: 200 initial TPE trials, then
 quantem.gpu's exact-gradient refinement through fifth-order aberrations with
 both sample tilt components and depth spread on the selected GPU backend.
 `viewer.fit_regions(trials=...)` changes the initial trial budget, also for the
-button; the retired `refinement=` keyword prints one line and changes nothing. Progress identifies the region,
+button. Progress identifies the region,
 current operation and elapsed time. It reconstructs the full scan with each
 regional fit, then crops the corrected regional view. The overview fit remains intact.
 

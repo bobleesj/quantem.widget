@@ -82,7 +82,7 @@ def test_invalid_sampling_is_rejected_before_transport():
             _images({'SSB':np.ones((32,32))},sampling)
 
 
-@pytest.mark.parametrize("budget", [{}, {"trials": 12}, {"num_trials": 12}])
+@pytest.mark.parametrize("budget", [{}, {"trials": 12}])
 def test_notebook_cells_read_edit_fit_and_reconstruct_current_regions(budget, monkeypatch):
     import sys
     import pytest
@@ -101,10 +101,7 @@ def test_notebook_cells_read_edit_fit_and_reconstruct_current_regions(budget, mo
     with pytest.raises(ValueError, match='unfitted'):
         widget.region_fits
     fits = widget.fit_regions(**budget)
-    assert widget._region_fit_options["num_trials"] == (12 if budget else 200)
-    with pytest.raises(TypeError, match="not both"):
-        widget.fit_regions(trials=200, num_trials=200)
-    assert widget._region_fit_options == {"num_trials": 12 if budget else 200}  # quantem.gpu picks the refinement
+    assert widget._region_fit_options == {"trials": 12 if budget else 200}  # quantem.gpu picks the refinement
     assert fits[0]['sample_tilt_mrad'] == [2., -3.]
     np.testing.assert_array_equal(widget.region_images['A'], phase)
     assert widget.region_images['A'].dtype == np.float64
@@ -207,20 +204,6 @@ def _fit_padded(agreements):
         [region], parameters, upsample=2)
 
 
-def test_the_retired_refinement_keyword_says_so_once_and_changes_nothing(capsys):
-    regions = [{'id': 'a', 'label': 'A', 'bounds': [0, 32, 0, 32]}]
-    def fit(selected):
-        return {'regions': selected, 'fits': [{**r, 'sample_tilt_mrad': [0., 0.]} for r in selected],
-                'images': {'A': np.zeros((32, 32))}, 'sampling_A': .2}
-    widget = ShowPtycho(np.zeros((96, 96)), local_tilt={'scan_shape': [96, 96], 'regions': regions},
-                        fit_regions=fit, reconstruct_regions=fit)
-    widget.fit_regions(trials=12, refinement='newton')
-    assert capsys.readouterr().out.splitlines() == [
-        "ShowPtycho: fit_regions(refinement='newton') is retired; every fit refines with quantem.gpu's "
-        "exact-derivative refinement."]
-    assert widget._region_fit_options == {"num_trials": 12}
-
-
 def test_regional_fit_runs_once_and_crops_measured_positions():
     pytest.importorskip("quantem.gpu", reason="the regional fit runs quantem.gpu's SSB")
     result = _fit_padded([0.9])
@@ -244,13 +227,13 @@ def test_regional_fit_passes_its_trial_count_and_tilt_limit_to_the_fit():
     session = _PaddedSession([0.5])
     region = {'id': 'r', 'label': 'R', 'bounds': [8, 40, 4, 36]}
     parameters = {'aberrations': {'C10_nm': 3.0, 'C12_nm': 1.0, 'phi12_deg': 10.0}, 'scan_detector_rotation_deg': 0.0}
-    result = DirectSession(session).fit_regions([region], parameters, upsample=1, num_trials=12)
+    result = DirectSession(session).fit_regions([region], parameters, upsample=1, trials=12)
     assert session.options['trials'] == 12 and 'refinement' not in session.options
     assert session.options['tilt_limit_mrad'] == REGION_TILT_LIMIT_MRAD
     assert session.options['compute_loss'] is False
     assert session.options['search'] == 'standard'
     fit, = result['fits']
-    assert fit['fit_record']['num_trials'] == 12 and fit['refinement'] == 'bfgs'  # the optimizer quantem.gpu ran
+    assert fit['fit_record']['trials'] == 12 and fit['refinement'] == 'bfgs'  # the optimizer quantem.gpu ran
     assert not fit['bound_hit']  # tilt (4.2, 0) mrad and depth 10 nm lie inside the limit and DEPTH_SPREAD_RANGE_NM
 
 

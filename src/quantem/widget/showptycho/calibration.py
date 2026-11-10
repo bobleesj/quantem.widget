@@ -6,10 +6,6 @@ from pathlib import Path
 
 from quantem.widget.adapters.gpu import DirectSession
 
-# quantem.gpu retired these SSB phase estimators for the phase of the mean wave, "phase_of_mean". A saved fit that
-# names one still restores its optics; the widget reconstructs them with phase_of_mean and says so once.
-RETIRED_PHASE_ESTIMATORS = ("mean_phase", "complex_wave")
-
 
 def read_calibration(path: Path, identity: dict | None, scan_region: tuple[int, int, int, int], schema: str) -> dict:
     """Require matching evidence and a complete, finite model of the session's whole scan.
@@ -33,9 +29,6 @@ def read_calibration(path: Path, identity: dict | None, scan_region: tuple[int, 
     if saved.get("scan_region") != [int(value) for value in scan_region]:
         raise ValueError(f"the saved fit covers scan region {saved.get('scan_region')}, "
                          f"not this session's {[int(value) for value in scan_region]}")
-    estimator = saved["phase_estimator"]
-    if estimator not in ("phase_of_mean", *RETIRED_PHASE_ESTIMATORS):
-        raise ValueError("the saved phase estimator is not supported")
     # ShowPtycho's Save writes "reconstruction"; quantem.gpu's DirectPtychoResult.save_calibration writes
     # "reconstruction_method" beside "reconstruction_options" (empty for phase_of_mean)
     reconstruction = dict(saved["reconstruction"] if "reconstruction" in saved else saved["reconstruction_options"])

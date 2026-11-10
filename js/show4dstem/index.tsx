@@ -2278,7 +2278,7 @@ function Show4DSTEM() {
   const [ssbComputeStatus] = useModelState<string>("ssb_compute_status");
   const [ssbComputeBusy] = useModelState<boolean>("ssb_compute_busy");
   const [ssbComputeEnabled] = useModelState<boolean>("ssb_compute_enabled");
-  const [ssbComputeNTrials, setSsbComputeNTrials] = useModelState<number>("ssb_compute_num_trials");
+  const [ssbComputeNTrials, setSsbComputeNTrials] = useModelState<number>("ssb_compute_trials");
   const [ssbComputeTilt, setSsbComputeTilt] = useModelState<boolean>("ssb_compute_tilt");
   // quantem.gpu's two SSB fits: tilt-corrected (default) and tilt=False
   const ssbComputeMethod = ssbComputeTilt !== false ? "tilt" : "tilt0";
@@ -4721,7 +4721,7 @@ function Show4DSTEM() {
     const payload = JSON.stringify({
       id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
       action: "compute_ssb",
-      num_trials: nTrials,
+      trials: nTrials,
       tilt: ssbComputeTilt !== false,
       refinement: ssbComputeRefinement ?? null,
       lock_C10: Boolean(ssbComputeLockC10),

@@ -89,7 +89,7 @@ DEFAULT_VI_ROI_RATIO = 0.15  # scan ROI radius as a fraction of the scan side
 PRODUCT_LABELS = ("DPC_row", "DPC_col", "SSB")
 # the calibration a 4D acquisition carries, under the .qem format's flat names
 # Compute SSB's downloadable record; ShowPtycho's calibration.json has another shape and schema
-SSB_CALIBRATION_SCHEMA = "quantem.show4dstem-ssb-calibration/3"
+SSB_CALIBRATION_SCHEMA = "quantem.show4dstem-ssb-calibration/4"
 FROM_TRAIT = object()  # a Compute SSB setting left to its ssb_compute_* trait (None is a value of its own)
 CALIBRATION_KEYS = ("scan_sampling_A", "detector_sampling_mrad", "detector_sampling_inv_A", "voltage_kV", "semiangle_mrad")
 # Soft guide for the inline offline pack: the browser's JSON parse of the embedded
@@ -292,7 +292,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     ssb_compute_status = traitlets.Unicode("").tag(sync=True)
     ssb_compute_busy = traitlets.Bool(False).tag(sync=True)
     ssb_compute_enabled = traitlets.Bool(True).tag(sync=True)
-    ssb_compute_num_trials = traitlets.Int(200).tag(sync=True)
+    ssb_compute_trials = traitlets.Int(200).tag(sync=True)
     # quantem.gpu's default SSB: the model fit with the sample tilt and depth spread; False fits at tilt 0
     ssb_compute_tilt = traitlets.Bool(True).tag(sync=True)
     # local refinement after the trial search: "auto", quantem.gpu's exact-derivative refinement, or None for none
@@ -1063,7 +1063,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         ``compute_ssb(tilt=False)`` fits the same model with the tilt held at 0.
 
         ``kwargs`` go to the solver: ``tilt`` (the ``ssb_compute_tilt`` trait,
-        True by default), ``trials`` (default 200; ``num_trials`` is a compatibility alias),
+        True by default), ``trials`` (the ``ssb_compute_trials`` trait, 200 by default),
         ``refinement`` (``"auto"``, the default, quantem.gpu's exact-derivative
         refinement, or None for the best trial without one), ``seed``,
         ``aberrations`` (a dict of ``C10_nm``, ``C12_nm`` and ``phi12_deg``; a
@@ -2144,7 +2144,6 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         scan_detector_rotation_flipped: bool | None = None,
         bright_field_intensity_threshold: float | None = None,
         trials: int | None = None,
-        num_trials: int | None = None,
         tilt: bool | object = FROM_TRAIT,
         refinement: str | None | object = FROM_TRAIT,
         lock_aberrations: bool = False,
@@ -2152,7 +2151,6 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         lock_C12: bool = False,
         seed: int = 42,
         verbose: bool = False,
-        objective: str | object = FROM_TRAIT,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Run quantem.gpu SSB on the current dataset; returns ``(phase, dpc_row, dpc_col)``.
 
@@ -2190,20 +2188,11 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                   "Pass Show4DSTEM(data, semiangle_mrad=...) to set it.")
         if semiangle <= 0:
             raise ValueError(f"semiangle_mrad must be positive, got {semiangle}.")
-        from quantem.gpu.direct_ptycho.trials import resolve_trial_count
-
-        trials = int(resolve_trial_count(trials, num_trials, default=self.ssb_compute_num_trials))
+        trials = int(self.ssb_compute_trials if trials is None else trials)
         if trials < 0:
             raise ValueError(f"trials must be >= 0, got {trials}.")
         tilt = bool(self.ssb_compute_tilt if tilt is FROM_TRAIT else tilt)
-        if objective is not FROM_TRAIT:
-            print(f"Show4DSTEM: compute_ssb(objective={objective!r}) is retired; Compute SSB fits the SSB model's "
-                  "agreement with the data.")
         refinement = self.ssb_compute_refinement if refinement is FROM_TRAIT else refinement
-        if refinement in ("newton", "bfgs", "nelder-mead"):
-            print(f"Show4DSTEM: compute_ssb(refinement={refinement!r}) is retired; using refinement='auto', "
-                  "quantem.gpu's exact-derivative refinement.")
-            refinement = "auto"
         if refinement not in ("auto", None):
             raise ValueError(f"Compute SSB refinement must be 'auto' or None, got {refinement!r}.")
         do_refine = refinement is not None
@@ -2310,7 +2299,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             "bright_field_radius_px": None if bright_field_radius_px is None else float(bright_field_radius_px),
             "bright_field_intensity_threshold": float(bright_field_intensity_threshold),
             "num_bright_field_pixels": num_bright_field_pixels,
-            "num_trials": 0 if manual else trials, "refinement": None if manual else result.get("refinement", refinement),
+            "trials": 0 if manual else trials, "refinement": None if manual else result.get("refinement", refinement),
             "manual_locked": manual,
             # the sample model of the phase: the tilt-corrected fit's (scan frame, mrad) or None at tilt 0
             "tilt": result.get("sample_tilt_mrad") is not None, "objective": None if manual else result.get("objective"),
@@ -2343,10 +2332,10 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         if self.ssb_compute_busy:
             self.ssb_compute_status = "SSB compute is already running."
             return
-        kwargs = {key: payload[key] for key in ("num_trials", "tilt", "refinement", "lock_aberrations")
+        kwargs = {key: payload[key] for key in ("trials", "tilt", "refinement", "lock_aberrations")
                   if key in payload}
-        if "num_trials" in kwargs:
-            self.ssb_compute_num_trials = int(kwargs["num_trials"])
+        if "trials" in kwargs:
+            self.ssb_compute_trials = int(kwargs["trials"])
         if "tilt" in kwargs:
             self.ssb_compute_tilt = bool(kwargs["tilt"])
         if "refinement" in kwargs:

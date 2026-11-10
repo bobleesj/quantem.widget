@@ -294,9 +294,6 @@ The two fits are quantem.gpu's:
 | `aberrations()` | model-based, tilt-corrected | the default: every fit |
 | `aberrations(search="primary", tilt=False)` | model-based, tilt held at 0 | thin, untilted samples, or to see what tilt correction changes |
 
-The phase-variance fit is retired: `compute_ssb(objective=...)` prints one line
-and runs the model fit.
-
 An input that records no calibration (an array, an HDF5 master) takes it from
 the constructor, under the `.qem` format's names:
 
@@ -324,13 +321,13 @@ tilt-corrected fit's tilt and depth spread. The fitted values are the traits
 `ssb_compute_C10_nm`, `ssb_compute_C12_nm`, `ssb_compute_phi12_deg` and
 `ssb_compute_scan_detector_rotation_deg` (the physical rotation in [0, 360)),
 and the downloadable `*_ssb_calibration.json` holds them under the same names
-with `"schema": "quantem.show4dstem-ssb-calibration/3"` (its `refinement` names the local
+with `"schema": "quantem.show4dstem-ssb-calibration/4"` (`trials` is the search budget; its `refinement` names the local
 refinement quantem.gpu ran, or null; `objective`
 what the fit optimized, null for a manual recompute; `tilt`,
 `sample_tilt_mrad` in the scan frame, `depth_spread_nm` and `tilt_fit_gain`
 record the sample model, false and null at tilt 0). It is not a
 ShowPtycho `calibration.json` (`quantem.ssb-calibration/8`), which records the
-source file, scan region, phase estimator and session identity. Compute SSB
+source file, scan region, reconstruction method and session identity. Compute SSB
 needs one 4D frame; quantem.gpu centres any scan shape in its FFT grid and the
 phase shows the measured positions. An encoded
 acquisition goes to SSB without a dense copy; SSB decodes only the

@@ -41,7 +41,6 @@ from quantem.widget.adapters import core as core_adapter
 from quantem.widget.adapters import gpu as gpu_adapter
 from quantem.widget.colormap import colorize, contrast_uint8
 from quantem.widget.device import gpu_path_hint, no_gpu_path
-from quantem.widget.showptycho.calibration import RETIRED_PHASE_ESTIMATORS
 from quantem.widget.showptycho.export import write_showptycho_folder
 from quantem.widget.units import axis_pair, image_axes, per_axis, stated, wrap_degrees
 from quantem.widget.utils.array import device_array
@@ -113,10 +112,6 @@ def nonzero_higher_order(aberrations: dict) -> dict:
             if float(aberrations.get(magnitude(name), 0.0)) != 0.0}
 
 
-# the default of a retired keyword, so passing it at all can say so
-_RETIRED = object()
-
-
 class ShowPtycho(anywidget.AnyWidget):
     """Ptychographic reconstruction viewer, and SSB aberration explorer over a ``quantem.gpu.DirectPtycho`` session.
 
@@ -181,13 +176,6 @@ class ShowPtycho(anywidget.AnyWidget):
         Output multiplier along each scan axis. Auto stops at 4×; 8× is
         explicit only. Omitted, preserve a saved explicit choice or use Auto.
         An explicit value overrides saved sampling, retaining the joint fit.
-    phase_estimator : str, optional
-        Retired: SSB always reconstructs the phase of the mean wave
-        (``"phase_of_mean"``), which Save records. Passing
-        ``"phase_of_mean"`` prints one line and changes nothing; the retired
-        ``"mean_phase"`` and ``"complex_wave"`` raise. A saved fit that names
-        one of them restores its optics, reconstructed as the phase of the
-        mean wave, and one printed line says so.
     local_tilt : bool or dict, optional
         True adds region selection to the existing viewer. Fit Regions jointly
         optimizes aberrations, tilt and depth with the SSB backend, then crops
@@ -549,7 +537,7 @@ class ShowPtycho(anywidget.AnyWidget):
         return {name: phase.copy() for name, phase in self._region_images.items()}
 
     def fit_regions(
-        self, *, trials: int | None = None, num_trials: int | None = None, refinement: object = _RETIRED,
+        self, *, trials: int = 200,
     ) -> list[dict]:
         """Jointly fit optics, tilt and depth in the current rectangles.
 
@@ -559,13 +547,9 @@ class ShowPtycho(anywidget.AnyWidget):
 
         Parameters
         ----------
-        trials : int, optional
-            Search trials of the single joint fit per region (seed 42). Default 200.
-        num_trials : int, optional
-            Compatibility alias for ``trials``. Supply only one of them.
-        refinement : optional
-            Retired: every fit refines with quantem.gpu's exact-derivative
-            refinement. A value prints one line and changes nothing.
+        trials : int, default 200
+            Search trials of the single joint fit per region (seed 42), then
+            quantem.gpu's exact-derivative refinement.
 
         The widget's Fit Regions button uses the trials of the last call.
 
@@ -578,16 +562,9 @@ class ShowPtycho(anywidget.AnyWidget):
         --------
         >>> fits = viewer.fit_regions()
         """
-        if trials is not None and num_trials is not None:
-            raise TypeError("Use trials=200, or the legacy num_trials keyword, not both.")
-        num_trials = trials if trials is not None else num_trials
-        num_trials = 200 if num_trials is None else num_trials
-        if int(num_trials) < 1:
+        if int(trials) < 1:
             raise ValueError("Fit Regions needs at least one trial per seed.")
-        if refinement is not _RETIRED:
-            print(f"ShowPtycho: fit_regions(refinement={refinement!r}) is retired; every fit refines with "
-                  "quantem.gpu's exact-derivative refinement.")
-        self._region_fit_options = {"num_trials": int(num_trials)}
+        self._region_fit_options = {"trials": int(trials)}
         self._run_region_callback("fit")
         return self.region_fits
 
@@ -703,7 +680,6 @@ class ShowPtycho(anywidget.AnyWidget):
         show_fft: bool = False,
         compute_loss: bool = False,
         upsample: str | int | None = None,
-        phase_estimator: str | None = None,
         method: str | None = None,
         phase_damp: float | None = None,
         amplitude_damp: float | None = None,
@@ -744,14 +720,6 @@ class ShowPtycho(anywidget.AnyWidget):
             }
         elif local_tilt is False:
             local_tilt = None
-        if phase_estimator in RETIRED_PHASE_ESTIMATORS:
-            raise ValueError(f"phase_estimator={phase_estimator!r} was retired; SSB reconstructs the phase of the "
-                             "mean wave, 'phase_of_mean'. Omit phase_estimator.")
-        if phase_estimator not in (None, "phase_of_mean"):
-            raise ValueError("phase_estimator is retired: SSB reconstructs the phase of the mean wave. Omit it.")
-        if phase_estimator is not None:
-            print("ShowPtycho: phase_estimator is retired; SSB always reconstructs the phase of the mean wave "
-                  "('phase_of_mean'). Omit it.")
         # an array's pixel size [row, col] in angstrom, read through the one unit table (the widget draws in angstrom)
         if is_array and sampling is None:
             # a unit stated with no step, for an image that records none, raises as in every image widget
@@ -788,7 +756,7 @@ class ShowPtycho(anywidget.AnyWidget):
         self._launch_calibration_shown = False
         self._ssb = None if is_array else data
         self._region_fit_parameters: dict = {}
-        self._region_fit_options: dict = {"num_trials": 200}
+        self._region_fit_options: dict = {"trials": 200}
         self._pinned: list[dict] = []
         self._region_callbacks = {"fit": fit_regions, "reconstruct": reconstruct_regions}
         self.local_tilt_can_fit = callable(fit_regions)
@@ -958,7 +926,6 @@ class ShowPtycho(anywidget.AnyWidget):
             self.calibration_status = f"Saved fit not restored: {exc}. Use Joint fit, then Save."
             return
         self.method = saved_method
-        retired = saved["phase_estimator"] in RETIRED_PHASE_ESTIMATORS
         for name in ("phase_damp", "amplitude_damp", "smoothness_inv_A", "detector_weighting"):
             if name in reconstruction:
                 setattr(self, name, reconstruction[name])
@@ -980,10 +947,6 @@ class ShowPtycho(anywidget.AnyWidget):
         print(f"ShowPtycho: restored {self._calibration_path.name} saved {self.calibration_saved_at or 'earlier'} "
               f"({restored})" + (f", replacing the session's {before}" if supplied else "")
               + ". Pass restore=False to keep the session's values.")
-        if retired:
-            # the file keeps its label until the next Save, which records what the widget then shows
-            print(f"ShowPtycho: {self._calibration_path.name} was saved with the retired {saved['phase_estimator']} "
-                  "estimator and loads as saved; previews and Save use phase_of_mean, the phase of the mean wave.")
         return saved
 
     def _restore_regions(self, saved: dict) -> None:
@@ -1435,8 +1398,8 @@ class ShowPtycho(anywidget.AnyWidget):
             region = request.get("scan_region")
             if not isinstance(region, (tuple, list)) or len(region) != 4:
                 raise ValueError("scan_region must be (row_start, row_stop, col_start, col_stop)")
-            num_trials = int(request.get("num_trials", 200))
-            if num_trials < 1:
+            trials = int(request.get("trials", 200))
+            if trials < 1:
                 raise ValueError("SSB refit needs at least one optimization trial.")
             if not self.crop_refit_available or not self._source_path:
                 raise RuntimeError("Crop refit is unavailable: open the session from its master, DirectPtycho.open(<master.h5>, ...).")
@@ -1450,7 +1413,7 @@ class ShowPtycho(anywidget.AnyWidget):
                 raise ValueError(
                     f"SSB refit crops must be at least {MIN_CROP_SPAN}x{MIN_CROP_SPAN}; got {row_stop - row_start}x{col_stop - col_start}."
                 )
-            self.crop_refit_status = f"Loading [{region[0]}:{region[1]}, {region[2]}:{region[3]}] and fitting SSB ({num_trials} trials)..."
+            self.crop_refit_status = f"Loading [{region[0]}:{region[1]}, {region[2]}:{region[3]}] and fitting SSB ({trials} trials)..."
             # quantem.gpu.DirectPtycho.select_region keeps the acquisition identity, preprocessing provenance, flip,
             # detector calibration and the whole scan's bright-field disk; only the scan positions change
             rebuilt = self._ssb.select_region(
@@ -1458,7 +1421,7 @@ class ShowPtycho(anywidget.AnyWidget):
                 scan_detector_rotation_deg=self.scan_detector_rotation_deg)
             try:
                 rebuilt.aberrations(search="standard",
-                                    tilt=True, check_rotation=False, trials=num_trials, verbose=False)
+                                    tilt=True, check_rotation=False, trials=trials, verbose=False)
             except BaseException:
                 rebuilt.ssb.close()
                 raise
@@ -1472,7 +1435,7 @@ class ShowPtycho(anywidget.AnyWidget):
         self._scan_region = region
         self._calibration_identity = self._ssb.calibration_identity()
         self._adopt_session(initial=False)
-        self.crop_refit_status = f"Refit complete: [{region[0]}:{region[1]}, {region[2]}:{region[3]}], {num_trials} trials."
+        self.crop_refit_status = f"Refit complete: [{region[0]}:{region[1]}, {region[2]}:{region[3]}], {trials} trials."
 
     def _on_pin(self, change) -> None:
         """Pin, star, view or unpin a snapshot of the displayed aberrations.
@@ -1575,8 +1538,6 @@ class ShowPtycho(anywidget.AnyWidget):
             "depth_spread_nm": sample["depth_spread_nm"] if sample else None,
             "upsample": self._output_factor,
             "upsample_mode": "auto" if self.upsample == "auto" else "explicit",
-            # the one SSB estimator; readers of earlier versions require the key
-            "phase_estimator": "phase_of_mean",
             "reconstruction": self._reconstruction_options(),
             "display": {"tilt_correction": self.tilt_correction, "max_columns": self.local_tilt_max_columns},
             "scan_shape": list(state["input_scan_shape"]),
