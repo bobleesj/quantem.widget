@@ -211,7 +211,7 @@ class ShowPtycho(anywidget.AnyWidget):
     local_tilt_max_columns = traitlets.Int(3, min=1, max=8).tag(sync=True)
     local_tilt_stale = traitlets.Bool(False).tag(sync=True)
     local_tilt_can_fit = traitlets.Bool(False).tag(sync=True)
-    local_tilt_can_reconstruct = traitlets.Bool(False).tag(sync=True)
+    local_tilt_can_reconstruct = traitlets.Bool(False)
 
     _esm = pathlib.Path(__file__).parent.parent / "static" / "showptycho.js"
 
@@ -241,8 +241,6 @@ class ShowPtycho(anywidget.AnyWidget):
     fitted_scan_detector_rotation_deg = traitlets.Float(0.0).tag(sync=True)
     fitted_sample_json = traitlets.Unicode("{}").tag(sync=True)
     fitted_higher_order_aberrations_json = traitlets.Unicode("{}").tag(sync=True)
-    # browser -> Python reconstruction request {"id", "C10_nm", "C12_nm", "phi12_deg", "committed"}
-    request_json = traitlets.Unicode("").tag(sync=True)
     phase_bytes = traitlets.Bytes(b"").tag(sync=True)
     phase_width = traitlets.Int(0).tag(sync=True)
     phase_height = traitlets.Int(0).tag(sync=True)
@@ -274,7 +272,7 @@ class ShowPtycho(anywidget.AnyWidget):
     calibration_path = traitlets.Unicode("").tag(sync=True)
     calibration_saved_at = traitlets.Unicode("").tag(sync=True)
     calibration_status = traitlets.Unicode("").tag(sync=True)
-    calibration_image_path = traitlets.Unicode("").tag(sync=True)
+    calibration_image_path = traitlets.Unicode("")
     # fit history for the trials strip: JSON list of {rank, C10_nm, C12_nm, phi12_deg, loss}, best first
     trials_json = traitlets.Unicode("").tag(sync=True)
     num_bright_field_pixels = traitlets.Int(0).tag(sync=True)
@@ -870,7 +868,6 @@ class ShowPtycho(anywidget.AnyWidget):
             "Ready to refit a native square scan crop." if self.crop_refit_available
             else "Crop refit needs a re-loadable master file."
         )
-        self.observe(self._on_request, names=["request_json"])
         self.on_msg(self._on_preview_message)
         self.observe(self._on_upsample, names=["upsample"])
         self.observe(self._on_save, names=["save_trigger"])
@@ -1231,13 +1228,11 @@ class ShowPtycho(anywidget.AnyWidget):
     def _on_preview_message(self, widget, content: dict, buffers) -> None:
         """Receive a bounded preview command without the generic trait throttle."""
         if content.get("type") == "ssb-preview":
-            self._on_request({"new": json.dumps(content["request"])})
+            self._on_request(content["request"])
 
-    def _on_request(self, change) -> None:
-        """A slider request from the browser: reconstruct at its aberrations; committed requests add the loss."""
-        if not change["new"]:
-            return
-        request = json.loads(change["new"])
+    def _on_request(self, request: dict) -> None:
+        """A slider request from the browser {"id", "C10_nm", "C12_nm", "phi12_deg", "committed", ...}: reconstruct at
+        its aberrations; committed requests add the loss."""
         if request.get("region_id") and request.get("method", self.method) != "phase_of_mean":
             self.local_tilt_preview_json = json.dumps({"id": request["id"], "region_id": request["region_id"],
                 "error": "Regional previews support method='phase_of_mean'; use a full-session review for regularization."})
@@ -1656,7 +1651,6 @@ class ShowPtycho(anywidget.AnyWidget):
         if self._ssb is None:
             return self
         for callback, names in (
-            (self._on_request, ["request_json"]),
             (self._on_upsample, ["upsample"]),
             (self._on_save, ["save_trigger"]),
             (self._on_pin, ["pin_json"]),

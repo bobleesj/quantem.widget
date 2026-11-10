@@ -59,8 +59,8 @@ def test_one_slider_drag_uses_its_window_and_a_release_prepares_the_next(ptycho,
     expected_options = dict(upsample=3, method=method, compute_loss=False, **SAMPLE, **strengths)
 
     def request(index, C10_nm, committed=False):
-        viewer._on_request({"new": json.dumps({"id": index, **ABERRATIONS, "C10_nm": C10_nm, "method": method,
-                                               **strengths, "committed": committed})})
+        viewer._on_request({"id": index, **ABERRATIONS, "C10_nm": C10_nm, "method": method,
+                                               **strengths, "committed": committed})
         return ptycho.preview({**ABERRATIONS, "C10_nm": C10_nm}, **expected_options)[0]
 
     ptycho._direct_windows = {}
@@ -83,8 +83,8 @@ def test_a_rotation_drag_never_touches_the_drag_windows(ptycho, tmp_path, monkey
     viewer.upsample = 3
 
     def request(index, rotation, C10_nm=12.0, committed=False):
-        viewer._on_request({"new": json.dumps({"id": index, **ABERRATIONS, "C10_nm": C10_nm,
-                                               "scan_detector_rotation_deg": rotation, "committed": committed})})
+        viewer._on_request({"id": index, **ABERRATIONS, "C10_nm": C10_nm,
+                                               "scan_detector_rotation_deg": rotation, "committed": committed})
 
     request(1, 0.0, committed=True)
     request(2, 0.0, C10_nm=12.05)                                          # an unreleased C10 drag

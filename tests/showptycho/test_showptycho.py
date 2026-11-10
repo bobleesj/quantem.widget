@@ -193,11 +193,11 @@ def test_small_scan_calibration_and_region_bounds_exclude_fft_padding(tmp_path, 
         np.testing.assert_array_equal(viewer.region_images["Region 1 · SSB"], measured(phase, bounds, factor))
 
         adjusted = {**fit["aberrations"], "C10_nm": fit["aberrations"]["C10_nm"] + 1}
-        viewer.request_json = json.dumps({
+        viewer._on_preview_message(viewer, {"type": "ssb-preview", "request": {
             "id": 200, "region_id": "region-1", "region_bounds": bounds, **adjusted,
             "sample": {"sample_tilt_mrad": fit["sample_tilt_mrad"], "depth_spread_nm": fit["depth_spread_nm"]},
             "committed": False,
-        })
+        }}, [])
         assert "error" not in json.loads(viewer.local_tilt_preview_json)
         phase, _ = session.preview(adjusted, **model)
         expected = measured(phase, bounds, factor)
@@ -230,7 +230,7 @@ def widget(ssb, tmp_path):
 
 def test_opens_on_the_session_fit_and_shows_its_preview(widget, ssb):
     widget.upsample = "auto"
-    widget.request_json = json.dumps({"id": 0, **START, "committed": True})
+    widget._on_preview_message(widget, {"type": "ssb-preview", "request": {"id": 0, **START, "committed": True}}, [])
     assert (widget.fitted_C10_nm, widget.fitted_C12_nm, widget.fitted_phi12_deg) == (3.0, 1.0, pytest.approx(math.degrees(0.2)))
     assert widget.scan_detector_rotation_deg == widget.fitted_scan_detector_rotation_deg == 10.0
     assert (widget.scan_sampling_A, widget.object_sampling_A, widget.scan_rows, widget.scan_cols) == ([0.5, 0.5], [], SCAN, SCAN)
@@ -298,12 +298,12 @@ def test_native_regions_fit_joint_models_without_replacing_the_overview(tmp_path
         assert saved["local_tilt"]["fits"] == viewer.region_fits
         reference_sample = viewer.sample_json
         before = viewer.region_images["Region 1 · SSB"].copy()
-        viewer.request_json = json.dumps({
+        viewer._on_preview_message(viewer, {"type": "ssb-preview", "request": {
             "id": 100, "region_id": "region-1", "region_bounds": bounds,
             **fit["aberrations"], "C10_nm": fit["aberrations"]["C10_nm"] + 1,
             "sample": {"sample_tilt_mrad": fit["sample_tilt_mrad"],
                        "depth_spread_nm": fit["depth_spread_nm"]}, "committed": True,
-        })
+        }}, [])
         assert "error" not in json.loads(viewer.local_tilt_preview_json)
         assert viewer.ssb_parameters == reference and viewer.sample_json == reference_sample
         np.testing.assert_array_equal(_shown(viewer), overview)
@@ -331,14 +331,14 @@ def test_native_regions_fit_joint_models_without_replacing_the_overview(tmp_path
             other_fit = viewer.region_fits[other]
             other_image = viewer.region_images[f"{other_fit['label']} · SSB"]
             selected = viewer.region_fits[index]
-            viewer.request_json = json.dumps({
+            viewer._on_preview_message(viewer, {"type": "ssb-preview", "request": {
                 "id": 103 + index, "region_id": selected["id"],
                 "region_bounds": selected["bounds"], **selected["aberrations"],
                 "C10_nm": selected["aberrations"]["C10_nm"] + 1,
                 "sample": {"sample_tilt_mrad": selected["sample_tilt_mrad"],
                            "depth_spread_nm": selected["depth_spread_nm"]},
                 "committed": True,
-            })
+            }}, [])
             assert "error" not in json.loads(viewer.local_tilt_preview_json)
             assert viewer.region_fits[other] == other_fit
             np.testing.assert_array_equal(
@@ -380,11 +380,11 @@ def test_native_regions_fit_joint_models_without_replacing_the_overview(tmp_path
 
 
 def test_requests_flip_and_rotation_follow_the_session(widget, ssb):
-    widget.request_json = json.dumps({"id": 7, "C10_nm": 2.0, "C12_nm": 0.5, "phi12_deg": 30.0, "committed": True})
+    widget._on_preview_message(widget, {"type": "ssb-preview", "request": {"id": 7, "C10_nm": 2.0, "C12_nm": 0.5, "phi12_deg": 30.0, "committed": True}}, [])
     expected, loss = ssb.preview({"C10_nm": 2.0, "C12_nm": 0.5, "phi12_deg": 30.0}, compute_loss=True)
     np.testing.assert_array_equal(_shown(widget), expected)
     assert json.loads(widget.result_json)["loss"] == pytest.approx(loss)
-    widget.request_json = json.dumps({"id": 8, "C10_nm": 2.5, "C12_nm": 0.5, "phi12_deg": 30.0, "committed": False})
+    widget._on_preview_message(widget, {"type": "ssb-preview", "request": {"id": 8, "C10_nm": 2.5, "C12_nm": 0.5, "phi12_deg": 30.0, "committed": False}}, [])
     assert json.loads(widget.result_json)["loss"] is None                     # drags skip the variance pass
     widget.display_negate_phase = True
     np.testing.assert_array_equal(_shown(widget), -ssb.preview({"C10_nm": 2.5, "C12_nm": 0.5, "phi12_deg": 30.0}, compute_loss=False)[0])
@@ -399,25 +399,25 @@ def test_requests_flip_and_rotation_follow_the_session(widget, ssb):
     expected, _ = ssb.preview({"C10_nm": 2.5, "C12_nm": 0.5, "phi12_deg": 30.0}, compute_loss=False)
     np.testing.assert_array_equal(_shown(widget), -expected)
     assert json.loads(widget.result_json)["loss"] is None                     # drags skip the variance pass
-    widget.request_json = json.dumps({"id": 10, "C10_nm": 2.5, "C12_nm": 0.5, "phi12_deg": 30.0, "committed": True})
+    widget._on_preview_message(widget, {"type": "ssb-preview", "request": {"id": 10, "C10_nm": 2.5, "C12_nm": 0.5, "phi12_deg": 30.0, "committed": True}}, [])
     assert json.loads(widget.result_json)["loss"] is not None              # the release computes it
     # the request keys of the earlier release are not read under a second spelling
     with pytest.raises(KeyError, match="C10_nm"):
-        widget.request_json = json.dumps({"id": 11, "c10": 2.0, "c12": 0.5, "phi12_deg": 30.0, "committed": True})
+        widget._on_preview_message(widget, {"type": "ssb-preview", "request": {"id": 11, "c10": 2.0, "c12": 0.5, "phi12_deg": 30.0, "committed": True}}, [])
 
 
 def test_kernel_redraws_never_reuse_a_browser_request_id(widget):
-    widget.request_json = json.dumps({"id": 5, "C10_nm": 2.0, "C12_nm": 0.5, "phi12_deg": 30.0, "committed": True})
+    widget._on_preview_message(widget, {"type": "ssb-preview", "request": {"id": 5, "C10_nm": 2.0, "C12_nm": 0.5, "phi12_deg": 30.0, "committed": True}}, [])
     assert json.loads(widget.result_json)["id"] == 5
     widget.scan_detector_rotation_deg = 25.0                               # a redraw the kernel starts itself
     redraw = json.loads(widget.result_json)["id"]
     assert redraw < 0
     widget.scan_detector_rotation_deg = 26.0
     assert json.loads(widget.result_json)["id"] < redraw                   # each redraw has its own id
-    widget.request_json = json.dumps({"id": 6, "C10_nm": 3.0, "C12_nm": 0.5, "phi12_deg": 30.0, "committed": True})
+    widget._on_preview_message(widget, {"type": "ssb-preview", "request": {"id": 6, "C10_nm": 3.0, "C12_nm": 0.5, "phi12_deg": 30.0, "committed": True}}, [])
     assert json.loads(widget.result_json)["id"] == 6
     # a browser request older than one already answered is late: the newer intent stays on screen
-    widget.request_json = json.dumps({"id": 4, "C10_nm": 9.0, "C12_nm": 0.5, "phi12_deg": 30.0, "committed": True})
+    widget._on_preview_message(widget, {"type": "ssb-preview", "request": {"id": 4, "C10_nm": 9.0, "C12_nm": 0.5, "phi12_deg": 30.0, "committed": True}}, [])
     assert json.loads(widget.result_json)["id"] == 6 and json.loads(widget.result_json)["C10_nm"] == 3.0
 
 
@@ -441,7 +441,7 @@ def test_higher_order_panel_switches_to_the_full_kernel():
     # phi12 in float32, which changed the last bits of most pixels for coefficients float32 cannot hold exactly
     widget.higher_order_aberrations_json = json.dumps({"C21_nm": 0.0, "phi21_deg": 45.0})
     displayed = {"C10_nm": -26.259025251007465, "C12_nm": 6.41328169139375, "phi12_deg": 63.473910926518215}
-    widget.request_json = json.dumps({"id": 3, **displayed, "committed": True})
+    widget._on_preview_message(widget, {"type": "ssb-preview", "request": {"id": 3, **displayed, "committed": True}}, [])
     np.testing.assert_array_equal(_shown(widget), ssb.preview(displayed, compute_loss=True)[0])
     if ssb.backend == "cuda":
         widget.upsample = "auto"
@@ -511,20 +511,20 @@ def test_joint_fit_reference_survives_manual_optics_and_sample_adjustments(widge
     assert json.loads(widget.fitted_sample_json) == sample
     assert (widget.fitted_C10_nm, widget.fitted_C12_nm, widget.fitted_phi12_deg) == (
         reference["C10_nm"], reference["C12_nm"], reference["phi12_deg"])
-    widget.request_json = json.dumps({"id": 20, **reference, "sample": sample, "committed": True})
+    widget._on_preview_message(widget, {"type": "ssb-preview", "request": {"id": 20, **reference, "sample": sample, "committed": True}}, [])
     fitted_phase = _shown(widget).copy()
-    widget.request_json = json.dumps({
+    widget._on_preview_message(widget, {"type": "ssb-preview", "request": {
         "id": 21, **reference, "C10_nm": reference["C10_nm"] + 2,
         "sample": {"sample_tilt_mrad": [5, -3], "depth_spread_nm": 9}, "committed": True,
-    })
+    }}, [])
     assert json.loads(widget.fitted_sample_json) == sample
     assert not np.array_equal(_shown(widget), fitted_phase)
-    widget.request_json = json.dumps({"id": 22, **reference, "sample": sample, "committed": True})
+    widget._on_preview_message(widget, {"type": "ssb-preview", "request": {"id": 22, **reference, "sample": sample, "committed": True}}, [])
     np.testing.assert_array_equal(_shown(widget), fitted_phase)
 
 
 def test_save_writes_the_calibration_and_mirrors_it_onto_the_session(widget, ssb, tmp_path):
-    widget.request_json = json.dumps({"id": 1, "C10_nm": -4.0, "C12_nm": 0.25, "phi12_deg": 12.0, "committed": True})
+    widget._on_preview_message(widget, {"type": "ssb-preview", "request": {"id": 1, "C10_nm": -4.0, "C12_nm": 0.25, "phi12_deg": 12.0, "committed": True}}, [])
     widget.notes = "lamella A"
     widget.save_trigger += 1
     assert widget.calibration_path == str(tmp_path / "calibration.json") and widget.calibration_saved_at
@@ -549,7 +549,7 @@ def test_save_writes_the_calibration_and_mirrors_it_onto_the_session(widget, ssb
 
 def test_save_calibration_writes_what_the_save_button_writes(widget, ssb, tmp_path):
     # a notebook had no public Save: it had to bump the button's trait, viewer.save_trigger += 1
-    widget.request_json = json.dumps({"id": 1, "C10_nm": -4.0, "C12_nm": 0.25, "phi12_deg": 12.0, "committed": True})
+    widget._on_preview_message(widget, {"type": "ssb-preview", "request": {"id": 1, "C10_nm": -4.0, "C12_nm": 0.25, "phi12_deg": 12.0, "committed": True}}, [])
     path = widget.save_calibration()
     assert path == (tmp_path / "calibration.json").resolve() and widget.calibration_status == "Saved calibration and phase PNG"
     by_call = json.loads(path.read_text())
@@ -567,7 +567,7 @@ def test_save_calibration_writes_what_the_save_button_writes(widget, ssb, tmp_pa
 
 def test_save_writes_the_displayed_phase_beside_the_calibration(widget, tmp_path):
     # Save kept only calibration.json, so the reviewed image was lost; the PNG takes the browser's colormap and window
-    widget.request_json = json.dumps({"id": 1, "C10_nm": -4.0, "C12_nm": 0.25, "phi12_deg": 12.0, "committed": True})
+    widget._on_preview_message(widget, {"type": "ssb-preview", "request": {"id": 1, "C10_nm": -4.0, "C12_nm": 0.25, "phi12_deg": 12.0, "committed": True}}, [])
     phase = _shown(widget)
     widget.cmap, widget.vmin, widget.vmax = "gray", float(np.percentile(phase, 5)), float(np.percentile(phase, 95))
     widget.save_trigger += 1
@@ -677,7 +677,7 @@ def test_freezing_keeps_the_saved_phase_without_owning_the_session(widget, ssb):
 def test_pins_star_view_and_unpin(widget, tmp_path):
     first = _shown(widget).copy()
     widget.pin_json = json.dumps({"action": "pin", "id": "a", "C10_nm": 3.0, "C12_nm": 1.0, "phi12_deg": 11.0, "loss": 0.1})
-    widget.request_json = json.dumps({"id": 2, "C10_nm": 0.0, "C12_nm": 0.0, "phi12_deg": 0.0, "committed": True})
+    widget._on_preview_message(widget, {"type": "ssb-preview", "request": {"id": 2, "C10_nm": 0.0, "C12_nm": 0.0, "phi12_deg": 0.0, "committed": True}}, [])
     widget.pin_json = json.dumps({"action": "pin", "id": "b", "C10_nm": 0.0, "C12_nm": 0.0, "phi12_deg": 0.0, "loss": 0.2})
     second = _shown(widget).copy()
     assert repr(widget).startswith("ShowPtycho(2 pinned")
@@ -693,7 +693,7 @@ def test_pins_star_view_and_unpin(widget, tmp_path):
     widget.pin_json = json.dumps({"action": "view", "id": "a"})
     np.testing.assert_array_equal(_shown(widget), first)
     assert json.loads(widget.result_json)["C10_nm"] == 3.0
-    widget.request_json = json.dumps({"id": 3, "C10_nm": 0.0, "C12_nm": 0.0, "phi12_deg": 0.0, "committed": True})
+    widget._on_preview_message(widget, {"type": "ssb-preview", "request": {"id": 3, "C10_nm": 0.0, "C12_nm": 0.0, "phi12_deg": 0.0, "committed": True}}, [])
     np.testing.assert_array_equal(_shown(widget), second)
     widget.pin_json = json.dumps({"action": "unpin", "id": "a"})
     assert json.loads((tmp_path / "showptycho_stars.json").read_text()) == {"schema": "quantem.ssb-stars/5", "stars": []}
@@ -935,7 +935,7 @@ def test_crop_and_refit_keeps_the_acquisition_and_reopens_as_a_scan_region_sessi
             assert record["scan_region"] == list(region)
             assert record["session_identity"]["data"]["scan_region"] == list(region)
             viewer.upsample = 1
-            viewer.request_json = json.dumps({"id": 1, **START, "committed": True})
+            viewer._on_preview_message(viewer, {"type": "ssb-preview", "request": {"id": 1, **START, "committed": True}}, [])
             expected = _shown(viewer).copy()
             crop_tilt = tuple(json.loads(viewer.sample_json)["sample_tilt_mrad"])
             crop_aberrations = {**viewer._ssb.state()["aberrations"], **START}
@@ -1196,7 +1196,7 @@ def test_auto_sampling_matches_core_and_save_keeps_resolved_factor(widget, ssb, 
                                     compute_loss=committed)
         np.testing.assert_array_equal(_shown(widget), expected)
         assert json.loads(widget.result_json)["loss"] == loss
-    widget.request_json = json.dumps({"id": 103, **START, "committed": True})
+    widget._on_preview_message(widget, {"type": "ssb-preview", "request": {"id": 103, **START, "committed": True}}, [])
     widget.save_trigger += 1
     saved = json.loads(Path(widget.calibration_path).read_text())
     assert saved["upsample"] == factor and saved["upsample_mode"] == "auto"
@@ -1244,7 +1244,7 @@ def test_local_ssb_results_follow_current_optics_without_replacing_the_session(s
     before = viewer.phase_bytes
     parameters = viewer.ssb_parameters
     changed = {**parameters['aberrations'], 'C10_nm': parameters['aberrations']['C10_nm'] + 2}
-    viewer.request_json = json.dumps({'id': 918, **changed, 'committed': True})
+    viewer._on_preview_message(viewer, {"type": "ssb-preview", "request": {'id': 918, **changed, 'committed': True}}, [])
     assert viewer.phase_bytes != before
     assert viewer.ssb_parameters['aberrations'] == changed
     assert viewer.local_tilt_stale
@@ -1269,7 +1269,7 @@ def test_interaction_uses_all_bf_pixels(ssb, tmp_path, monkeypatch):
     monkeypatch.setattr(ssb, 'preview_context', no_subset)
     viewer = ShowPtycho(ssb, save_dir=tmp_path)
     parameters = {**viewer.ssb_parameters['aberrations'], 'C10_nm': 5.0}
-    viewer.request_json = json.dumps({'id': 919, **parameters, 'committed': False})
+    viewer._on_preview_message(viewer, {"type": "ssb-preview", "request": {'id': 919, **parameters, 'committed': False}}, [])
     expected, _ = ssb.preview(parameters, upsample=viewer.auto_upsample,
                               compute_loss=False, **json.loads(viewer.sample_json))
     np.testing.assert_array_equal(_shown(viewer), expected)
@@ -1288,10 +1288,10 @@ def test_tilt_drag_and_release_reconstruct_one_complete_state(widget, ssb, monke
     sample = {"sample_tilt_mrad": [3.0, -4.0], "depth_spread_nm": 12.0}
     higher = {"C30_nm": 100.0}
     for request_id, committed in enumerate((False, True), start=1):
-        widget.request_json = json.dumps({
+        widget._on_preview_message(widget, {"type": "ssb-preview", "request": {
             "id": request_id, **START, "sample": sample,
             "higher_order": higher, "committed": committed,
-        })
+        }}, [])
         assert len(calls) == request_id
         expected, loss = preview({**START, **higher}, compute_loss=committed, **sample)
         np.testing.assert_array_equal(_shown(widget), expected)
@@ -1369,10 +1369,10 @@ def test_restart_restores_the_complete_saved_full_field_without_refitting(tmp_pa
         viewer = ShowPtycho(ssb, save_dir=tmp_path)
         viewer.upsample = 2
         viewer.scan_detector_rotation_deg = 12
-        viewer.request_json = json.dumps({
+        viewer._on_preview_message(viewer, {"type": "ssb-preview", "request": {
             "id": 1, **START, "sample": {"sample_tilt_mrad": [3, -4], "depth_spread_nm": 12},
             "higher_order": {"C30_nm": 2}, "committed": True,
-        })
+        }}, [])
         viewer.display_negate_phase = True
         viewer.notes = "Reviewed full field"
         viewer.local_tilt_max_columns = 2
@@ -1465,7 +1465,7 @@ def test_a_saved_fit_restores_after_its_data_folder_moves_and_names_no_absolute_
     with gpu.DirectPtycho.open(str(folder / "scan.npy"), **calibration) as ssb:
         viewer = ShowPtycho(ssb, save_dir=folder)
         viewer.upsample = 1
-        viewer.request_json = json.dumps({"id": 1, **START, "committed": True})
+        viewer._on_preview_message(viewer, {"type": "ssb-preview", "request": {"id": 1, **START, "committed": True}}, [])
         expected = _shown(viewer).copy()
         viewer.save_trigger += 1
         viewer.pin_json = json.dumps({"action": "pin", "id": "a", **START, "loss": 0.1})
@@ -1559,7 +1559,7 @@ def test_a_save_made_after_a_180_degree_move_reopens_at_the_launch_rotation(tmp_
         ssb.set_rotation(moved)  # where aberrations()' 180-degree check leaves it
         viewer = ShowPtycho(ssb, save_dir=tmp_path)
         viewer.upsample = 1
-        viewer.request_json = json.dumps({"id": 1, **START, "committed": True})
+        viewer._on_preview_message(viewer, {"type": "ssb-preview", "request": {"id": 1, **START, "committed": True}}, [])
         expected = _shown(viewer).copy()
         viewer.save_trigger += 1
         viewer.close()
@@ -1600,7 +1600,7 @@ def test_a_scan_region_session_saves_a_calibration_it_reopens(tmp_path, monkeypa
             assert ssb.input_scan_shape == (96, 96)
             viewer = ShowPtycho(ssb, save_dir=tmp_path)
             viewer.upsample = 1
-            viewer.request_json = json.dumps({"id": 1, **START, "committed": True})
+            viewer._on_preview_message(viewer, {"type": "ssb-preview", "request": {"id": 1, **START, "committed": True}}, [])
             expected = _shown(viewer).copy()
             record = viewer.calibration()
             assert (record["scan_region"], record["scan_shape"]) == (list(region), [96, 96])
@@ -1641,7 +1641,7 @@ def test_the_propagator_tilt_of_a_flipped_session_follows_the_detector_axes(tmp_
                      scan_detector_rotation_flipped=flipped) as ssb:
             viewer = ShowPtycho(ssb, save_dir=tmp_path)
             viewer.upsample = 1
-            viewer.request_json = json.dumps({"id": 1, **START, "sample": sample, "committed": True})
+            viewer._on_preview_message(viewer, {"type": "ssb-preview", "request": {"id": 1, **START, "sample": sample, "committed": True}}, [])
             assert viewer.calibration()["propagator_tilt_mrad"] == pytest.approx(expected)
             viewer.save_trigger += 1
             saved = json.loads((tmp_path / "calibration.json").read_text())
@@ -1663,8 +1663,8 @@ def test_calibration_returns_the_record_save_writes(tmp_path):
     with gpu.DirectPtycho.open(str(source), voltage_kV=300, semiangle_mrad=20, scan_sampling_A=(0.5, 0.5),
                       detector_sampling_mrad=(5, 5), aberrations=START, scan_detector_rotation_deg=10.0) as ssb:
         viewer = ShowPtycho(ssb, save_dir=tmp_path)
-        viewer.request_json = json.dumps({"id": 1, **START, "sample": {"sample_tilt_mrad": [3, -4], "depth_spread_nm": 12},
-                                          "committed": True})
+        viewer._on_preview_message(viewer, {"type": "ssb-preview", "request": {"id": 1, **START, "sample": {"sample_tilt_mrad": [3, -4], "depth_spread_nm": 12},
+                                          "committed": True}}, [])
         record = viewer.calibration()
         viewer.save_trigger += 1
         saved = json.loads((tmp_path / "calibration.json").read_text())
@@ -1700,7 +1700,7 @@ def test_the_tutorial_order_reopens_the_save_and_reconstruct_keeps_it(tmp_path, 
         restored = {**fitted, **reviewed}
         viewer = ssb.show(save_dir=tmp_path)
         viewer.upsample = 1
-        viewer.request_json = json.dumps({"id": 1, **reviewed, "committed": True})
+        viewer._on_preview_message(viewer, {"type": "ssb-preview", "request": {"id": 1, **reviewed, "committed": True}}, [])
         expected = _shown(viewer).copy()
         viewer.save_trigger += 1
         viewer.close()
@@ -1723,7 +1723,7 @@ def test_the_tutorial_order_reopens_the_save_and_reconstruct_keeps_it(tmp_path, 
     (tmp_path / "calibration.json").unlink()
     with gpu.io.load(str(source)) as data, gpu.DirectPtycho(data, **calibration) as ssb:
         viewer = ssb.show(save_dir=tmp_path)  # nothing saved yet, nothing fitted
-        viewer.request_json = json.dumps({"id": 2, **reviewed, "committed": True})
+        viewer._on_preview_message(viewer, {"type": "ssb-preview", "request": {"id": 2, **reviewed, "committed": True}}, [])
         viewer.save_trigger += 1
         assert dict(ssb.run().aberrations) == reviewed and not searches  # Save stated them as known
         viewer.close()
@@ -1824,10 +1824,10 @@ def test_calibration_snapshot_selects_current_joint_region_independently(ssb, tm
     overview = viewer.calibration()
     lower = viewer.calibration("Lower")
     viewer.local_tilt_active_region = "b"
-    viewer.request_json = json.dumps({
+    viewer._on_preview_message(viewer, {"type": "ssb-preview", "request": {
         "id": 701, "region_id": "a", "region_bounds": fits[0]["bounds"],
         **START, "C10_nm": 5., "sample": {
-            "sample_tilt_mrad": [4., -2.], "depth_spread_nm": 12.}, "committed": True})
+            "sample_tilt_mrad": [4., -2.], "depth_spread_nm": 12.}, "committed": True}}, [])
     upper = viewer.calibration("a")
     assert upper["aberrations"]["C10_nm"] == 5.
     assert upper["sample_tilt_mrad"] == [4., -2.]
@@ -1928,7 +1928,7 @@ def test_calibration_loss_is_the_saved_accepted_model_loss(widget):
     """Neither the zero-tilt comparison nor a drag without a loss changes the handoff loss."""
     widget.sample_json = json.dumps({"sample_tilt_mrad": [3.0, -4.0], "depth_spread_nm": 12.0})
     widget.tilt_correction = False
-    widget.request_json = json.dumps({"id": 40, **START, "C10_nm": 2.5, "committed": False})
+    widget._on_preview_message(widget, {"type": "ssb-preview", "request": {"id": 40, **START, "C10_nm": 2.5, "committed": False}}, [])
     assert json.loads(widget.result_json)["loss"] is None
     record = widget.calibration()
     widget.save_trigger += 1
@@ -2034,10 +2034,10 @@ def test_restore_request_applies_complete_model_before_one_reconstruction(monkey
         reconstructed.append((request_id, optics, compute_loss, viewer.tilt_correction,
                               json.loads(viewer.higher_order_aberrations_json), json.loads(viewer.sample_json)))
     monkeypatch.setattr(viewer, "_reconstruct", reconstruct)
-    viewer._on_request({"new": json.dumps({
+    viewer._on_request({
         "id": 1, **START, "higher_order": {"C30_nm": 1500.0}, "sample": sample,
         "tilt_correction": True, "scan_detector_rotation_deg": 20.0, "committed": True,
-    })})
+    })
     assert reconstructed == [(1, START, True, True, {"C30_nm": 1500.0}, sample)]
     assert rotations == [20.0]
     viewer.close()
@@ -2134,10 +2134,10 @@ def test_regularized_review_uses_direct_solver_and_restores_its_method(tmp_path)
         for index, (method, strength, amplitude) in enumerate([
             ("phase", 0.03, 0.03), ("phase", 0.07, 0.03), ("complex", 0.07, 0.15),
         ], start=1):
-            viewer._on_request({"new": json.dumps({
+            viewer._on_request({
                 "id": index, **START, "method": method, "phase_damp": strength,
                 "amplitude_damp": amplitude, "committed": False,
-            })})
+            })
             requested = {"method": method, "phase_damp": strength,
                          "smoothness_inv_A": 1.0, "upsample": viewer._output_factor}
             if method == "complex":
@@ -2150,10 +2150,10 @@ def test_regularized_review_uses_direct_solver_and_restores_its_method(tmp_path)
         sent = []
         viewer.send_state = lambda key=None: sent.append(set(key or ()))
         for strength in (0.05, 0.07):
-            viewer._on_request({"new": json.dumps({
+            viewer._on_request({
                 "id": 10, **START, "method": "complex", "phase_damp": strength,
                 "amplitude_damp": 0.15, "committed": False,
-            })})
+            })
             assert viewer.phase_damp == strength
         sent = [keys for keys in sent if keys]
         assert sent and all("phase_bytes" in keys and "phase_damp" not in keys for keys in sent)
@@ -2250,9 +2250,9 @@ def test_restored_ssb_review_can_select_regularized_method(tmp_path):
         original.close()
         restored = ShowPtycho(ptycho, save_dir=tmp_path)
         assert restored.method == "phase_of_mean"
-        restored._on_request({"new": json.dumps({
+        restored._on_request({
             "id": 1, **START, "method": "phase", "committed": False,
-        })})
+        })
         reply = json.loads(restored.result_json)
         assert reply["method"] == "phase" and "error" not in reply
         restored.close()
@@ -2269,7 +2269,7 @@ def test_interactive_review_scores_only_when_requested(ssb, tmp_path, monkeypatc
 
     monkeypatch.setattr(ssb, "preview", observed_preview)
     viewer = ShowPtycho(ssb, save_dir=tmp_path, restore=False)
-    viewer.request_json = json.dumps({"id": 3, **START, "committed": True})
+    viewer._on_preview_message(viewer, {"type": "ssb-preview", "request": {"id": 3, **START, "committed": True}}, [])
     unscored = _shown(viewer).copy()
     assert requests and not any(requests)
     assert not (tmp_path / "calibration.json").exists()
@@ -2278,7 +2278,7 @@ def test_interactive_review_scores_only_when_requested(ssb, tmp_path, monkeypatc
     assert not any(requests)
     assert json.loads((tmp_path / "calibration.json").read_text())["loss"] is None
     viewer.compute_loss = True
-    viewer.request_json = json.dumps({"id": 4, **START, "committed": True})
+    viewer._on_preview_message(viewer, {"type": "ssb-preview", "request": {"id": 4, **START, "committed": True}}, [])
     assert requests[-1] is True
     assert json.loads(viewer.result_json)["loss"] is not None
     np.testing.assert_array_equal(_shown(viewer), unscored)

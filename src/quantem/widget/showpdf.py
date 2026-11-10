@@ -447,7 +447,7 @@ class ShowPDF(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidget.A
     # =========================================================================
     # Version
     # =========================================================================
-    widget_version = traitlets.Unicode("unknown").tag(sync=True)
+    widget_version = traitlets.Unicode("unknown")
 
     # =========================================================================
     # Shape and data (read-only from JS)
@@ -456,8 +456,8 @@ class ShowPDF(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidget.A
     scan_rows = traitlets.Int(1).tag(sync=True)
     scan_cols = traitlets.Int(1).tag(sync=True)
     nav_image_bytes = traitlets.Bytes(b"").tag(sync=True)
-    nav_data_min = traitlets.Float(0.0).tag(sync=True)
-    nav_data_max = traitlets.Float(1.0).tag(sync=True)
+    nav_data_min = traitlets.Float(0.0)
+    nav_data_max = traitlets.Float(1.0)
     # Scan calibration of the nav scale bar: the dataset's first axis in Å (nm converted),
     # else 1 px.
     nav_pixel_size = traitlets.Float(1.0).tag(sync=True)
@@ -467,7 +467,7 @@ class ShowPDF(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidget.A
     # Painted mask (JS paints, Python reads): 1 includes a scan position and
     # 0 excludes it, as in calculate_radial_mean
     # =========================================================================
-    mask_bytes = traitlets.Bytes(b"").tag(sync=True)  # raw uint8 copy of mask_b64 (Python only)
+    mask_bytes = traitlets.Bytes(b"")  # raw uint8 copy of mask_b64 (Python only)
     mask_b64 = traitlets.Unicode("").tag(sync=True)  # the mask from JS, base64 uint8
     mask_version = traitlets.Int(0).tag(sync=True)  # JS increments it to trigger a recompute
     mask_tool = traitlets.Unicode("rectangle").tag(sync=True)
@@ -521,20 +521,20 @@ class ShowPDF(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidget.A
     ik_x_bytes = traitlets.Bytes(b"").tag(sync=True)
     ik_y_bytes = traitlets.Bytes(b"").tag(sync=True)
     ik_bg_y_bytes = traitlets.Bytes(b"").tag(sync=True)
-    n_points_ik = traitlets.Int(0).tag(sync=True)
+    n_points_ik = traitlets.Int(0)
     # F(k) after the k window, the curve the sine transform uses (damped when the low-r
     # correction ran)
     fk_x_bytes = traitlets.Bytes(b"").tag(sync=True)
     fk_y_bytes = traitlets.Bytes(b"").tag(sync=True)
-    n_points_fk = traitlets.Int(0).tag(sync=True)
+    n_points_fk = traitlets.Int(0)
     # G(r) reduced PDF
     gr_x_bytes = traitlets.Bytes(b"").tag(sync=True)
     gr_y_bytes = traitlets.Bytes(b"").tag(sync=True)
-    n_points_gr = traitlets.Int(0).tag(sync=True)
+    n_points_gr = traitlets.Int(0)
     # g(r) pair distribution function
     pdf_x_bytes = traitlets.Bytes(b"").tag(sync=True)
     pdf_y_bytes = traitlets.Bytes(b"").tag(sync=True)
-    n_points_pdf = traitlets.Int(0).tag(sync=True)
+    n_points_pdf = traitlets.Int(0)
 
     # =========================================================================
     # Standalone export data, set in the exported state only. offline_qq is the

@@ -258,7 +258,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     folder_watch_detail = traitlets.Unicode("").tag(sync=True)
     # Live acquisition: the diffraction pattern follows the newest arrived pattern, except while the user
     # interacts and for STREAM_FOLLOW_PAUSE_S after (drag the probe, let go, and it returns to the newest).
-    stream_follow = traitlets.Bool(True).tag(sync=True)
+    stream_follow = traitlets.Bool(True)
     pos_row = traitlets.Int(0).tag(sync=True)
     pos_col = traitlets.Int(0).tag(sync=True)
     shape_rows = traitlets.Int(1).tag(sync=True)
