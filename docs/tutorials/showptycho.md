@@ -84,7 +84,7 @@ before or after the fit.
 
 The standard workflow uses 200 initial TPE trials, then quantem.gpu's joint
 exact-gradient refinement through fifth-order aberrations with sample tilt and depth.
-`fit_aberrations(search="broad")` adds higher-order exploration.
+`aberrations(search="broad")` adds higher-order exploration.
 
 quantem fits SSB aberrations with a physical model of the measurement, not an image-quality score. For each trial
 set of aberrations, and the sample's tilt and thickness, it predicts the double-overlap data the detector should have
@@ -93,14 +93,14 @@ model-based, tilt-corrected fit is the default everywhere, and it is where SSB i
 
 | Call | Method | Use it for |
 |---|---|---|
-| `fit_aberrations()` | model-based, tilt-corrected | the default: every fit |
-| `fit_aberrations(search="primary", tilt=False)` | model-based, tilt held at 0 | thin, untilted samples, or to see what tilt correction changes |
+| `aberrations()` | model-based, tilt-corrected | the default: every fit |
+| `aberrations(search="primary", tilt=False)` | model-based, tilt held at 0 | thin, untilted samples, or to see what tilt correction changes |
 
 ## Reconstruct
 
 ```python
 ptycho = DirectPtycho(data)
-fit = ptycho.reconstruct()
+fit = ptycho.run()
 ```
 
 `DirectPtycho(data)` estimates the angle between the scan and the detector. The
@@ -153,19 +153,19 @@ fit.report(show_convergence=True).T  # vertical table beneath the saved curve
 
 This reads the saved history without fitting again. Use `to_dict=True` separately
 when exporting the numerical report. Reporting adds no fit callbacks or image
-transfers. Use `fit_aberrations(show=False)` to disable the live phase preview.
+transfers. Use `aberrations(show=False)` to disable the live phase preview.
 The fitter still keeps its usual scalar history.
 
 Look at both branches yourself. These are the primary fits used to choose the
 rotation before fifth-order refinement. Fitting stays on the native scan grid;
-each branch's own fit is shown reconstructed at `upsampling="auto"`, the
+each branch's own fit is shown reconstructed at `upsample="auto"`, the
 smallest factor whose output grid holds the whole SSB bandwidth (4× for the
 0.5 Å gold step):
 
 ```python
 branches = fit.rotation_branches
-panels = branches.upsampled_phases()  # each branch's fit at upsampling="auto"
-factor = branches.upsampling
+panels = branches.upsampled_phases()  # each branch's fit at upsample="auto"
+factor = branches.upsample
 qw.Show2D(
     list(panels),
     labels=[f"{branch.scan_detector_rotation_deg:.1f}°, {factor}x auto" + (" kept" if index == branches.kept else "")
@@ -182,7 +182,7 @@ not a measurement: on crystals the preferred tail can change with the region, so
 check that a crop of the field agrees before you trust the angle. If you know
 the angle from your microscope, pass it: `DirectPtycho(data, scan_detector_rotation_deg=358)`.
 
-For an optional primary-only fit with custom bounds, call `fit_aberrations`
+For an optional primary-only fit with custom bounds, call `aberrations`
 before `run()`; reconstruction then reuses that fit. This replaces the
 standard fifth-order fit with the explicitly selected primary model:
 
@@ -191,7 +191,7 @@ search_ranges = {
     "C10_nm": (-30.0, 30.0),
     "C12_nm": (0.0, 20.0),
 }
-fit = ptycho.fit_aberrations(search="primary", search_ranges=search_ranges)
+fit = ptycho.aberrations(search="primary", search_ranges=search_ranges)
 ```
 
 These are the primary joint-fit defaults, written explicitly so you can edit them.
@@ -226,12 +226,12 @@ fine detail, so compare against SSB and retain the fitted model.
 
 ```python
 # Optional on CUDA: uncomment to compare with the conventional result.
-# phase = ptycho.reconstruct(method="phase", phase_damping=0.03,
-#                    upsampling="auto")
-# complex_result = ptycho.reconstruct(method="complex", phase_damping=0.03,
-#                            amplitude_damping=0.03,
-#                            upsampling="auto")
-# viewer = ShowPtycho(ptycho, method="phase", phase_damping=0.03,
+# phase = ptycho.run(method="phase", phase_damp=0.03,
+#                    upsample="auto")
+# complex_result = ptycho.run(method="complex", phase_damp=0.03,
+#                            amplitude_damp=0.03,
+#                            upsample="auto")
+# viewer = ShowPtycho(ptycho, method="phase", phase_damp=0.03,
 #                    restore=False)
 # viewer
 ```
@@ -354,7 +354,7 @@ First the thin-sheet model, `tilt=False`. Look at the FFT: are the lattice
 spots equally sharp in every direction?
 
 ```python
-ordinary = ptycho.fit_aberrations(search="primary", tilt=False, verbose=False)
+ordinary = ptycho.aberrations(search="primary", tilt=False, verbose=False)
 ptycho.show(show_fft=True)
 ```
 
@@ -363,7 +363,7 @@ use the same aberration order. The second fit also models tilt and depth spread.
 Compare: which spots sharpened, and did the defocus move?
 
 ```python
-tilted = ptycho.fit_aberrations(search="primary", tilt=True, verbose=False)
+tilted = ptycho.aberrations(search="primary", tilt=True, verbose=False)
 ptycho.show(show_fft=True)                 # opens on the fitted tilt; drag the Sample tilt sliders
 ```
 
@@ -404,7 +404,7 @@ and the model is standard SSB.
   update takes a few hundred ms on CUDA.
 
 See the [SSB API](https://bobleesj.github.io/quantem.gpu/api/ssb.html) for
-`fit_aberrations()` (tilt-corrected by default), `preview(sample_tilt_mrad=..., depth_spread_nm=...)` and the
+`aberrations()` (tilt-corrected by default), `preview(sample_tilt_mrad=..., depth_spread_nm=...)` and the
 evidence behind the defaults.
 
 ## Workflow checklist

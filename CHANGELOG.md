@@ -6,6 +6,41 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+### Renamed (no aliases)
+
+quantem.widget now uses quantem.gpu's names for direct ptychography. The old
+names are removed; nothing is accepted under two spellings.
+
+| Old | New | Where |
+|---|---|---|
+| `ShowPtycho(upsampling=)`, traits `upsampling`, `auto_upsampling`, `upsampling_available` | `upsample=`, `upsample`, `auto_upsample`, `upsample_available` | keyword, Python traits and browser model keys (the browser read the old keys after the Python traits had been renamed) |
+| `ShowPtycho(phase_damping=, amplitude_damping=)`, traits `phase_damping`, `amplitude_damping` | `phase_damp=`, `amplitude_damp=`, traits `phase_damp`, `amplitude_damp` | keyword, traits, browser requests |
+| `ShowPtycho(method="ssb")`, trait value `"ssb"` | `method="phase_of_mean"` | keyword and trait value (the menu label stays SSB) |
+| `DirectSession.fit_aberrations()`, `DirectSession.reconstruct` alias | `DirectSession.aberrations()`, `DirectSession.run()` | `quantem.widget.adapters.gpu` |
+| calls to quantem.gpu `SSB`, `fit_aberrations()`, `aberrations(num_trials=)`, `reconstruct()`, `session.aberrations`, `upsampling=`, `phase_damping=`, `amplitude_damping=`, `method="ssb"` | `DirectPtycho`, `aberrations()`, `aberrations(trials=)`, `run()`, `session.known_aberrations`, `upsample=`, `phase_damp=`, `amplitude_damp=`, `method="phase_of_mean"` | Show4DSTEM Compute SSB, ShowPtycho, tests, docs |
+| `quantem.gpu.optics.physics.ssb_upsampling_factor` | `ssb_upsample_factor` | docs and tests |
+| the adapter's private option translation (`_library_options`) | removed | widget options reach quantem.gpu unchanged |
+
+Saved records: ShowPtycho's `calibration.json` is `quantem.ssb-calibration/8`
+and `showptycho_stars.json` is `quantem.ssb-stars/5`. They name the output
+factor `upsample` with `upsample_mode`, the method `"phase_of_mean"` (in
+`reconstruction.method`, and in `reconstruction_method` of a file written by
+quantem.gpu's `save_calibration`), and the strengths `phase_damp` and
+`amplitude_damp`. ShowPtycho reads /8 only. Rewrite an earlier file once (the
+earlier file is kept as `<name>.before`):
+
+    python scripts/rewrite_ssb_calibration.py --dry-run path/to/calibration.json
+    python scripts/rewrite_ssb_calibration.py path/to/calibration.json path/to/showptycho_stars.json
+
+The script carries calibration /4 to /7 and stars /1 to /4 over (a /5
+calibration with a session identity needs its data beside it or `--data PATH`).
+No number changes. Show4DSTEM's Compute SSB record
+(`quantem.show4dstem-ssb-calibration/3`) and the exported
+`quantem.ssb-snapshots/2` and `quantem.ssb-browser-calibration/3` hold none of
+the renamed names and keep their versions.
+
+### Other changes
+
 - `Show3D.stream()` returns a viewer that grows by `view.append(image, label=...)`, and `Show2D.stream()` one whose images `view.update(images, labels)` replaces. Each call copies its images and returns; a worker thread sends only the new frame (Show3D) or the changed panels (Show2D), with Show4DSTEM.stream's limit of two transfers awaiting browser acknowledgment, so either may be called from a background thread while the notebook stays interactive. Show3D follows the newest frame unless the user moved to an earlier one and never drops a frame; Show2D coalesces so the newest update wins. Pixels stay native (`display_bin=1`).
 - ShowPtycho takes `phase_damping` and `amplitude_damping` (were `phase_regularization` and `amplitude_regularization`), the Tikhonov damping strengths of quantem.gpu's direct solve; the sliders read **Phase damping** and **Amplitude damping**. The synced traits are `phase_damping`, `amplitude_damping`, `upsampling` and `auto_upsampling` (were `phase_regularization`, `amplitude_regularization`, `upsampling_factor`, `auto_upsampling_factor`). The old keywords keep working with a `DeprecationWarning`; both spellings raise `TypeError`. `calibration.json` is `quantem.ssb-calibration/7` (key `upsampling`, damping strengths) and stars `quantem.ssb-stars/4`; a `/6` calibration still restores, and `scripts/rewrite_ssb_calibration.py` carries `/6` and stars `/3` over.
 - Removed dead code: ShowPtycho's legacy `num_drag_bright_field_pixels` trait (always the full bright-field count), and the adapter's unused `preview_context`, `reconstruct` alias and `SsbSession` alias (use `DirectSession`). Tests call quantem.gpu's `run()` instead of the deprecated `reconstruct()`.
