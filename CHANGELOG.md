@@ -59,6 +59,57 @@ and Show4DSTEM's Compute SSB record to `quantem.show4dstem-ssb-calibration/4`
 `quantem.ssb-snapshots/2` and `quantem.ssb-browser-calibration/3` hold none of
 the renamed names and keep their versions.
 
+### Renamed (no aliases), second pass
+
+| Old | New | Where |
+|---|---|---|
+| `Show2D(ncols=)`, trait `ncols`, state key `ncols` | `columns=`, trait `columns`, state key `columns` | keyword, Python trait and browser model key, `save()` files |
+| `Show3D(max_cols=)`, trait `max_cols`, state key `max_cols` | `columns=`, trait `columns`, state key `columns` | keyword, trait and model key, `save()` files |
+| `Show4DSTEM(compare_cols=)`, trait `compare_cols`, state key | `compare_columns=`, `compare_columns` | keyword, trait and model key, `save()` files, exported pages |
+| `ui_mode=` on Show1D, Show2D, Show3D and Show4DSTEM | `mode=` | keyword |
+| `free_gpu()` | `release_cached_memory()`, quantem.gpu's name | function |
+| `quantem show4dstem --out`, `quantem github --timeout` | `--save-dir`, `--timeout-s` | CLI flags |
+| `Show1D` snapshot labels: `trialKey`-keyed hide and star | hide only (`hidden_snapshot_image_labels`); `starred_snapshot_image_labels` removed | traits, state |
+
+### Removed
+
+- ShowCIF, ShowDiffraction (with `Phase` and `library_phase`) and ChooseLattice, their tutorials and API pages; the
+  `ase` and `scikit-image` dependencies and the `crystal` extra. The display filter has no `"nlm"` mode.
+- Show1D's trial review and monitor file: `from_monitor_file`, `watch_run`, `append_monitor_event`, `stop_monitor`,
+  `goto_snapshot`, `to_show2d`, the Review panel and its traits. `Show1D.live`, `append`, `extend` and `snapshot` stay.
+- Folder watching: `from_folder`, `watch_folder`, `poll_folder` and `stop_folder_watch` on Show2D, Show3D and
+  Show4DSTEM (with Show2D's item pages, trait `page_kind`), and `quantem show4dstem --watch`, `--watch-interval` and
+  `--scan-size`. `read_image_stack` still reads a folder once; `quantem show4dstem <folder>` writes a notebook that
+  opens every master it finds with `read_4dstem`.
+- `gpu_info` and `vram_status` (`quantem.widget.gpu`); quantem.live keeps its own copy.
+- ShowPDF's table of hints for removed constructor keywords; an unknown keyword raises the generic TypeError.
+- Python `Show2D.export_svg`; the Export menu's SVG is the one SVG writer.
+- `quantem.widget.io.metadata` (the dataset.yaml reader) and `io.hdf5_family.collect_hdf5_family`; `docs/api/load.md`.
+- ShowPtycho's `request_json` trait: slider requests arrive only as messages.
+- Synced traits no browser code read (ShowPDF `mask_bytes`, `n_points_*`, `nav_data_min/max`, `widget_version`;
+  Show4DSTEM `stream_follow`; ShowPtycho `calibration_image_path`, `local_tilt_can_reconstruct`) are plain Python
+  traits now.
+
+### Fixed
+
+- Show3D's magnifier lens indexed the colormap with rounding where the image truncates, so it could show the next
+  color entry; it now uses the display shader's float32 normalize and truncation.
+- Show4DSTEM ignored `fft_window` on the full-image FFT (it applied only to an ROI crop); the Hann window now applies
+  to both.
+
+### Saved records
+
+`save()` files are `quantem.widget-state/3`; the widgets read /3 only. A /2 file is carried over once (the earlier file
+is kept as `<name>.before`):
+
+    python scripts/rewrite_widget_state.py --dry-run path/to/view.json
+    python scripts/rewrite_widget_state.py path/to/view.json
+
+It renames `ncols`, `max_cols` and `compare_cols` and drops the keys of removed features (Show2D `folder_page_size`
+and `page_kind`, Show1D's review keys and `starred_snapshot_image_labels`). No number changes. A
+notebook's own saved widget state (`metadata.widgets`) holding `ncols` or `max_cols` is refreshed by running the
+notebook again.
+
 ### Other changes
 
 - `Show3D.stream()` returns a viewer that grows by `view.append(image, label=...)`, and `Show2D.stream()` one whose images `view.update(images, labels)` replaces. Each call copies its images and returns; a worker thread sends only the new frame (Show3D) or the changed panels (Show2D), with Show4DSTEM.stream's limit of two transfers awaiting browser acknowledgment, so either may be called from a background thread while the notebook stays interactive. Show3D follows the newest frame unless the user moved to an earlier one and never drops a frame; Show2D coalesces so the newest update wins. Pixels stay native (`display_bin=1`).
