@@ -140,7 +140,7 @@ def _session(scan: int = SCAN):
     """A real quantem.gpu SSB session at the START aberrations, or a skip on machines without CUDA or MPS."""
     gpu = pytest.importorskip("quantem.gpu", reason="an SSB session needs quantem.gpu: pip install quantem.widget[cuda] or [mps]")
     try:
-        pytest.importorskip("quantem.gpu.device").detect()
+        pytest.importorskip("quantem.gpu.device").resolve("auto")
     except RuntimeError as exc:
         pytest.skip(f"SSB needs CUDA or MPS: {exc}")
     return gpu.DirectPtycho(_counts(scan), voltage_kV=300.0, semiangle_mrad=20.0, scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5.0, 5.0),
@@ -757,12 +757,13 @@ def test_export_writes_the_browser_folder_from_exact_bf_counts(widget, ssb, tmp_
 @pytest.mark.parametrize("transposed", [False, True])
 def test_qem_export_reuses_the_acquisition_and_preserves_the_live_phase(ssb, tmp_path, monkeypatch, transposed):
     """A scientist can export an unchanged QEM session without another encode."""
-    from quantem.gpu import DirectPtycho, io
+    from quantem.gpu import DirectPtycho
 
     acquisition_dir = tmp_path / "acquisition"
     acquisition_dir.mkdir()
     path = acquisition_dir / "measured.qem"
-    io.save(path, _counts(), backend="cpu")  # portable synthetic reference file
+    from quantem.gpu.formats.qem.reference import save_array
+    save_array(path, _counts())  # portable synthetic reference file
     original_bytes = path.read_bytes()
     session = DirectPtycho.open(
         str(path), voltage_kV=300.0, semiangle_mrad=20.0,
@@ -855,8 +856,9 @@ def test_replaced_qem_header_falls_back_even_when_size_and_mtime_match(ssb, tmp_
 
     source, replacement = tmp_path / "scan.qem", tmp_path / "replacement.qem"
     counts = _counts()
-    io.save(source, counts, backend="cpu", metadata={"annotation": "alpha"})
-    io.save(replacement, counts, backend="cpu", metadata={"annotation": "bravo"})
+    from quantem.gpu.formats.qem.reference import save_array
+    save_array(source, counts, {"annotation": "alpha"})
+    save_array(replacement, counts, {"annotation": "bravo"})
     original_stat = source.stat()
     assert replacement.stat().st_size == original_stat.st_size
     assert source.read_bytes() != replacement.read_bytes()
@@ -962,7 +964,7 @@ def test_session_scale_bar_uses_the_column_scan_step():
     # D-1 (ShowPtycho): an SSB session gave the scale bar its row step; the array path uses the column.
     gpu = pytest.importorskip("quantem.gpu")
     try:
-        pytest.importorskip("quantem.gpu.device").detect()
+        pytest.importorskip("quantem.gpu.device").resolve("auto")
     except RuntimeError as exc:
         pytest.skip(f"SSB needs CUDA or MPS: {exc}")
     session = gpu.DirectPtycho(_counts(SCAN), voltage_kV=300.0, semiangle_mrad=20.0, scan_sampling_A=(0.5, 0.25), detector_sampling_mrad=(5.0, 5.0),

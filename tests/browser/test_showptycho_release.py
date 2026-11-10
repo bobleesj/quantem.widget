@@ -42,11 +42,11 @@ import numpy as np
 import quantem.gpu
 import quantem.widget
 from quantem.gpu import DirectPtycho, io
-from quantem.gpu.device import detect
+from quantem.gpu.device import resolve
 
 for package in (quantem.gpu, quantem.widget):
     assert "site-packages" in Path(package.__file__).resolve().parts, "Install wheels and unset PYTHONPATH"
-backend = detect()
+backend = resolve("auto")
 assert backend == {os.environ.get("QUANTEM_SSB_RELEASE_BACKEND", "mps" if os.sys.platform == "darwin" else "cuda")!r}
 data = io.load(os.environ['QUANTEM_SSB_RELEASE_SOURCE'], verbose=False)
 for name, value in {calibration!r}.items():

@@ -1173,7 +1173,7 @@ def _require_ssb() -> None:
     """Skip without quantem.gpu or without CUDA or MPS."""
     pytest.importorskip("quantem.gpu", reason="Compute SSB runs quantem.gpu")
     try:
-        pytest.importorskip("quantem.gpu.device").detect()
+        pytest.importorskip("quantem.gpu.device").resolve("auto")
     except RuntimeError as exc:
         pytest.skip(f"SSB needs CUDA or MPS: {exc}")
 
@@ -1518,7 +1518,7 @@ def test_compute_ssb_refuses_an_unknown_aberration_key():
     # an aberration under another name ({"C10": 5.0}) was dropped without a message and the phase reconstructed at C10 0
     pytest.importorskip("quantem.gpu", reason="the session that refuses the key is quantem.gpu's")
     try:
-        pytest.importorskip("quantem.gpu.device").detect()
+        pytest.importorskip("quantem.gpu.device").resolve("auto")
     except RuntimeError as exc:
         pytest.skip(f"SSB needs CUDA or MPS: {exc}")
     widget = Show4DSTEM(np.ones((128, 128, 4, 4), np.uint16), precompute_virtual_images=False, voltage_kV=300,

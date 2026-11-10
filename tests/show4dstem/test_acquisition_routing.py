@@ -111,22 +111,16 @@ def test_scan_region_of_an_acquisition_keeps_its_own_coordinates(tmp_path, read_
 
 
 @pytest.mark.parametrize("dtype", [np.uint16, np.float32])
-@pytest.mark.parametrize("kind", ["numpy", "torch cpu", "cpu acquisition"])
-def test_host_data_stays_on_the_cpu(tmp_path, dtype, kind):
-    """An array, a CPU tensor and a CPU load result all show the same numbers from the host."""
+@pytest.mark.parametrize("kind", ["numpy", "torch cpu"])
+def test_host_data_stays_on_the_cpu(dtype, kind):
+    """An array and a CPU tensor show the same numbers from the host (quantem.gpu loads onto a GPU only)."""
     values = _values(dtype)
-    if kind == "cpu acquisition":
-        if not gpu_adapter.available():
-            pytest.skip("a CPU load result comes from quantem.gpu")
-        np.save(tmp_path / "scan.npy", values)
-        data = gpu_adapter.gpu_io.load(tmp_path / "scan.npy", device="cpu", verbose=False)
-    else:
-        data = values if kind == "numpy" else torch.from_numpy(values)
+    data = values if kind == "numpy" else torch.from_numpy(values)
     widget = Show4DSTEM(data, device="cpu", precompute_virtual_images=False)
     try:
         assert widget._device.type == "cpu"
-        # only a load result is an acquisition; arrays and tensors reduce in the widget's own torch code
-        assert isinstance(widget._session(0), DenseSession) == (kind != "cpu acquisition")
+        # arrays and tensors reduce in the widget's own torch code
+        assert isinstance(widget._session(0), DenseSession)
         center, radius = bright_field_disk(_mean_pattern(values))
         assert (widget.bright_field_center_row_px, widget.bright_field_center_col_px, widget.bright_field_radius_px) == (*center, radius)
         np.testing.assert_array_equal(widget.virtual_image(), _image(values, center, 0.0, radius))

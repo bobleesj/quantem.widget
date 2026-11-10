@@ -53,10 +53,10 @@ def accelerator_ready() -> bool:
     """Whether quantem.gpu can load files on this machine: installed, and a CUDA or Metal backend works."""
     if not available():
         return False
-    from quantem.gpu.device import detect
+    from quantem.gpu.device import resolve
 
     try:
-        detect()
+        resolve("auto")
     except RuntimeError:
         return False
     return True
