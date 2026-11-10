@@ -17,7 +17,7 @@ from quantem.widget import Show4DSTEM
 from quantem.widget.adapters import gpu as gpu_adapter
 from quantem.widget.adapters.gpu import AcquisitionView
 from quantem.widget.show4dstem.dense import DenseSession
-from quantem.widget.show4dstem.detector import detector_mask, fit_bright_field_disk
+from quantem.widget.show4dstem.detector import detector_mask, bright_field_disk
 
 SCAN, DET = (7, 9), (16, 16)
 
@@ -31,7 +31,7 @@ def _values(dtype) -> np.ndarray:
     return counts if dtype == np.uint16 else (counts / 8 + 0.125).astype(np.float32)
 
 
-def _mean_dp(values: np.ndarray) -> np.ndarray:
+def _mean_pattern(values: np.ndarray) -> np.ndarray:
     """The mean pattern rule: the float64 total divided once and rounded to float32."""
     return (values.reshape(-1, *DET).sum(axis=0, dtype=np.float64) / (values.shape[0] * values.shape[1])).astype(np.float32)
 
@@ -71,7 +71,7 @@ def test_gpu_acquisition_reduces_in_quantem_gpu_without_reading_the_scan(tmp_pat
     try:
         assert isinstance(widget._data, AcquisitionView) and widget._device.type in ("cuda", "mps")
         assert not isinstance(widget._session(0), DenseSession)
-        center, radius = fit_bright_field_disk(_mean_dp(values))
+        center, radius = bright_field_disk(_mean_pattern(values))
         assert (widget.bright_field_center_row_px, widget.bright_field_center_col_px, widget.bright_field_radius_px) == (*center, radius)
         np.testing.assert_allclose(widget.virtual_image(), _image(values, center, 0.0, radius), rtol=0 if dtype == np.uint16 else 1e-6)
         widget.apply_preset("adf")
@@ -79,7 +79,7 @@ def test_gpu_acquisition_reduces_in_quantem_gpu_without_reading_the_scan(tmp_pat
         widget.vi_roi_mode = "square"
         inside = (np.abs(np.arange(SCAN[0])[:, None] - widget.vi_roi_center_row) <= widget.vi_roi_radius) & (
             np.abs(np.arange(SCAN[1])[None, :] - widget.vi_roi_center_col) <= widget.vi_roi_radius)
-        np.testing.assert_array_equal(widget.vi_roi_pattern(), _mean_dp(values[inside][:, None]))
+        np.testing.assert_array_equal(widget.vi_roi_pattern(), _mean_pattern(values[inside][:, None]))
         widget.pos_row, widget.pos_col = SCAN[0] - 1, SCAN[1] - 1
         np.testing.assert_array_equal(widget.pattern(SCAN[0] - 1, SCAN[1] - 1), values[-1, -1])
         assert read_sizes and set(read_sizes) == {1}
@@ -100,7 +100,7 @@ def test_scan_region_of_an_acquisition_keeps_its_own_coordinates(tmp_path, read_
         widget = Show4DSTEM(loaded, scan_region=region)
         try:
             assert (widget.shape_rows, widget.shape_cols) == viewed.shape[:2]
-            center, radius = fit_bright_field_disk(_mean_dp(viewed))
+            center, radius = bright_field_disk(_mean_pattern(viewed))
             assert (widget.bright_field_center_row_px, widget.bright_field_center_col_px, widget.bright_field_radius_px) == (*center, radius)
             np.testing.assert_allclose(widget.virtual_image(), _image(viewed, center, 0.0, radius), rtol=0 if dtype == np.uint16 else 1e-6)
             widget.pos_row, widget.pos_col = 0, 5
@@ -119,7 +119,7 @@ def test_host_data_stays_on_the_cpu(tmp_path, dtype, kind):
         if not gpu_adapter.available():
             pytest.skip("a CPU load result comes from quantem.gpu")
         np.save(tmp_path / "scan.npy", values)
-        data = gpu_adapter.gpu_io.load(tmp_path / "scan.npy", backend="cpu", verbose=False)
+        data = gpu_adapter.gpu_io.load(tmp_path / "scan.npy", device="cpu", verbose=False)
     else:
         data = values if kind == "numpy" else torch.from_numpy(values)
     widget = Show4DSTEM(data, device="cpu", precompute_virtual_images=False)
@@ -127,7 +127,7 @@ def test_host_data_stays_on_the_cpu(tmp_path, dtype, kind):
         assert widget._device.type == "cpu"
         # only a load result is an acquisition; arrays and tensors reduce in the widget's own torch code
         assert isinstance(widget._session(0), DenseSession) == (kind != "cpu acquisition")
-        center, radius = fit_bright_field_disk(_mean_dp(values))
+        center, radius = bright_field_disk(_mean_pattern(values))
         assert (widget.bright_field_center_row_px, widget.bright_field_center_col_px, widget.bright_field_radius_px) == (*center, radius)
         np.testing.assert_array_equal(widget.virtual_image(), _image(values, center, 0.0, radius))
         widget.pos_row, widget.pos_col = 6, 8

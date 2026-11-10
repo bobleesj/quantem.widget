@@ -23,6 +23,9 @@ names are removed; nothing is accepted under two spellings.
 | quantem.gpu WebGPU engine option `upsampling`; the release-time loss sent `phaseEstimator: "mean_phase"` | `upsample`; the loss request sends `upsample: 1` and no estimator | `js/showptycho/engineAdapter.ts` (gpu-ref.txt pins the quantem.gpu commit with the new option) |
 | Show4DSTEM `compute_ssb(num_trials=)`, trait `ssb_compute_num_trials`, request and record key `num_trials` | `compute_ssb(trials=)`, `ssb_compute_trials`, `trials` | keyword, Python trait and browser model key, Compute SSB record |
 | ShowPtycho `fit_regions(num_trials=)`, `DirectSession.fit_regions(num_trials=)`, Crop+Refit request and regional fit record key `num_trials` | `trials=`, `trials` | keyword, browser requests and progress, `local_tilt` fit records |
+| calls to quantem.gpu `Dataset4dstemGPU`, `detector.fit_bright_field_disk`, `calibration.fit_detector_sampling()`, `session.mean_dp()`, `io.load(backend=)`, `detector.fit_probe` | `Dataset4dstem`, `detector.bright_field_disk`, `calibration.detector_sampling()`, `session.mean_pattern()`, `io.load(device=)`, `detector.bright_field_disk` | adapter, Show4DSTEM, docs and tests (gpu-ref.txt pins quantem.gpu 5496e33d) |
+| `adapters.gpu.fit_bright_field_disk`, `show4dstem.detector.fit_bright_field_disk`, the dense and encoded sessions' `mean_dp()` | `bright_field_disk`, `mean_pattern()` | widget internals that follow quantem.gpu |
+| `Show4DSTEM.from_folder(backend=)`, `adapters.gpu.load_acquisition(backend=)` | removed: `device=` | keyword |
 
 Removed (no replacement): ShowPtycho's `phase_estimator=` keyword (SSB has one
 estimator, the phase of the mean wave; the method is `method="phase_of_mean"`),
@@ -32,13 +35,18 @@ the restore path for a save naming the retired `"mean_phase"` or
 and `"nelder-mead"` for `refinement` (it takes `"auto"` or None). Each raises
 instead of printing a line.
 
+An installed quantem.gpu is imported without an `except ImportError`: a renamed or broken name now fails at import
+instead of reading as "quantem.gpu not installed", which had sent ShowPtycho sessions down the array path.
+
 Saved records: ShowPtycho's `calibration.json` is `quantem.ssb-calibration/8`
 and `showptycho_stars.json` is `quantem.ssb-stars/5`. They name the output
 factor `upsample` with `upsample_mode`, the method `"phase_of_mean"` (in
 `reconstruction.method`, and in `reconstruction_method` of a file written by
 quantem.gpu's `save_calibration`), and the strengths `phase_damp` and
 `amplitude_damp`; regional fit records name `trials`, and calibration /8 holds
-no `phase_estimator`. ShowPtycho reads /8 only. Rewrite an earlier file once (the
+no `phase_estimator`. ShowPtycho reads /8 only, with its one `reconstruction` dict (quantem.gpu's
+`save_calibration` writes the same dict now; a /8 file it wrote earlier with `reconstruction_method` beside
+`reconstruction_options` is folded into it by the rewrite script). Rewrite an earlier file once (the
 earlier file is kept as `<name>.before`):
 
     python scripts/rewrite_ssb_calibration.py --dry-run path/to/calibration.json

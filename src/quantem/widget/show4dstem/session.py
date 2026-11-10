@@ -32,7 +32,7 @@ class DetectorSessionSource(Protocol):
         """
         ...
 
-    def mean_dp(self):
+    def mean_pattern(self):
         """Return the mean of every diffraction pattern."""
         ...
 

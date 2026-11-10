@@ -34,7 +34,7 @@ viewer
 ```
 
 `read_4dstem(...)` keeps the counts encoded on CUDA or Apple Metal when
-quantem.gpu and a GPU are present (a `Dataset4dstemGPU`) and reads them into
+quantem.gpu and a GPU are present (a `Dataset4dstem`) and reads them into
 a quantem core `Dataset4dstem` elsewhere, so the cell runs on any machine.
 Leave `viewer` as the
 final line, then move through scan positions or drag the detector to update the

@@ -7,7 +7,9 @@ release of cached GPU memory.
 Without quantem.gpu every name below is None, ``available()`` is False and a
 function that needs it raises ``ImportError`` with the install command; the
 widgets then read files densely with ``show4dstem.reader`` and reduce with
-their own torch code.
+their own torch code. An installed quantem.gpu is imported unguarded: a name it
+renamed or a module it cannot import fails here, loudly, instead of reading as
+"not installed" and silently routing a session through the array path.
 """
 
 import math
@@ -18,22 +20,22 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from quantem.widget.device import device_name, gpu_path_hint, no_gpu_path, print_once
+from quantem.widget.device import device_name, gpu_path_hint, module_installed, no_gpu_path, print_once
 
-try:
+if module_installed("quantem.gpu"):
     from quantem.gpu import DirectPtycho
     from quantem.gpu import io as gpu_io
+    from quantem.gpu.detector import bright_field_disk as gpu_bright_field_disk
     from quantem.gpu.detector import disk_edge_radius as gpu_disk_edge_radius
-    from quantem.gpu.detector import fit_bright_field_disk as gpu_fit_bright_field_disk
     from quantem.gpu.detector import prepare
     from quantem.gpu.formats.qem.metadata import BRIGHT_FIELD_DISK_KEY, BRIGHT_FIELD_DISK_SCHEMA
     from quantem.gpu.device import release_cached_memory as gpu_release_cached_memory
     from quantem.gpu.device import runtime_notice as gpu_runtime_notice
     from quantem.gpu.dpc import run as gpu_dpc_run
-    from quantem.gpu.io import Dataset4dstemGPU
-except ImportError:
-    DirectPtycho = gpu_io = prepare = gpu_disk_edge_radius = gpu_fit_bright_field_disk = gpu_release_cached_memory = None
-    gpu_runtime_notice = gpu_dpc_run = Dataset4dstemGPU = BRIGHT_FIELD_DISK_KEY = BRIGHT_FIELD_DISK_SCHEMA = None
+    from quantem.gpu.io import Dataset4dstem
+else:
+    DirectPtycho = gpu_io = prepare = gpu_disk_edge_radius = gpu_bright_field_disk = gpu_release_cached_memory = None
+    gpu_runtime_notice = gpu_dpc_run = Dataset4dstem = BRIGHT_FIELD_DISK_KEY = BRIGHT_FIELD_DISK_SCHEMA = None
 
 
 def available() -> bool:
@@ -62,7 +64,7 @@ def accelerator_ready() -> bool:
 
 def is_acquisition(obj) -> bool:
     """Whether ``obj`` is an acquisition from ``quantem.gpu.io.load``."""
-    return available() and isinstance(obj, Dataset4dstemGPU)
+    return available() and isinstance(obj, Dataset4dstem)
 
 
 def is_ssb(obj) -> bool:
@@ -87,8 +89,7 @@ def announce_hot_pixels(record: dict | None) -> None:
                    '(hot_pixel_correction="none"); pass hot_pixel_correction="median" to replace them.')
 
 
-def load_acquisition(path, device: str | None = None, *, backend: str = "auto", scan_shape=None,
-                     hot_pixel_correction: str = "median"):
+def load_acquisition(path, device: str | None = None, *, scan_shape=None, hot_pixel_correction: str = "median"):
     """Load one master (or a list) into encoded GPU storage with ``quantem.gpu.io.load``.
 
     ``device`` is a ``resolve_device`` string passed through: ``"cuda:N"``
@@ -101,7 +102,7 @@ def load_acquisition(path, device: str | None = None, *, backend: str = "auto", 
     """
     require("Loading an acquisition on the GPU")
     loaded = gpu_io.load(
-        path, backend=backend, device=device, scan_shape=scan_shape,
+        path, device=device, scan_shape=scan_shape,
         hot_pixel_correction=hot_pixel_correction, verbose=False,
     )
     first = loaded[0] if isinstance(loaded, list) else loaded
@@ -113,14 +114,14 @@ def load_acquisition(path, device: str | None = None, *, backend: str = "auto", 
 
 
 def acquisition_from_tensor(values_t: torch.Tensor, metadata: dict):
-    """A ``Dataset4dstemGPU`` over a 4D tensor already on the GPU, with ``metadata`` as its calibration and name.
+    """A ``Dataset4dstem`` over a 4D tensor already on the GPU, with ``metadata`` as its calibration and name.
 
     quantem.gpu holds such a tensor as a dense acquisition: indexing, ``read``
     and its detector sessions work as on an encoded one, so a tensor computed
     on the GPU (a strided preview of a loaded file) keeps the GPU dataset type.
     """
     require("A GPU acquisition")
-    return Dataset4dstemGPU(values_t, dict(metadata))
+    return Dataset4dstem(values_t, dict(metadata))
 
 
 def discover_masters(folder, *, pattern: str = "*_master.h5", recursive: bool = True, scan_shape=None) -> list[str]:
@@ -165,18 +166,18 @@ def disk_edge_radius(mean_pattern) -> float:
     return float(gpu_disk_edge_radius(np.asarray(mean_pattern, dtype=np.float64)))
 
 
-def fit_bright_field_disk(mean_pattern) -> tuple[tuple[float, float], float]:
+def bright_field_disk(mean_pattern) -> tuple[tuple[float, float], float]:
     """Bright-field disk ``((center_row, center_col), edge_radius_px)`` of a mean pattern (``quantem.gpu.detector``).
 
-    quantem.gpu's one disk rule, the one ``data.calibration.fit_detector_sampling()`` records and SSB reads.
+    quantem.gpu's one disk rule, the one ``data.calibration.detector_sampling()`` records and SSB reads.
     """
     require("The bright-field disk fit")
-    fit = gpu_fit_bright_field_disk(np.asarray(mean_pattern, dtype=np.float64))
+    fit = gpu_bright_field_disk(np.asarray(mean_pattern, dtype=np.float64))
     return fit.bright_field_center_px, fit.bright_field_edge_radius_px
 
 
 def recorded_bright_field_disk(metadata) -> tuple[tuple[float, float], float] | None:
-    """The bright-field disk ``data.calibration.fit_detector_sampling()`` recorded: ``((row, col), edge_radius_px)``, or None."""
+    """The bright-field disk ``data.calibration.detector_sampling()`` recorded: ``((row, col), edge_radius_px)``, or None."""
     disk = (metadata or {}).get(BRIGHT_FIELD_DISK_KEY) if available() else None
     if not isinstance(disk, dict) or disk.get("schema") != BRIGHT_FIELD_DISK_SCHEMA:
         return None
@@ -734,7 +735,7 @@ class DirectSession:
 class AcquisitionView:
     """One acquisition, or a scan region of it, read in bounded windows.
 
-    ``source`` is a ``Dataset4dstemGPU`` from ``io.load`` or a 4D tensor on the
+    ``source`` is a ``Dataset4dstem`` from ``io.load`` or a 4D tensor on the
     GPU. ``quantem.gpu.detector.prepare`` recognises the marker attributes and
     sums virtual detectors on the encoded counts; reads return float32 with the
     detector pixels the source still flags (an acquisition loaded with

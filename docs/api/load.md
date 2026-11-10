@@ -1,7 +1,7 @@
 # Load detector acquisitions
 
 Reads a 4D-STEM acquisition onto CUDA or Apple Metal and returns an encoded
-`quantem.gpu.io.Dataset4dstemGPU`, accepted directly by
+`quantem.gpu.io.Dataset4dstem`, accepted directly by
 [`Show4DSTEM`](show4dstem). Public import:
 
 ```python
@@ -35,8 +35,8 @@ one acquisition per file.
 ## Backend (CUDA / Apple Silicon)
 
 `load` detects the native GPU automatically: an NVIDIA box loads onto **CUDA**
-and a Mac loads onto **Apple Metal (MPS)**. Pass `backend="cuda"` or
-`backend="mps"` to require one, and `device=` to choose a CUDA device.
+and a Mac loads onto **Apple Metal (MPS)**. Pass `device="cuda"`,
+`device="mps"` or a GPU number to require one.
 Scientific loading does not silently fall back to CPU.
 
 ```python
@@ -77,7 +77,7 @@ masters = [
     "/data/session/file_003_master.h5",
 ]
 
-acquisitions = load(masters)   # a list of Dataset4dstemGPU, one per master
+acquisitions = load(masters)   # a list of Dataset4dstem, one per master
 viewer = Show4DSTEM(acquisitions)
 ```
 
@@ -124,9 +124,10 @@ encoded storage without a dense copy:
 ```python
 from quantem.gpu import detector
 
-mean_dp = detector.mean(loaded)
-center, radius = detector.fit_probe(mean_dp)
-bright_field = detector.bf(loaded, bright_field_center_px=center, bright_field_radius_px=radius)
+mean_pattern = detector.mean(loaded)
+disk = detector.bright_field_disk(mean_pattern)
+bright_field = detector.bf(loaded, bright_field_center_px=disk.bright_field_center_px,
+                          bright_field_radius_px=disk.bright_field_radius_px)
 
 session = detector.prepare(loaded)   # repeated queries; a list of acquisitions also works
 ```

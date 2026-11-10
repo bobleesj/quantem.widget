@@ -61,12 +61,12 @@ data.calibration.scan_sampling_A = 0.5
 
 The bright-field disk is the image of the probe aperture, so its edge sits at
 the convergence semi-angle: the semi-angle divided by the disk's edge radius in
-pixels is the detector step in mrad per pixel. `fit_detector_sampling()` fits
+pixels is the detector step in mrad per pixel. `detector_sampling()` fits
 the disk on the mean pattern of the encoded scan and records the step, the disk
 centre and its edge radius on `data.calibration`; SSB and Show4DSTEM read them.
 
 ```python
-fit = data.calibration.fit_detector_sampling()
+fit = data.calibration.detector_sampling()
 fit.show()
 ```
 

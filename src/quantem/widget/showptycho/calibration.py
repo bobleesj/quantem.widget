@@ -29,14 +29,11 @@ def read_calibration(path: Path, identity: dict | None, scan_region: tuple[int, 
     if saved.get("scan_region") != [int(value) for value in scan_region]:
         raise ValueError(f"the saved fit covers scan region {saved.get('scan_region')}, "
                          f"not this session's {[int(value) for value in scan_region]}")
-    # ShowPtycho's Save writes "reconstruction"; quantem.gpu's DirectPtychoResult.save_calibration writes
-    # "reconstruction_method" beside "reconstruction_options" (empty for phase_of_mean)
-    reconstruction = dict(saved["reconstruction"] if "reconstruction" in saved else saved["reconstruction_options"])
-    method = reconstruction.setdefault("method", saved.get("reconstruction_method"))
+    # ShowPtycho's Save and quantem.gpu's DirectPtychoResult.save_calibration write one "reconstruction" dict
+    reconstruction = dict(saved["reconstruction"])
+    method = reconstruction.get("method")
     if method not in ("phase_of_mean", "phase", "complex"):
         raise ValueError("the saved reconstruction method is not supported")
-    if "reconstruction_method" in saved and saved["reconstruction_method"] != method:
-        raise ValueError("the saved reconstruction method and options disagree")
     if method != "phase_of_mean":
         allowed = {"method", "phase_damp", "smoothness_inv_A", "detector_weighting"}
         if method == "complex":

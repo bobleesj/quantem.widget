@@ -19,7 +19,7 @@ from quantem.widget.adapters import gpu as gpu_adapter
 from quantem.widget.colormap import colormap_lut, colormap_names
 from quantem.widget.counts import count_bound, detector_bin_mean, exact_max, exact_sum, int32_block_max, int32_block_sum
 from quantem.widget.show4dstem.dense import DenseSession
-from quantem.widget.show4dstem.detector import detector_mask, fit_bright_field_disk
+from quantem.widget.show4dstem.detector import detector_mask, bright_field_disk
 
 
 @pytest.fixture
@@ -257,14 +257,14 @@ def test_detector_geometry_matches_quantem_gpu(monkeypatch):
     rows, cols = np.indices((48, 40))
     pattern = np.where((rows - 20.3) ** 2 + (cols - 17.8) ** 2 <= 9.5**2, 50.0, 1.0).astype(np.float32)
     blurred = (1.0 + 49.0 / (1.0 + np.exp((np.hypot(rows - 20.3, cols - 17.8) - 9.5) / 1.2))).astype(np.float32)
-    for mean_dp in (pattern, blurred):
-        fit = gpu_detector.fit_bright_field_disk(mean_dp)
+    for mean_pattern in (pattern, blurred):
+        fit = gpu_detector.bright_field_disk(mean_pattern)
         expected = (fit.bright_field_center_px, fit.bright_field_edge_radius_px)
-        assert fit_bright_field_disk(mean_dp) == expected
+        assert bright_field_disk(mean_pattern) == expected
         # an install without quantem.gpu computes the same disk itself
         with monkeypatch.context() as patched:
             patched.setattr(gpu_adapter, "available", lambda: False)
-            assert fit_bright_field_disk(mean_dp) == expected
+            assert bright_field_disk(mean_pattern) == expected
     for center, inner, outer in (((20.3, 17.8), 0.0, 9.5), ((23.5, 19.5), 6.0, 15.25), ((0.0, 0.0), 1.0, 60.0)):
         np.testing.assert_array_equal(detector_mask(center, inner, outer, (48, 40)),
                                       gpu_detector.detector_mask(center, inner, outer, (48, 40)))
@@ -281,7 +281,7 @@ def test_dense_reductions_match_quantem_gpu_sessions(dtype):
     reference = gpu_detector.prepare(data_t.numpy())  # the float64 host reference
     mask = detector_mask((5.5, 6.0), 2.0, 5.0, (12, 12))
     np.testing.assert_array_equal(dense.masked_sum(mask), reference.masked_sum(mask))
-    np.testing.assert_array_equal(dense.mean_dp(), reference.mean_dp())
+    np.testing.assert_array_equal(dense.mean_pattern(), reference.mean_pattern())
     indices = np.array([0, 4, 7, 29])
     for mode in ("sum", "max"):
         np.testing.assert_array_equal(dense.reduce_frames(indices, mode), reference.reduce_frames(indices, mode))
@@ -323,7 +323,7 @@ def test_dense_session_on_the_int32_block_path_equals_the_int64_path():
     blocks = DenseSession(data_t)
     blocks.count_bound = count_bound(data_t)  # what DenseSession sets for an integer tensor on MPS
     mask = detector_mask((1.5, 2.0), 0.0, 1.6, (4, 5))
-    np.testing.assert_array_equal(blocks.mean_dp(), reference.mean_dp())
+    np.testing.assert_array_equal(blocks.mean_pattern(), reference.mean_pattern())
     np.testing.assert_array_equal(blocks.masked_sum(mask), reference.masked_sum(mask))
     indices = np.random.default_rng(4).choice(40000, 33000, replace=False)
     for mode in ("sum", "max", "mean"):

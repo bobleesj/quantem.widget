@@ -1142,7 +1142,7 @@ def test_the_rewrite_script_carries_layouts_6_and_7_and_show4dstem_3_to_quantem_
         "local_tilt": {"fits": [{"id": "a", "reconstruction": {"upsample": 2}, "fit_record": {"trials": 200}}]}}
     assert json.loads((tmp_path / "gpu_calibration.json").read_text()) == {
         "schema": "quantem.ssb-calibration/8", "upsample": 2, "upsample_mode": "auto",
-        "reconstruction_method": "phase_of_mean", "reconstruction_options": {}}
+        "reconstruction": {"method": "phase_of_mean"}}
     assert json.loads((tmp_path / "show4dstem_ssb_calibration.json").read_text()) == {
         "schema": "quantem.show4dstem-ssb-calibration/4", "trials": 200, "loss": 0.2}
     assert json.loads((tmp_path / "layout_6.json").read_text()) == {
@@ -2213,7 +2213,7 @@ def test_direct_result_calibration_reopens_same_reconstruction(tmp_path, method)
         for name in ("phase_damp", "amplitude_damp") if method == "complex" else ("phase_damp",):
             for value in (0, -0.01, float("nan")):
                 invalid = json.loads(json.dumps(saved))
-                invalid["reconstruction_options"][name] = value
+                invalid["reconstruction"][name] = value
                 path.write_text(json.dumps(invalid))
                 with pytest.raises(ValueError, match=f"saved {name} must be finite and positive"):
                     read_calibration(path, restored._calibration_identity, restored._scan_region, saved["schema"])

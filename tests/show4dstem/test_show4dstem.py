@@ -26,7 +26,7 @@ from quantem.widget import Show4DSTEM, ShowDiffraction, device
 from quantem.widget.adapters import gpu as gpu_adapter
 from quantem.widget.adapters.core import make_dataset
 from quantem.widget.show4dstem import preview, reader
-from quantem.widget.show4dstem.detector import detector_mask, fit_bright_field_disk, roi_mask
+from quantem.widget.show4dstem.detector import detector_mask, bright_field_disk, roi_mask
 from quantem.widget.counts import tensor_dtype
 from quantem.widget.show4dstem import export as html_export
 from quantem.widget.show4dstem.export import bundle_master_urls, check_html_payload, export_data_array, write_webgpu_bundle
@@ -130,7 +130,7 @@ def _bf(counts: np.ndarray, center, radius: float, inner: float = 0.0) -> np.nda
     return counts[..., mask].sum(axis=-1, dtype=np.uint64).astype(np.float32)
 
 
-def _mean_dp(counts: np.ndarray) -> np.ndarray:
+def _mean_pattern(counts: np.ndarray) -> np.ndarray:
     """NumPy reference mean pattern: exact integer total divided once in float64."""
     flat = counts.reshape(-1, *counts.shape[-2:])
     return (flat.sum(axis=0, dtype=np.uint64) / len(flat)).astype(np.float32)
@@ -222,7 +222,7 @@ def test_encoded_master_opens_with_detector_products(tmp_path, accelerator):
     with gpu_adapter.load_acquisition(master) as loaded:
         widget = Show4DSTEM(loaded)
         try:
-            center, radius = fit_bright_field_disk(_mean_dp(counts))
+            center, radius = bright_field_disk(_mean_pattern(counts))
             assert (widget.bright_field_center_row_px, widget.bright_field_center_col_px) == pytest.approx(center)
             assert widget.bright_field_radius_px == pytest.approx(radius)
             np.testing.assert_array_equal(_image(widget), _bf(counts, center, radius))
@@ -245,7 +245,7 @@ def test_encoded_master_opens_with_detector_products(tmp_path, accelerator):
 
 
 def test_show4dstem_presets_use_the_recorded_bright_field_disk(tmp_path, accelerator):
-    """data.calibration.fit_detector_sampling() is the one disk fit: the viewer reads it and its calibrated axes.
+    """data.calibration.detector_sampling() is the one disk fit: the viewer reads it and its calibrated axes.
 
     The presets are multiples of the recorded edge radius around the recorded centre; a disk given by hand wins.
     """
@@ -253,8 +253,8 @@ def test_show4dstem_presets_use_the_recorded_bright_field_disk(tmp_path, acceler
     master = _write_master(tmp_path, "gold", counts)
     with gpu_adapter.load_acquisition(master) as loaded:
         loaded.calibration.semiangle_mrad = 30
-        fit = loaded.calibration.fit_detector_sampling()
-        assert (fit.bright_field_center_px, fit.bright_field_edge_radius_px) == fit_bright_field_disk(_mean_dp(counts))
+        fit = loaded.calibration.detector_sampling()
+        assert (fit.bright_field_center_px, fit.bright_field_edge_radius_px) == bright_field_disk(_mean_pattern(counts))
         # a disk recorded with the dataset is read, not fitted again
         loaded.metadata["bright_field_disk"] = {**loaded.metadata["bright_field_disk"],
                                                 "bright_field_center_px": [7.0, 8.0], "bright_field_edge_radius_px": 3.25}
@@ -750,8 +750,8 @@ def test_master_read_densely_matches_numpy(tmp_path, monkeypatch, capsys):
         stored = str(tensor_dtype(np.uint16)).removeprefix("torch.")
         assert f"read flagged_master.h5 densely on the CPU into cpu: (6, 6, 16, 16) {stored}" in capsys.readouterr().out
         assert widget.title == "flagged" and widget._device.type == "cpu"
-        np.testing.assert_array_equal(widget._session(0).mean_dp(), _mean_dp(expected))
-        center, radius = fit_bright_field_disk(_mean_dp(expected))
+        np.testing.assert_array_equal(widget._session(0).mean_pattern(), _mean_pattern(expected))
+        center, radius = bright_field_disk(_mean_pattern(expected))
         assert (widget.bright_field_center_row_px, widget.bright_field_center_col_px, widget.bright_field_radius_px) == pytest.approx((*center, radius))
         np.testing.assert_array_equal(_image(widget), _bf(expected, center, radius))
         widget.apply_preset("adf")
@@ -884,7 +884,7 @@ def test_dense_and_encoded_paths_agree(tmp_path, accelerator, device):
     encoded = Show4DSTEM(master)
     try:
         assert encoded._owned_acquisitions and isinstance(dense._data, torch.Tensor) and dense._device.type == device
-        np.testing.assert_array_equal(dense._session(0).mean_dp(), encoded._session(0).mean_dp())
+        np.testing.assert_array_equal(dense._session(0).mean_pattern(), encoded._session(0).mean_pattern())
         for preset in ("bf", "abf", "adf", "haadf"):
             dense.apply_preset(preset)
             encoded.apply_preset(preset)
