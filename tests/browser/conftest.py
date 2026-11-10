@@ -32,6 +32,10 @@ CHROME_ARGS = [
     "--no-first-run",
     "--window-size=1700,1100",
 ]
+# QUANTEM_WIDGET_WINDOW_POSITION="X,Y" places the headed window, e.g. on a second monitor so the
+# test windows do not cover the screen someone is working on.
+if os.environ.get("QUANTEM_WIDGET_WINDOW_POSITION"):
+    CHROME_ARGS.append(f"--window-position={os.environ['QUANTEM_WIDGET_WINDOW_POSITION']}")
 # Removing the accessor makes a widget see a browser without WebGPU.
 NO_WEBGPU_SCRIPT = (
     "Object.defineProperty(Navigator.prototype, 'gpu', {get: () => undefined, configurable: true});"
