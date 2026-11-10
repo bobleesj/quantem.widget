@@ -3553,7 +3553,11 @@ function Show1DWidget() {
     canvas.style.height = `${plotSize.height}px`;
   }, [plotDpr, plotSize.height, plotSize.width]);
 
-  React.useEffect(() => {
+  // The crosshair is drawn straight from the hover frame (before it paints); React state only
+  // carries the text readout. Drawing it from an effect after the commit put the crosshair one
+  // display frame behind the pointer.
+  const paintHoverRef = React.useRef<(value: HoverPoint | null) => void>(() => {});
+  paintHoverRef.current = (hover: HoverPoint | null) => {
     const canvas = plotHoverCanvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
@@ -3583,7 +3587,14 @@ function Show1DWidget() {
       ctx.fill();
       ctx.restore();
     }
-  }, [colors, hover, plotDpr, plotSize.height, plotSize.width, themeColors.textMuted]);
+  };
+  // Hover changes paint from the hover frame (commitScheduledHover); this repaints only when the
+  // canvas size, DPR or colors change, so one pointer move draws the crosshair once.
+  const hoverRef = React.useRef(hover);
+  hoverRef.current = hover;
+  React.useEffect(() => {
+    paintHoverRef.current(hoverRef.current);
+  }, [colors, plotDpr, plotSize.height, plotSize.width, themeColors.textMuted]);
 
   const nearestPoint = React.useCallback((clientX: number, clientY: number): HoverPoint | null => {
     const canvas = canvasRef.current;
@@ -3635,6 +3646,7 @@ function Show1DWidget() {
   }, [groupCount, hasSnapshots, snapshotGroupIterations]);
 
   const commitScheduledHover = React.useCallback((value: HoverPoint | null, snapshotGroupIdx?: number | null) => {
+    paintHoverRef.current(value);
     setHover(value);
     if (snapshotGroupIdx !== undefined && hoverSnapshotGroupRef.current !== snapshotGroupIdx) {
       hoverSnapshotGroupRef.current = snapshotGroupIdx;
