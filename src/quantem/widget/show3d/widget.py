@@ -51,7 +51,7 @@ from quantem.widget.utils.ui import (
 )
 
 
-_MAX_PLAYBACK_FPS = 60.0
+_MAX_PLAYBACK_FPS = 120.0
 
 
 def _all_finite(values: np.ndarray, *, chunk_size: int = 1_000_000) -> bool:

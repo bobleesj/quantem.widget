@@ -220,7 +220,8 @@ def write_gif(frames: list, path: str | pathlib.Path, fps: float) -> pathlib.Pat
     """Assemble RGB PIL frames into a looping GIF at the given fps."""
     path = pathlib.Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    duration = max(1, int(round(1000.0 / max(0.1, fps))))
+    # GIF delays are centiseconds and browsers slow anything under 20 ms to 100 ms, so 50 fps is the ceiling.
+    duration = max(20, int(round(1000.0 / max(0.1, fps))))
     frames[0].save(
         str(path), save_all=True, append_images=frames[1:],
         duration=duration, loop=0, optimize=True, disposal=2,

@@ -19,7 +19,7 @@ import { streamedStackExtends, useStreamFrames } from "./streamFrames";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import Stack from "@mui/material/Stack";
-import Slider from "@mui/material/Slider";
+import Slider from "../shared/Slider";
 import IconButton from "@mui/material/IconButton";
 import Select from "@mui/material/Select";
 import Menu from "@mui/material/Menu";
@@ -57,6 +57,7 @@ import { encodeIndexedGif, quantizeRgbaForBrowserGif } from "./gif";
 import { missingDisplayStackStatus } from "./displayStack";
 import {
   MAX_PLAYBACK_FPS,
+  MAX_EXPORT_FPS,
   clampPlaybackFps,
   frameKeyTarget,
   orderedFramePrewarmIndices,
@@ -2241,7 +2242,7 @@ function Show3D() {
           await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
         }
       }
-      const delayCs = 100 / clampPlaybackFps(Number(requestOptions.fps ?? exportFps ?? playbackFps));
+      const delayCs = 100 / Math.min(MAX_EXPORT_FPS, clampPlaybackFps(Number(requestOptions.fps ?? exportFps ?? playbackFps)));
       const gif = encodeIndexedGif(outW, outH, frames, delayCs);
       const blob = new Blob([gif as BlobPart], { type: "image/gif" });
       downloadBlob(blob, filename);
@@ -2366,7 +2367,7 @@ function Show3D() {
         </Box>
         <Box sx={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 0.75 }}>
           <Typography sx={typography.label}>fps</Typography>
-          <TextField size="small" type="number" value={exportFps} onChange={(event) => { markGifPresetCustom(); setExportFps(Math.max(1, Number(event.target.value))); }} slotProps={{ htmlInput: { min: 1, max: MAX_PLAYBACK_FPS, "aria-label": "Export animation frames per second" } }} sx={exportNumberFieldSx} />
+          <TextField size="small" type="number" value={exportFps} onChange={(event) => { markGifPresetCustom(); setExportFps(Math.max(1, Number(event.target.value))); }} slotProps={{ htmlInput: { min: 1, max: MAX_EXPORT_FPS, "aria-label": "Export animation frames per second" } }} sx={exportNumberFieldSx} />
           <Typography sx={typography.label}>Quality</Typography>
           <Select size="small" value={exportQuality} onChange={(event) => { markGifPresetCustom(); setExportQuality(event.target.value as AnimationQuality); }} sx={{ ...themedSelect, minWidth: 86, fontSize: 11 }} MenuProps={themedMenuProps} inputProps={{ "aria-label": "Animation quality" }}>
             {ANIMATION_QUALITY_OPTIONS.map((quality) => <MenuItem key={quality} value={quality}>{quality}</MenuItem>)}
@@ -4477,18 +4478,8 @@ function Show3D() {
     const gap = panelCount > 1 ? panelGapPx : 0;
     const ranges = directPanelRanges(normalized, panels, settings);
     const transforms = directPanelTransforms(panels, settings);
-    // Sharp panels enlarged by a non-integer factor in the default view take the Canvas2D draw, as
-    // in the single-panel path, so WebGPU and CPU pick the same texel at texel edges.
-    const slotW = (settings.canvasW - gap * (cols - 1)) / cols;
-    const slotH = (settings.canvasH - gap * (rows - 1)) / rows;
-    if (
-      !settings.smooth
-      && (slotW > sourcePanelWidth || slotH > settings.height)
-      && (!Number.isInteger(slotW / sourcePanelWidth) || !Number.isInteger(slotH / settings.height))
-      && transforms.every((t) => t.zoom === 1 && t.panX === 0 && t.panY === 0)
-    ) {
-      return false;
-    }
+    // WebGPU draws every enlargement, integer or not: a Canvas2D fallback for texel-edge parity
+    // cost a CPU colormap per frame and dropped scrub frames on slower machines.
     const livePanelCmaps = panelCmapsLiveRef.current;
     const panelLuts = livePanelCmaps.length === panelSourceCount
       ? panels.map((panel) => {
@@ -4575,11 +4566,8 @@ function Show3D() {
       return view.zoom === 1 && view.panX === 0 && view.panY === 0;
     });
     if (!naturalVisibleOrder || !panelViewsAreDefault) return false;
-    // The grid fragment shader samples nearest. An enlarged view goes through the Canvas2D draw,
-    // the same as the CPU path, when Smooth is on (bilinear) or the factor is not an integer: there
-    // a pixel centre can land exactly on a texel edge, where the two samplers pick different texels.
-    const enlarged = settings.width < settings.canvasW || settings.height < settings.canvasH;
-    if (enlarged && (settings.smooth || settings.canvasW % settings.width !== 0 || settings.canvasH % settings.height !== 0)) return false;
+    // The grid shader samples nearest, or bilinear with Smooth, at any enlargement; WebGPU never
+    // hands a non-integer zoom to the Canvas2D path.
     const gpuCtx = ensureGpuDisplayContext(engine, settings.canvasW, settings.canvasH);
     if (!gpuCtx) return false;
 
@@ -4669,6 +4657,7 @@ function Show3D() {
       bgRgb: packedRgbFromHex(interPanelGapColor),
       sourcePanelWidth: sourcePanelWidthForGrid,
       sharedSource: !!sharedPanelSource,
+      smooth: !!settings.smooth,
     };
     const rendered = engine.renderSharedGridDirectToCanvas(
       renderSlotIdx,
@@ -4679,25 +4668,10 @@ function Show3D() {
     );
     if (!rendered) return false;
     setGpuDisplayVisible(true);
-    if (!playing) {
-      retainGpuDisplayFrame(
-        engine.renderSharedGridToImageBitmapAsync(
-          renderSlotIdx,
-          { vmin, vmax },
-          settings.logScale,
-          {
-            width: settings.canvasW,
-            height: settings.canvasH,
-            panelCount,
-            cols,
-            rows,
-            gap,
-            bgRgb: packedRgbFromHex(interPanelGapColor),
-            sourcePanelWidth: sourcePanelWidthForGrid,
-            sharedSource: !!sharedPanelSource,
-          },
-        ),
-      );
+    // The retained 2D copy is a second GPU render plus a readback. A live slider gesture skips it
+    // (one draw per input); the gesture's release repaints once with the copy.
+    if (!playing && !sliderScrubbingRef.current) {
+      retainGpuDisplayFrame(engine.renderSharedGridToImageBitmapAsync(renderSlotIdx, { vmin, vmax }, settings.logScale, gridOpts));
     }
     playbackIdxRef.current = normalized;
     if (updateDisplayState) setDisplaySliceIdx(normalized);
@@ -5605,6 +5579,44 @@ function Show3D() {
       gpuCmapReadyRef.current
     );
     if (gpuPlaybackOwnsCanvas) return;
+    // WebGPU owns the settled frame too. The Canvas2D path below colormaps on the CPU and
+    // upscales with drawImage, whose texel choice at exact edges differs from the shader, so a
+    // settle swapped the WebGPU frame for a slightly different CPU frame. Take the direct path
+    // whenever it draws the same range as the CPU branch would: auto contrast only with this
+    // frame's precomputed range and no explicit limits (the CPU branch otherwise runs a
+    // per-frame percentile or prefers the limits).
+    if (
+      Math.max(1, nPanels || 1) === 1
+      && compareMode === "off"
+      && !frameTransformActive()
+      && !(browserFilterKnobsOn || frequencyFilterIsActive)
+    ) {
+      const explicitLimits = traitVmin != null || traitVmax != null;
+      const cachedAuto = cachedAutoDisplayRange(autoVmins, autoVmaxs, renderIdx, logScale)
+        || cachedAutoDisplayRange(localAutoVminsRef.current, localAutoVmaxsRef.current, renderIdx, logScale);
+      const sameRange = autoContrast ? (!explicitLimits && !!cachedAuto) : true;
+      const engine = gpuCmapRef.current;
+      if (sameRange && engine && renderGpuCachedSliceDirect(renderIdx, false)) {
+        // Keep the source-resolution offscreen current (the zoom/pan Canvas2D draw and exports
+        // read it), colormapped on the GPU with the same range.
+        const range = autoContrast && cachedAuto
+          ? cachedAuto
+          : resolveDisplayRange(dataMin, dataMax, traitVmin, traitVmax, logScale, imageVminPct, imageVmaxPct);
+        const bitmaps = engine.renderSlotsToImageBitmap([renderIdx], [range], logScale);
+        const offCtx = mainOffscreenRef.current?.getContext("2d");
+        if (bitmaps && bitmaps[0]) {
+          try {
+            if (offCtx) {
+              offCtx.clearRect(0, 0, mainOffscreenRef.current!.width, mainOffscreenRef.current!.height);
+              offCtx.drawImage(bitmaps[0], 0, 0);
+            }
+          } finally {
+            bitmaps[0].close();
+          }
+        }
+        return;
+      }
+    }
     // Apply log scale using reusable buffer
     const processed = logScale && logBufferRef.current
       ? applyLogScaleInPlace(frameData, logBufferRef.current)
@@ -5800,6 +5812,27 @@ function Show3D() {
       paintHistogramPreviewGpu();
     });
   }, [paintHistogramPreviewGpu]);
+
+  // A histogram drag repaints from the live settings on the GPU each frame and commits React
+  // state once on release. Setting state on every sample re-rendered the whole widget and re-ran
+  // the display effect per pointer move (~14 ms a move on a 4x slower CPU).
+  const previewImageHistogramRange = (min: number, max: number) => {
+    imageHistogramPreviewPctRef.current = [min, max];
+    const live = playRef.current;
+    live.imageVminPct = min;
+    live.imageVmaxPct = max;
+    live.autoContrast = false;
+    scheduleHistogramPreviewPaint();
+  };
+  const commitImageHistogramRange = (min: number, max: number) => {
+    previewImageHistogramRange(min, max);
+    setImageVminPct(min);
+    setImageVmaxPct(max);
+    if (autoContrast) {
+      manualImageRangeBeforeAutoRef.current = null;
+      setAutoContrast(false);
+    }
+  };
 
   React.useEffect(() => () => {
     if (histogramPreviewPaintRafRef.current !== null) {
@@ -9814,7 +9847,9 @@ function Show3D() {
         scrubRaf = 0;
       }
       const next = sliceFromClientX(clientX);
-      if (next !== lastPainted) scrubToSlice(next, false);
+      // Always repaint at release: the gesture skipped the retained 2D copy, which the
+      // settled display, Copy and export read. The gesture flag is already cleared here.
+      scrubToSlice(next, false);
       commitSlice(next);
     };
     e.preventDefault();
@@ -11871,20 +11906,9 @@ function Show3D() {
                     bins={imageHistogramBins}
                     vminPct={imageVminPct}
                     vmaxPct={imageVmaxPct}
-                    onRangeChange={(min, max) => {
-                      imageHistogramPreviewPctRef.current = [min, max];
-                      const live = playRef.current;
-                      live.imageVminPct = min;
-                      live.imageVmaxPct = max;
-                      live.autoContrast = false;
-                      setImageVminPct(min);
-                      setImageVmaxPct(max);
-                      if (autoContrast) {
-                        manualImageRangeBeforeAutoRef.current = null;
-                        setAutoContrast(false);
-                      }
-                      scheduleHistogramPreviewPaint();
-                    }}
+                    onRangeChange={(min, max) => commitImageHistogramRange(min, max)}
+                    onRangePreview={(min, max) => previewImageHistogramRange(min, max)}
+                    onRangeCommit={(min, max) => commitImageHistogramRange(min, max)}
                     width={110}
                     height={58}
                     valueDecimals={2}

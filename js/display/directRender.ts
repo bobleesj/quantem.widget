@@ -37,7 +37,7 @@ type PanelGridOptions = {
   transforms?: ViewTransform[]; smooth?: boolean;
 };
 /** Panel grid of one slot drawn by the grid shader, which places the panels itself. */
-type SharedGridOptions = Omit<PanelGridOptions, "transforms" | "smooth"> & { sourcePanelWidth?: number; sharedSource?: boolean };
+type SharedGridOptions = Omit<PanelGridOptions, "transforms"> & { sourcePanelWidth?: number; sharedSource?: boolean };
 /** Panel grid whose panels are column regions of one slot, each with its own range, view and LUT. */
 type PanelRegionOptions = PanelGridOptions & {
   sourcePanelWidth: number; sourcePanelIndices?: number[]; panelLuts?: { name: string; lut: Uint8Array }[];
@@ -278,7 +278,7 @@ export class DirectRenderer {
     paramsU32[8] = logScale ? 1 : 0;
     paramsU32[9] = opts.bgRgb & 0xFFFFFF;
     paramsU32[10] = opts.sharedSource ? 1 : 0;
-    paramsU32[11] = 0;
+    paramsU32[11] = opts.smooth ? 1 : 0;
     paramsF32[12] = range.vmin;
     paramsF32[13] = range.vmax;
     paramsF32[14] = Math.max(0, opts.gap);
