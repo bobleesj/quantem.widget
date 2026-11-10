@@ -96,6 +96,13 @@ the renamed names and keep their versions.
   color entry; it now uses the display shader's float32 normalize and truncation.
 - Show4DSTEM ignored `fft_window` on the full-image FFT (it applied only to an ROI crop); the Hann window now applies
   to both.
+- Show3D and Show3DSlices: Left / Right step the frame after a click or drag on the frame slider. Focus stayed on the
+  page (the arrows did nothing) or on the loop-start handle (the arrows moved the loop start); only a click on the
+  image let the arrows through.
+- Show3D playback ran at the display rate at most: on a 60 Hz screen fps 90 and 120 both played 60 frames a second.
+  Playback now advances by elapsed time, so 30 / 60 / 90 / 120 play 30 / 60 / 89 / 120 frames a second.
+- Show3DSlices redrew its 3D view at full resolution on every playback step on top of the live preview draw, and
+  resized and reconfigured the canvas twice a frame.
 
 ### Saved records
 
@@ -112,6 +119,15 @@ notebook again.
 
 ### Other changes
 
+- Interactive display runs on WebGPU at display rate in Show1D, Show2D, Show3D and Show3DSlices. Sliders follow the
+  pointer with no position easing (every widget slider comes from `js/shared/Slider`). Show3D draws frame scrub,
+  histogram, moving-average and settled frames on the GPU at any zoom and with Smooth, where non-integer zooms fell
+  back to a CPU colormap; a slider move answers in about 1 ms with every move drawn, also with the CPU slowed 4x
+  (was ~25 ms with up to half the moves dropped). Histogram drags and the moving-average slider paint from live
+  values and write `image_vmin_pct`, `vmin_per_panel` or `avg_window` once on release. Show2D's contrast drag
+  colormaps on the GPU instead of recoloring canvas pixels on the CPU. Show1D draws its hover crosshair before the
+  frame paints. Saved frames reuse configured offscreen canvases and GPU bindings instead of creating them per frame.
+  Show3D's fps slider reaches 120; GIF export stays at most 50 fps, the GIF format's limit.
 - `Show3D.stream()` returns a viewer that grows by `view.append(image, label=...)`, and `Show2D.stream()` one whose images `view.update(images, labels)` replaces. Each call copies its images and returns; a worker thread sends only the new frame (Show3D) or the changed panels (Show2D), with Show4DSTEM.stream's limit of two transfers awaiting browser acknowledgment, so either may be called from a background thread while the notebook stays interactive. Show3D follows the newest frame unless the user moved to an earlier one and never drops a frame; Show2D coalesces so the newest update wins. Pixels stay native (`display_bin=1`).
 - ShowPtycho takes `phase_damping` and `amplitude_damping` (were `phase_regularization` and `amplitude_regularization`), the Tikhonov damping strengths of quantem.gpu's direct solve; the sliders read **Phase damping** and **Amplitude damping**. The synced traits are `phase_damping`, `amplitude_damping`, `upsampling` and `auto_upsampling` (were `phase_regularization`, `amplitude_regularization`, `upsampling_factor`, `auto_upsampling_factor`). The old keywords keep working with a `DeprecationWarning`; both spellings raise `TypeError`. `calibration.json` is `quantem.ssb-calibration/7` (key `upsampling`, damping strengths) and stars `quantem.ssb-stars/4`; a `/6` calibration still restores, and `scripts/rewrite_ssb_calibration.py` carries `/6` and stars `/3` over.
 - Removed dead code: ShowPtycho's legacy `num_drag_bright_field_pixels` trait (always the full bright-field count), and the adapter's unused `preview_context`, `reconstruct` alias and `SsbSession` alias (use `DirectSession`). Tests call quantem.gpu's `run()` instead of the deprecated `reconstruct()`.
