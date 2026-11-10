@@ -51,12 +51,6 @@ def test_widget_has_no_duplicate_gpu_or_io_public_api() -> None:
         assert not hasattr(widget_io, name)
 
 
-def test_live_gpu_status_hook_remains_available() -> None:
-    from quantem.widget.gpu import vram_status
-
-    assert callable(vram_status)
-
-
 def test_public_docs_use_the_canonical_gpu_api() -> None:
     """Tutorials must not revive widget-owned IO or retired SSB fit calls."""
 

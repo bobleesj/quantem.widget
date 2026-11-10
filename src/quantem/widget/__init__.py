@@ -37,7 +37,6 @@ _LAZY_EXPORTS: dict[str, tuple[str, str | None]] = {
     "read_image": ("quantem.widget.io.image", "read_image"),
     "read_image_stack": ("quantem.widget.io.image", "read_image_stack"),
     "read_images": ("quantem.widget.io.image", "read_images"),
-    "gpu_info": ("quantem.widget.gpu", "gpu_info"),
     "FolderPicker": ("quantem.widget.folder_picker", "FolderPicker"),
     "pick_folder": ("quantem.widget.folder_picker", "pick_folder"),
     "device_info": ("quantem.widget.info", "device_info"),
