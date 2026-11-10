@@ -1076,7 +1076,7 @@ def test_compute_ssb_accepts_a_1024_scan(monkeypatch):
         def __exit__(self, *exc):
             return False
 
-        def reconstruct(self):
+        def run(self):
             return types.SimpleNamespace(phase=np.ones((1024, 1024), np.float32), aberrations={"C10_nm": 0.0, "C12_nm": 0.0, "phi12_deg": 0.0},
                                          scan_detector_rotation_deg=0.0, loss=None, elapsed_s=None, sample_tilt_mrad=None)
 
@@ -1152,7 +1152,7 @@ def test_compute_ssb_reads_the_optics_the_dataset_records(monkeypatch, tmp_path)
         def __exit__(self, *exc):
             return False
 
-        def reconstruct(self):
+        def run(self):
             # a fit on the reversed branch: quantem.gpu reports the physical angle, here above 180
             return types.SimpleNamespace(phase=np.ones((128, 128), np.float32), aberrations={"C10_nm": 12.0, "C12_nm": 3.0, "phi12_deg": 30.0},
                                          scan_detector_rotation_deg=345.5, loss=0.25, elapsed_s=1.5, sample_tilt_mrad=None)
@@ -1356,7 +1356,7 @@ def test_compute_ssb_converts_a_detector_step_in_reciprocal_angstrom(monkeypatch
         def __exit__(self, *exc):
             return False
 
-        def reconstruct(self):
+        def run(self):
             return types.SimpleNamespace(phase=np.ones((128, 128), np.float32), aberrations={"C10_nm": 0.0, "C12_nm": 0.0, "phi12_deg": 0.0},
                                          scan_detector_rotation_deg=0.0, loss=None, elapsed_s=None, sample_tilt_mrad=None)
 
@@ -1389,7 +1389,7 @@ def test_compute_ssb_reconstructs_a_rectangular_scan_that_quantem_gpu_pads():
         assert phase.shape == (96, 80)
         with DirectPtycho(counts, voltage_kV=300, semiangle_mrad=20, scan_sampling_A=0.5, detector_sampling_mrad=20 / 6,
                  aberrations=optics, scan_detector_rotation_deg=30.0) as ssb:
-            full = np.asarray(torch.as_tensor(ssb.reconstruct().phase).cpu())
+            full = np.asarray(torch.as_tensor(ssb.run().phase).cpu())
             top, left = ((padded - measured) // 2 for padded, measured in zip(ssb.scan_shape, ssb.input_scan_shape))
         np.testing.assert_array_equal(phase, full[top:top + 96, left:left + 80])
     finally:
@@ -1455,7 +1455,7 @@ def test_compute_ssb_names_its_refinement_as_quantem_gpu_does(capsys):
 def test_compute_ssb_fits_tilt_corrected_by_default_and_tilt_false_on_request(monkeypatch, capsys):
     """Compute SSB is quantem.gpu's default fit (model with sample tilt and depth spread); tilt=False fits at tilt 0.
 
-    It ran fit_aberrations(tilt=False, refinement="nelder-mead") whatever the user asked, the one SSB entry point
+    It ran aberrations(tilt=False, refinement="nelder-mead") whatever the user asked, the one SSB entry point
     that did not default to the tilt-corrected fit.
     """
     pytest.importorskip("quantem.gpu", reason="the SSB phase also takes quantem.gpu's centre of mass")
@@ -1473,7 +1473,7 @@ def test_compute_ssb_fits_tilt_corrected_by_default_and_tilt_false_on_request(mo
 
         def __init__(self, source, **kwargs):
             self.detector_sampling_mrad = kwargs.get("detector_sampling_mrad")
-            self.aberrations = kwargs.get("aberrations")
+            self.known_aberrations = kwargs.get("aberrations")
             self.sample_tilt_mrad = self.depth_spread_nm = None
 
         def __enter__(self):
@@ -1489,14 +1489,14 @@ def test_compute_ssb_fits_tilt_corrected_by_default_and_tilt_false_on_request(mo
                 sample_tilt_mrad=(1.5, -2.0) if tilt else None, depth_spread_nm=6.0 if tilt else None,
                 tilt_fit_gain=0.1 if tilt else None)
 
-        def fit_aberrations(self, **options):
+        def aberrations(self, **options):
             calls.append(("fit", options))
             result = self._result(options["tilt"], "newton" if options["refinement"] == "auto" else options["refinement"])
             result.objective = "agreement"
             return result
 
-        def reconstruct(self):
-            calls.append(("reconstruct", {"aberrations": self.aberrations, "sample_tilt_mrad": self.sample_tilt_mrad,
+        def run(self):
+            calls.append(("run", {"aberrations": self.known_aberrations, "sample_tilt_mrad": self.sample_tilt_mrad,
                                           "depth_spread_nm": self.depth_spread_nm}))
             return self._result(self.sample_tilt_mrad is not None, None)
 
@@ -1506,7 +1506,7 @@ def test_compute_ssb_fits_tilt_corrected_by_default_and_tilt_false_on_request(mo
     try:
         widget.compute_ssb()
         kind, options = calls[-1]
-        assert kind == "fit" and options["tilt"] is True and options["refinement"] == "auto" and options["num_trials"] == 200
+        assert kind == "fit" and options["tilt"] is True and options["refinement"] == "auto" and options["trials"] == 200
         assert "objective" not in options  # quantem.gpu's one objective, the model's agreement
         assert options["search"] == "standard"
         assert not {"search_ranges", "refine_lock", "fixed_aberrations"} & set(options)
@@ -1518,7 +1518,7 @@ def test_compute_ssb_fits_tilt_corrected_by_default_and_tilt_false_on_request(mo
         # a manual recompute from the sliders keeps the fitted sample model
         widget.compute_ssb(aberrations={"C10_nm": 9.0, "C12_nm": 1.0, "phi12_deg": 20.0}, lock_aberrations=True)
         kind, state = calls[-1]
-        assert kind == "reconstruct" and state["sample_tilt_mrad"] == (1.5, -2.0) and state["depth_spread_nm"] == 6.0
+        assert kind == "run" and state["sample_tilt_mrad"] == (1.5, -2.0) and state["depth_spread_nm"] == 6.0
         assert json.loads(widget.ssb_compute_calibration_json)["tilt"] is True
         # in the joint fit a lock is quantem.gpu's fixed_aberrations: C10 alone, C12 = 0 alone, or all three;
         # the held values are the sliders' (a fit moves the sliders to its result)
@@ -1566,7 +1566,7 @@ def test_compute_ssb_fits_tilt_corrected_by_default_and_tilt_false_on_request(mo
         widget.ssb_compute_request = json.dumps({"action": "compute_ssb", "num_trials": 20, "tilt": False,
                                                  "refinement": None})
         deadline = time.time() + 10
-        while widget.ssb_compute_busy or not calls[-1][1].get("num_trials") == 20:
+        while widget.ssb_compute_busy or not calls[-1][1].get("trials") == 20:
             assert time.time() < deadline
             time.sleep(0.01)
         assert widget.ssb_compute_tilt is False

@@ -4,9 +4,9 @@ quantem.widget reads and writes one layout per file kind and converts nothing
 inside the package. A calibration a person chose by eye cannot be recomputed,
 so this script carries the earlier file kinds over:
 
-- ``calibration.json`` from ShowPtycho (``schema_version`` 3, ``aberration_unit`` "nm",
-  or ``quantem.ssb-calibration/4`` or ``/5``)
-- ``showptycho_stars.json`` from ShowPtycho (a list of stars, or ``quantem.ssb-stars/1`` or ``/2``)
+- ``calibration.json`` from ShowPtycho or quantem.gpu's ``save_calibration`` (``schema_version`` 3,
+  ``aberration_unit`` "nm", or ``quantem.ssb-calibration/4`` to ``/7``)
+- ``showptycho_stars.json`` from ShowPtycho (a list of stars, or ``quantem.ssb-stars/1`` to ``/4``)
 - ``snapshots/snapshots.json`` and ``snapshots/cal.json`` of an exported ShowPtycho folder
   (``quantem.ssb-snapshots/1``, ``quantem.ssb-browser-calibration/2``)
 - ``*_ssb_calibration.json`` from Show4DSTEM (``schema`` "quantem.ssb.calibration.v1", or
@@ -31,10 +31,13 @@ identity is computed from the data, so a /5 calibration with an identity needs i
 beside the calibration (the file name it recorded), or given with ``--data``. The flagged-pixel
 fill is recorded as quantem.gpu fills it now (half to even; a cluster from the ring around it).
 
-Calibration /6 and stars /3 named the output factor ``upsampling_factor`` and the direct-method
-strengths ``phase_regularization`` and ``amplitude_regularization``; /7 and /4 name them
-``upsampling``, ``phase_damping`` and ``amplitude_damping``. No number changes. ShowPtycho
-also reads a /6 calibration directly.
+Calibration /6 and stars /3 named the output factor ``upsampling_factor`` (quantem.gpu's writer
+``upsample_factor``) and the direct-method strengths ``phase_regularization`` and
+``amplitude_regularization``; calibration /7 and stars /4 named them ``upsampling`` (with
+``upsampling_mode``), ``phase_damping`` and ``amplitude_damping``, and both called the conventional
+method ``"ssb"``. Calibration /8 and stars /5 use quantem.gpu's names: ``upsample``,
+``upsample_mode``, ``phase_damp``, ``amplitude_damp`` and the method ``"phase_of_mean"`` (in
+``reconstruction.method`` and ``reconstruction_method``). No number changes.
 
     python scripts/rewrite_ssb_calibration.py --dry-run path/to/calibration.json
     python scripts/rewrite_ssb_calibration.py path/to/calibration.json path/to/showptycho_stars.json
@@ -52,21 +55,27 @@ import json
 import math
 import pathlib
 
-CALIBRATION_SCHEMA = "quantem.ssb-calibration/7"
-STARS_SCHEMA = "quantem.ssb-stars/4"
-# the layouts before upsampling, phase_damping and amplitude_damping, carried over by renaming those keys
-DAMPING_RENAMED = {"quantem.ssb-calibration/6": CALIBRATION_SCHEMA, "quantem.ssb-stars/3": STARS_SCHEMA}
-# /6 and stars /3 spellings -> their /7 and /4 names
-DAMPING_KEYS = {"phase_regularization": "phase_damping", "amplitude_regularization": "amplitude_damping",
-                "upsampling_factor": "upsampling"}
+CALIBRATION_SCHEMA = "quantem.ssb-calibration/8"
+STARS_SCHEMA = "quantem.ssb-stars/5"
+# the layouts before quantem.gpu's names, carried over by renaming keys and the conventional method
+NAMES_RENAMED = {"quantem.ssb-calibration/6": CALIBRATION_SCHEMA, "quantem.ssb-calibration/7": CALIBRATION_SCHEMA,
+                 "quantem.ssb-stars/3": STARS_SCHEMA, "quantem.ssb-stars/4": STARS_SCHEMA}
+# calibration /5-/7 and stars /2-/4 spellings -> their /8 and /5 names
+CURRENT_KEYS = {"phase_regularization": "phase_damp", "phase_damping": "phase_damp",
+                "amplitude_regularization": "amplitude_damp", "amplitude_damping": "amplitude_damp",
+                "upsampling_factor": "upsample", "upsample_factor": "upsample", "upsampling": "upsample",
+                "upsampling_mode": "upsample_mode"}
+# the keys whose value names the reconstruction method, "ssb" before /8
+METHOD_KEYS = ("method", "reconstruction_method")
 
 
-def damping_names(value):
-    """``value`` with every /6 key renamed, recursively: the record /7 reads."""
+def current_names(value):
+    """``value`` with every earlier key and the method ``"ssb"`` renamed, recursively: the record /8 reads."""
     if isinstance(value, dict):
-        return {DAMPING_KEYS.get(key, key): damping_names(item) for key, item in value.items()}
+        return {CURRENT_KEYS.get(key, key): "phase_of_mean" if key in METHOD_KEYS and item == "ssb" else current_names(item)
+                for key, item in value.items()}
     if isinstance(value, list):
-        return [damping_names(item) for item in value]
+        return [current_names(item) for item in value]
     return value
 # the layouts with an absolute source_path, carried to the current ones by portable()
 PATH_CALIBRATION_SCHEMA = "quantem.ssb-calibration/5"
@@ -146,7 +155,7 @@ def rewrite(earlier, path: pathlib.Path | None = None, data: pathlib.Path | None
     if current is not None and current.get("schema") in (PATH_CALIBRATION_SCHEMA, PATH_STARS_SCHEMA):
         current = portable(current, pathlib.Path.cwd() / "calibration.json" if path is None else path, data)
     if current is not None and current.get("schema") in (CALIBRATION_SCHEMA, STARS_SCHEMA):
-        current = damping_names(current)
+        current = current_names(current)
     return current, notes
 
 
@@ -228,8 +237,8 @@ def path_layout(earlier) -> tuple[dict | None, list[str]]:
         return {"schema": PATH_STARS_SCHEMA, "stars": [record for record, _ in records]}, [note for _, notes in records for note in notes]
     if earlier.get("schema") in (PATH_CALIBRATION_SCHEMA, PATH_STARS_SCHEMA):
         return earlier, []
-    if earlier.get("schema") in DAMPING_RENAMED:
-        return {**earlier, "schema": DAMPING_RENAMED[earlier["schema"]]}, []
+    if earlier.get("schema") in NAMES_RENAMED:
+        return {**earlier, "schema": NAMES_RENAMED[earlier["schema"]]}, []
     if earlier.get("schema") in (CALIBRATION_SCHEMA, STARS_SCHEMA, SNAPSHOTS_SCHEMA, BROWSER_CALIBRATION_SCHEMA, SHOW4DSTEM_SCHEMA):
         return None, []
     later = {"quantem.ssb-calibration/4": PATH_CALIBRATION_SCHEMA, "quantem.ssb-stars/1": PATH_STARS_SCHEMA,

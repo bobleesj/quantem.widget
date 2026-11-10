@@ -27,14 +27,14 @@ pytestmark = pytest.mark.browser
 PHASE = '[data-quantem-scientific-output="Phase"]'
 PINS = "[data-showptycho-pin-id]"
 SESSION = """import numpy as np
-from quantem.gpu import SSB
+from quantem.gpu import DirectPtycho
 from quantem.widget import ShowPtycho
 
 rows, cols = np.mgrid[0:32, 0:32]
 disk = (np.hypot(rows - 16, cols - 16) < 6).astype(np.float32)
 scan = np.random.default_rng(0).normal(size=(24, 24, 1, 1)).astype(np.float32)
 data = disk * (100 + scan) * (1 + 0.02 * np.cos(rows / 3.0))
-viewer = ShowPtycho(SSB(data, voltage_kV=300, semiangle_mrad=20, scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(20 / 6, 20 / 6)))
+viewer = ShowPtycho(DirectPtycho(data, voltage_kV=300, semiangle_mrad=20, scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(20 / 6, 20 / 6)))
 viewer"""
 
 
@@ -146,7 +146,7 @@ def test_two_viewers_each_keep_their_own_image(jupyter, open_page, hardware_adap
 def test_tilt_auto_save_and_exact_export_reopen(jupyter, open_page, hardware_adapter, browser_out, serve):
     """Real controls retain fitted science; an exported integer-count session reopens."""
     setup = SESSION.replace("size=(24, 24, 1, 1)", "size=(128, 128, 1, 1)")
-    setup = setup.replace("viewer = ShowPtycho(SSB(data,", "data = np.rint(data).astype(np.uint16)\nviewer = ShowPtycho(SSB(data,")
+    setup = setup.replace("viewer = ShowPtycho(DirectPtycho(data,", "data = np.rint(data).astype(np.uint16)\nviewer = ShowPtycho(DirectPtycho(data,")
     setup = setup.rsplit("\nviewer", 1)[0] + """
 import json
 from pathlib import Path
@@ -175,10 +175,10 @@ saved = json.loads(Path(viewer.calibration_path).read_text())
 assert saved['sample_tilt_mrad'] == [3., -4.]
 assert saved['depth_spread_nm'] == 12.
 assert saved['display']['tilt_correction'] is False
-assert saved['upsampling_mode'] == 'auto'
-assert viewer.upsampling == 'auto'
+assert saved['upsample_mode'] == 'auto'
+assert viewer.upsample == 'auto'
 assert json.loads(viewer.higher_order_aberrations_json)['C30_nm'] == 2.
-expected, _ = viewer._ssb.preview({**viewer._current(), 'C30_nm': 2.}, upsampling=viewer.auto_upsampling,
+expected, _ = viewer._ssb.preview({**viewer._current(), 'C30_nm': 2.}, upsample=viewer.auto_upsample,
     sample_tilt_mrad=(0., 0.), depth_spread_nm=12.)
 np.testing.assert_array_equal(np.frombuffer(viewer.phase_bytes, np.float32).reshape(expected.shape), expected)
 print('saved-fitted-science')
@@ -221,9 +221,7 @@ def test_direct_methods_and_regularization_follow_live_slider_requests(jupyter, 
     if not torch.cuda.is_available():
         pytest.skip("Regularized direct reconstruction requires CUDA")
     notebook = "showptycho_direct_methods.ipynb"
-    setup = SESSION.replace("from quantem.gpu import SSB", "from quantem.gpu import DirectPtycho")
-    setup = setup.replace("ShowPtycho(SSB(", "ShowPtycho(DirectPtycho(")
-    jupyter.write_notebook(notebook, setup)
+    jupyter.write_notebook(notebook, SESSION)
     page = jupyter.open(open_page, notebook, "direct-methods", webgpu=True, ready=PHASE, out=browser_out)
     # This exercises live CUDA reconstruction; hardware browser rendering has
     # a separate release gate. Canvas fallback must retain the same controls.
@@ -247,10 +245,10 @@ def test_direct_methods_and_regularization_follow_live_slider_requests(jupyter, 
 import json
 request = json.loads(viewer.result_json)
 assert request['method'] == 'complex', request
-assert request['phase_damping'] > .03, request
-assert request['amplitude_damping'] > .03, request
+assert request['phase_damp'] > .03, request
+assert request['amplitude_damp'] > .03, request
 expected, _ = viewer._ssb.preview(viewer.ssb_parameters['aberrations'], compute_loss=False,
-    upsampling=viewer._output_factor, **viewer._reconstruction_options())
+    upsample=viewer._output_factor, **viewer._reconstruction_options())
 shown = np.frombuffer(viewer.phase_bytes, np.float32).reshape(expected.shape)
 np.testing.assert_array_equal(shown, expected)
 assert not viewer.webgpu_preview_enabled
@@ -298,7 +296,7 @@ def test_reset_all_returns_model_and_display_to_launch(jupyter, open_page, hardw
 import json
 viewer.sample_json = json.dumps({'sample_tilt_mrad': [3., -4.], 'depth_spread_nm': 12.})
 viewer.fitted_sample_json = viewer.sample_json
-launch = (viewer.cmap, viewer.upsampling, viewer.method, viewer.phase_damping)
+launch = (viewer.cmap, viewer.upsample, viewer.method, viewer.phase_damp)
 viewer
 """
     jupyter.write_notebook(notebook, setup)
@@ -319,12 +317,12 @@ viewer
     page.wait_for_timeout(1000)
     page.get_by_role("checkbox", name="Tilt correction").uncheck()
     page.wait_for_timeout(1000)
-    edited = jupyter.run_in_kernel(notebook, "print(viewer.cmap, viewer.upsampling, viewer.tilt_correction)")
+    edited = jupyter.run_in_kernel(notebook, "print(viewer.cmap, viewer.upsample, viewer.tilt_correction)")
     assert "gray 1 False" in edited, edited
     page.locator("button").filter(has_text=re.compile(r"^Reset All$")).click()
     page.wait_for_timeout(2000)
     proof = jupyter.run_in_kernel(notebook, """
-assert (viewer.cmap, viewer.upsampling, viewer.method, viewer.phase_damping) == launch, (viewer.cmap, viewer.upsampling, launch)
+assert (viewer.cmap, viewer.upsample, viewer.method, viewer.phase_damp) == launch, (viewer.cmap, viewer.upsample, launch)
 assert viewer.tilt_correction is True
 print('reset-all-launch')
 """)

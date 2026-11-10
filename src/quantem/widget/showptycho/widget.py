@@ -21,7 +21,7 @@ Usage::
     data.calibration.semiangle_mrad = 30
     data.calibration.scan_sampling_A = 0.264
     ptycho = DirectPtycho(data)
-    ptycho.reconstruct()
+    ptycho.run()
     ptycho.show(show_fft=True)                              # ShowPtycho(ptycho, show_fft=True)
 """
 
@@ -50,11 +50,11 @@ STARS_FILENAME = "showptycho_stars.json"
 CALIBRATION_FILENAME = "calibration.json"
 CALIBRATION_IMAGE_FILENAME = "calibration_phase.png"
 # every stored record names its layout; a reader takes the current value only
-CALIBRATION_SCHEMA = "quantem.ssb-calibration/7"
-STARS_SCHEMA = "quantem.ssb-stars/4"
+CALIBRATION_SCHEMA = "quantem.ssb-calibration/8"
+STARS_SCHEMA = "quantem.ssb-stars/5"
 MIN_CROP_SPAN = 32
 # Damping strengths a slider drags: the browser sends them and shows them itself.
-_BROWSER_STRENGTHS = ("phase_damping", "amplitude_damping", "smoothness_inv_A")
+_BROWSER_STRENGTHS = ("phase_damp", "amplitude_damp", "smoothness_inv_A")
 
 
 def session_note() -> str:
@@ -68,7 +68,7 @@ def session_note() -> str:
         return (
             "Aberration tuning (C10, C12, rotation, Save) needs an SSB session: "
             'data = quantem.gpu.io.load("scan_master.h5"), set data.calibration (voltage_kV, semiangle_mrad, scan_sampling_A), '
-            "then ptycho = quantem.gpu.DirectPtycho(data), ptycho.reconstruct(), ptycho.show()."
+            "then ptycho = quantem.gpu.DirectPtycho(data), ptycho.run(), ptycho.show()."
         )
     hint = gpu_path_hint()
     if hint:
@@ -129,7 +129,7 @@ class ShowPtycho(anywidget.AnyWidget):
         its phase (``angle``) and amplitude (``abs``). Tensors and CuPy arrays stay on their
         device until the 2D result is drawn. Arrays need no quantem.gpu; the aberration controls then stay
         hidden and one line says what they need. An SSB session, normally after
-        ``ptycho.fit_aberrations()`` (quantem's default fit, model-based and tilt-corrected), is
+        ``ptycho.aberrations()`` (quantem's default fit, model-based and tilt-corrected), is
         reused for its resident bright-field evidence and exclusively driven while the widget is
         open. Joint fit, Refit SSB and Fit Regions use the same default fifth-order fit on both
         CUDA and MPS. A supplied broad fit retains its higher-order correction.
@@ -147,7 +147,7 @@ class ShowPtycho(anywidget.AnyWidget):
     restore : bool, default True
         Restore the complete saved optics, tilt, depth and display settings
         when the acquisition and launch calibration match, also over a
-        session that is already fitted (``ptycho.reconstruct()`` before
+        session that is already fitted (``ptycho.run()`` before
         ``ptycho.show()``); one line says what was restored and what it replaced.
         False keeps the supplied session even when a saved correction exists.
     compute_loss : bool, default False
@@ -156,13 +156,13 @@ class ShowPtycho(anywidget.AnyWidget):
         extra score calculation. The aberration fitting objective is unchanged.
     show_fft : bool, default False
         Open with the FFT panel visible.
-    method : {"ssb", "phase", "complex"} or None, optional
+    method : {"phase_of_mean", "phase", "complex"} or None, optional
         Direct reconstruction method. None restores a compatible saved method,
-        otherwise uses SSB. An explicit method is never replaced by a save.
-        SSB retains the conventional result.
+        otherwise uses ``"phase_of_mean"``, conventional SSB (the phase of the
+        mean wave). An explicit method is never replaced by a save.
         Phase and complex are experimental CUDA methods using the same fitted
         optics; complex estimates log-amplitude and phase but displays phase.
-    phase_damping, amplitude_damping : float, optional
+    phase_damp, amplitude_damp : float, optional
         Independent positive stabilization strengths. Omitted values restore the
         saved strengths or use 0.03. Explicit values override saved strengths.
         Tikhonov damping of the direct least-squares solve. Amplitude damping
@@ -273,9 +273,9 @@ class ShowPtycho(anywidget.AnyWidget):
     auto_sampling_note = traitlets.Unicode("").tag(sync=True)
     sampling_limit_note = traitlets.Unicode("").tag(sync=True)
     upsample_available = traitlets.Bool(False).tag(sync=True)
-    method = traitlets.Enum(["ssb", "phase", "complex"], default_value="ssb").tag(sync=True)
-    phase_damping = traitlets.Float(0.03, min=0.0).tag(sync=True)
-    amplitude_damping = traitlets.Float(0.03, min=0.0).tag(sync=True)
+    method = traitlets.Enum(["phase_of_mean", "phase", "complex"], default_value="phase_of_mean").tag(sync=True)
+    phase_damp = traitlets.Float(0.03, min=0.0).tag(sync=True)
+    amplitude_damp = traitlets.Float(0.03, min=0.0).tag(sync=True)
     smoothness_inv_A = traitlets.Float(1.0, min=0.0).tag(sync=True)
     detector_weighting = traitlets.Enum(["uniform", "inverse_mean"], default_value="uniform").tag(sync=True)
     regularization_available = traitlets.Bool(False).tag(sync=True)
@@ -390,8 +390,8 @@ class ShowPtycho(anywidget.AnyWidget):
                 "Regional fitting is running. Wait for completion before handoff."
             )
         fit = None
-        if region is not None and self.method != "ssb":
-            raise ValueError("Regional calibration currently supports method='ssb'; use the full-session regularized calibration.")
+        if region is not None and self.method != "phase_of_mean":
+            raise ValueError("Regional calibration currently supports method='phase_of_mean'; use the full-session regularized calibration.")
         if region is not None:
             matches = [
                 fit for fit in self.region_fits if region in (fit["id"], fit["label"])
@@ -652,8 +652,8 @@ class ShowPtycho(anywidget.AnyWidget):
         request_id = request.get("id")
         reply = {"id": request_id, "signature": request.get("signature")}
         try:
-            if self.method != "ssb":
-                raise ValueError("Regional fitting currently supports method='ssb'; use a full-session review for regularization.")
+            if self.method != "phase_of_mean":
+                raise ValueError("Regional fitting currently supports method='phase_of_mean'; use a full-session review for regularization.")
             state = json.loads(self.local_tilt_json)
             regions = _regions(request["regions"], tuple(state["scan_shape"]))
             if not regions:
@@ -705,8 +705,8 @@ class ShowPtycho(anywidget.AnyWidget):
         upsample: str | int | None = None,
         phase_estimator: str | None = None,
         method: str | None = None,
-        phase_damping: float | None = None,
-        amplitude_damping: float | None = None,
+        phase_damp: float | None = None,
+        amplitude_damp: float | None = None,
         smoothness_inv_A: float | None = None,
         detector_weighting: str | None = None,
         local_tilt: bool | dict | None = None,
@@ -714,12 +714,12 @@ class ShowPtycho(anywidget.AnyWidget):
         reconstruct_regions: Callable[[list[dict]], dict] | None = None,
     ) -> None:
         self._method_explicit = method is not None
-        method = "ssb" if method is None else method
+        method = "phase_of_mean" if method is None else method
         is_array = not gpu_adapter.is_ssb(data)
-        if method != "ssb" and is_array:
+        if method != "phase_of_mean" and is_array:
             raise ValueError("Reconstruction methods need a DirectPtycho session; an array is already reconstructed.")
-        if method != "ssb" and (local_tilt or fit_regions or reconstruct_regions):
-            raise ValueError("Regional fitting currently supports method='ssb'. Review regularized methods on the full session.")
+        if method != "phase_of_mean" and (local_tilt or fit_regions or reconstruct_regions):
+            raise ValueError("Regional fitting currently supports method='phase_of_mean'. Review regularized methods on the full session.")
 
         if upsample is not None:
             valid = (isinstance(upsample, str) and upsample == "auto") or (
@@ -774,14 +774,14 @@ class ShowPtycho(anywidget.AnyWidget):
         self.compute_loss = compute_loss
         self._explicit_reconstruction_options = {
             name: value for name, value in {
-                "phase_damping": phase_damping,
-                "amplitude_damping": amplitude_damping,
+                "phase_damp": phase_damp,
+                "amplitude_damp": amplitude_damp,
                 "smoothness_inv_A": smoothness_inv_A,
                 "detector_weighting": detector_weighting,
             }.items() if value is not None
         }
-        self.phase_damping = 0.03 if phase_damping is None else phase_damping
-        self.amplitude_damping = 0.03 if amplitude_damping is None else amplitude_damping
+        self.phase_damp = 0.03 if phase_damp is None else phase_damp
+        self.amplitude_damp = 0.03 if amplitude_damp is None else amplitude_damp
         self.smoothness_inv_A = 1.0 if smoothness_inv_A is None else smoothness_inv_A
         self.detector_weighting = "uniform" if detector_weighting is None else detector_weighting
         self._launch_calibration = None
@@ -911,7 +911,7 @@ class ShowPtycho(anywidget.AnyWidget):
         self.observe(self._on_panel_change, names=["higher_order_aberrations_json", "sample_json"])
         self.observe(self._on_panel_change, names=["tilt_correction"])
         self.observe(self._on_panel_change, names=[
-            "method", "phase_damping", "amplitude_damping", "smoothness_inv_A", "detector_weighting"])
+            "method", "phase_damp", "amplitude_damp", "smoothness_inv_A", "detector_weighting"])
         self.observe(self._on_crop_refit_request, names=["crop_refit_request_json"])
         self.observe(self._on_sample_fit_request, names=["sample_fit_request"])
         self._adopt_session(initial=True)
@@ -948,8 +948,8 @@ class ShowPtycho(anywidget.AnyWidget):
                 raise ValueError(self.auto_sampling_note)
             # Output density is independent of the joint fit. Re-resolve saved
             # Auto under the current policy; retain explicit user choices.
-            reconstruction = saved.get("reconstruction", {"method": "ssb"})
-            saved_method = reconstruction.get("method", "ssb")
+            reconstruction = saved["reconstruction"]
+            saved_method = reconstruction["method"]
             if self._method_explicit and saved_method != self.method:
                 raise ValueError("the requested reconstruction method differs from the saved review")
             self._check_method(saved_method)
@@ -959,7 +959,7 @@ class ShowPtycho(anywidget.AnyWidget):
             return
         self.method = saved_method
         retired = saved["phase_estimator"] in RETIRED_PHASE_ESTIMATORS
-        for name in ("phase_damping", "amplitude_damping", "smoothness_inv_A", "detector_weighting"):
+        for name in ("phase_damp", "amplitude_damp", "smoothness_inv_A", "detector_weighting"):
             if name in reconstruction:
                 setattr(self, name, reconstruction[name])
         for name, value in self._explicit_reconstruction_options.items():
@@ -1163,22 +1163,22 @@ class ShowPtycho(anywidget.AnyWidget):
 
     def _check_method(self, method: str | None = None) -> None:
         """Keep experimental methods on their supported backend and full scan."""
-        if (self.method if method is None else method) == "ssb":
+        if (self.method if method is None else method) == "phase_of_mean":
             return
         if not self.regularization_available:
-            raise ValueError("Regularized direct reconstruction currently requires CUDA; use method='ssb' on MPS.")
+            raise ValueError("Regularized direct reconstruction currently requires CUDA; use method='phase_of_mean' on MPS.")
         if self.local_tilt_json:
-            raise ValueError("Regional fitting currently supports method='ssb'; use a separate full-session review for regularization.")
+            raise ValueError("Regional fitting currently supports method='phase_of_mean'; use a separate full-session review for regularization.")
 
     def _reconstruction_options(self) -> dict:
         """Pass only parameters used by the selected numerical method."""
         self._check_method()
-        if self.method == "ssb":
-            return {"method": "ssb"}
-        options = {"method": self.method, "phase_damping": self.phase_damping,
+        if self.method == "phase_of_mean":
+            return {"method": "phase_of_mean"}
+        options = {"method": self.method, "phase_damp": self.phase_damp,
                    "smoothness_inv_A": self.smoothness_inv_A, "detector_weighting": self.detector_weighting}
         if self.method == "complex":
-            options["amplitude_damping"] = self.amplitude_damping
+            options["amplitude_damp"] = self.amplitude_damp
         return options
 
     def _reconstruct(self, request_id: int, aberrations: dict, *, compute_loss: bool) -> None:
@@ -1275,9 +1275,9 @@ class ShowPtycho(anywidget.AnyWidget):
         if not change["new"]:
             return
         request = json.loads(change["new"])
-        if request.get("region_id") and request.get("method", self.method) != "ssb":
+        if request.get("region_id") and request.get("method", self.method) != "phase_of_mean":
             self.local_tilt_preview_json = json.dumps({"id": request["id"], "region_id": request["region_id"],
-                "error": "Regional previews support method='ssb'; use a full-session review for regularization."})
+                "error": "Regional previews support method='phase_of_mean'; use a full-session review for regularization."})
             return
         if request.get("region_id"):
             self._preview_region(request)
@@ -1295,7 +1295,7 @@ class ShowPtycho(anywidget.AnyWidget):
         self._adopting = True
         try:
             with self.hold_sync():
-                for name in ("method", "phase_damping", "amplitude_damping", "smoothness_inv_A", "detector_weighting"):
+                for name in ("method", "phase_damp", "amplitude_damp", "smoothness_inv_A", "detector_weighting"):
                     if name in request:
                         setattr(self, name, request[name])
                 if "sample" in request:
@@ -1323,7 +1323,7 @@ class ShowPtycho(anywidget.AnyWidget):
 
     @property
     def _output_factor(self) -> int:
-        """Resolve Auto using the same support criterion as SSB.reconstruct."""
+        """Resolve Auto using the same support criterion as DirectPtycho.run."""
         return self.auto_upsample if self.upsample == "auto" else self.upsample
 
     def _on_upsample(self, change) -> None:
@@ -1389,7 +1389,7 @@ class ShowPtycho(anywidget.AnyWidget):
             self._adopt_session(initial=False, compute_loss=False, restore_tilt=True)
             self.sample_fit_status = "Initial phase ready · refining through fifth order..."
         try:
-            result = self._ssb.fit_aberrations(
+            result = self._ssb.aberrations(
                 search="standard",
                 tilt=True, check_rotation=False, compare_standard=False, verbose=False,
                 on_initial_fit=show_initial)
@@ -1457,8 +1457,8 @@ class ShowPtycho(anywidget.AnyWidget):
                 (row_start, row_stop, col_start, col_stop), aberrations=self._current(),
                 scan_detector_rotation_deg=self.scan_detector_rotation_deg)
             try:
-                rebuilt.fit_aberrations(search="standard",
-                                         tilt=True, check_rotation=False, num_trials=num_trials, verbose=False)
+                rebuilt.aberrations(search="standard",
+                                    tilt=True, check_rotation=False, trials=num_trials, verbose=False)
             except BaseException:
                 rebuilt.ssb.close()
                 raise
@@ -1607,7 +1607,7 @@ class ShowPtycho(anywidget.AnyWidget):
         """Write the starred snapshots: ``{"schema", "stars": [calibration, ...]}``, each as ``_calibration`` builds it."""
         stars = [{"id": entry["id"], "generated_at_utc": entry["generated_at_utc"],
                   **self._calibration(entry["aberrations"], entry["scan_detector_rotation_deg"], entry["display_negate_phase"], entry.get("loss")),
-                  "reconstruction": entry.get("reconstruction", {"method": "ssb"})}
+                  "reconstruction": entry.get("reconstruction", {"method": "phase_of_mean"})}
                  for entry in self._pinned if entry["starred"]]
         write_json(self._stars_path, {"schema": STARS_SCHEMA, "stars": stars})
 
@@ -1626,7 +1626,7 @@ class ShowPtycho(anywidget.AnyWidget):
         rotation, the output sampling, the display settings and the
         acquisition identity a later session restores from. The session's
         aberrations are set to the saved ones, as known values, so
-        ``ptycho.reconstruct()`` applies them. Display state (``state_dict``) is
+        ``ptycho.run()`` applies them. Display state (``state_dict``) is
         not written here.
 
         Returns
@@ -1702,7 +1702,7 @@ class ShowPtycho(anywidget.AnyWidget):
             (self._on_rotation_change, ["scan_detector_rotation_deg"]),
             (self._on_panel_change, ["higher_order_aberrations_json", "sample_json"]),
             (self._on_panel_change, ["tilt_correction"]),
-            (self._on_panel_change, ["method", "phase_damping", "amplitude_damping", "smoothness_inv_A", "detector_weighting"]),
+            (self._on_panel_change, ["method", "phase_damp", "amplitude_damp", "smoothness_inv_A", "detector_weighting"]),
             (self._on_crop_refit_request, ["crop_refit_request_json"]),
             (self._on_sample_fit_request, ["sample_fit_request"]),
             (self._on_region_optics_change, ["result_json", "scan_detector_rotation_deg",
@@ -1736,8 +1736,8 @@ class ShowPtycho(anywidget.AnyWidget):
         """
         if self._ssb is None:
             raise ValueError("export() writes an SSB review folder from a session's bright-field counts; this widget shows an array.")
-        if self.method != "ssb":
-            raise ValueError("Regularized reconstruction needs a live CUDA session. Use save_calibration() to save its method and strengths; standalone browser export supports method='ssb' only.")
+        if self.method != "phase_of_mean":
+            raise ValueError("Regularized reconstruction needs a live CUDA session. Use save_calibration() to save its method and strengths; standalone browser export supports method='phase_of_mean' only.")
         return write_showptycho_folder(self, path, title)
 
     def _repr_mimebundle_(self, **kwargs):

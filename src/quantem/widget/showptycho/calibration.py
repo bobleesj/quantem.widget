@@ -36,16 +36,18 @@ def read_calibration(path: Path, identity: dict | None, scan_region: tuple[int, 
     estimator = saved["phase_estimator"]
     if estimator not in ("phase_of_mean", *RETIRED_PHASE_ESTIMATORS):
         raise ValueError("the saved phase estimator is not supported")
-    reconstruction = dict(saved.get("reconstruction") or saved.get("reconstruction_options") or {})
-    method = reconstruction.setdefault("method", saved.get("reconstruction_method", "ssb"))
-    if method not in ("ssb", "phase", "complex"):
+    # ShowPtycho's Save writes "reconstruction"; quantem.gpu's DirectPtychoResult.save_calibration writes
+    # "reconstruction_method" beside "reconstruction_options" (empty for phase_of_mean)
+    reconstruction = dict(saved["reconstruction"] if "reconstruction" in saved else saved["reconstruction_options"])
+    method = reconstruction.setdefault("method", saved.get("reconstruction_method"))
+    if method not in ("phase_of_mean", "phase", "complex"):
         raise ValueError("the saved reconstruction method is not supported")
     if "reconstruction_method" in saved and saved["reconstruction_method"] != method:
         raise ValueError("the saved reconstruction method and options disagree")
-    if method != "ssb":
-        allowed = {"method", "phase_damping", "smoothness_inv_A", "detector_weighting"}
+    if method != "phase_of_mean":
+        allowed = {"method", "phase_damp", "smoothness_inv_A", "detector_weighting"}
         if method == "complex":
-            allowed.add("amplitude_damping")
+            allowed.add("amplitude_damp")
         if set(reconstruction) - allowed:
             raise ValueError("the saved reconstruction contains unsupported options")
         for name in allowed - {"method", "detector_weighting"}:

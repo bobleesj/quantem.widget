@@ -1686,30 +1686,30 @@ function Explore() {
   // an array carries the pixel size of its image; a session the scan step, which the output sampling divides
   const [objectSamplingA] = useModelState<number[]>("object_sampling_A");
   const [scanSamplingA] = useModelState<number[]>("scan_sampling_A");
-  const [sampling, setSampling] = useModelState<number | "auto">("upsampling");
-  const [upsamplingAvailable] = useModelState<boolean>("upsampling_available");
+  const [sampling, setSampling] = useModelState<number | "auto">("upsample");
+  const [upsampleAvailable] = useModelState<boolean>("upsample_available");
   const [autoSamplingNote] = useModelState<string>("auto_sampling_note");
   const [samplingLimitNote] = useModelState<string>("sampling_limit_note");
   const [methodModel] = useModelState<string>("method");
-  const [phaseDampingModel] = useModelState<number>("phase_damping");
-  const [amplitudeDampingModel] = useModelState<number>("amplitude_damping");
+  const [phaseDampModel] = useModelState<number>("phase_damp");
+  const [amplitudeDampModel] = useModelState<number>("amplitude_damp");
   const [smoothnessModel] = useModelState<number>("smoothness_inv_A");
   const [weightingModel] = useModelState<string>("detector_weighting");
   const [regularizationAvailable] = useModelState<boolean>("regularization_available");
-  type ReconstructionControls = { method: string; phase_damping: number; amplitude_damping: number; smoothness_inv_A: number; detector_weighting: string };
+  type ReconstructionControls = { method: string; phase_damp: number; amplitude_damp: number; smoothness_inv_A: number; detector_weighting: string };
   const [reconstructionControls, setReconstructionControls] = React.useState<ReconstructionControls>(() => ({
-    method: methodModel || "ssb", phase_damping: phaseDampingModel ?? 0.03,
-    amplitude_damping: amplitudeDampingModel ?? 0.03, smoothness_inv_A: smoothnessModel ?? 1.0,
+    method: methodModel || "phase_of_mean", phase_damp: phaseDampModel ?? 0.03,
+    amplitude_damp: amplitudeDampModel ?? 0.03, smoothness_inv_A: smoothnessModel ?? 1.0,
     detector_weighting: weightingModel ?? "uniform",
   }));
   const reconstructionRef = React.useRef(reconstructionControls);
   // The launch settings Reset All returns to: what the viewer opened with, not hard-coded values.
   const launchReconstructionRef = React.useRef(reconstructionControls);
   const launchSamplingRef = React.useRef(sampling);
-  const [autoFactor] = useModelState<number>("auto_upsampling");
+  const [autoFactor] = useModelState<number>("auto_upsample");
   // Auto never exceeds 4× on any path (the browser WebGPU path included); 8× is only an explicit choice.
-  const upsampling = sampling === "auto" ? Math.min(autoFactor || 1, 4) : (sampling || 1);
-  const upsamplingRef = React.useRef(upsampling || 1); upsamplingRef.current = upsampling || 1;
+  const upsample = sampling === "auto" ? Math.min(autoFactor || 1, 4) : (sampling || 1);
+  const upsampleRef = React.useRef(upsample || 1); upsampleRef.current = upsample || 1;
 
   const [phaseWidth] = useModelState<number>("phase_width");
   const [phaseHeight] = useModelState<number>("phase_height");
@@ -2365,7 +2365,7 @@ function Explore() {
   }, [model, showBusy]);
 
   const sendDrag = React.useCallback((c10Val: number, c12Val: number, phi12Val: number, rotationVal = rotationDegRef.current) => {
-    if (reconstructionRef.current.method === "ssb" && !regionContextRef.current && frontendPreviewRef.current?.(c10Val, c12Val, phi12Val, rotationVal)) return;
+    if (reconstructionRef.current.method === "phase_of_mean" && !regionContextRef.current && frontendPreviewRef.current?.(c10Val, c12Val, phi12Val, rotationVal)) return;
     // The same complete state already on its way gives the same phase: one input event can report a value twice.
     const latest = sentRequestsRef.current[sentRequestsRef.current.length - 1];
     if (!pendingDragRef.current && latest && latest.key === requestKey(c10Val, c12Val, phi12Val)) return;
@@ -2378,7 +2378,7 @@ function Explore() {
 
   const sendCommit = React.useCallback((c10Val: number, c12Val: number, phi12Val: number, rotationVal = rotationDegRef.current) => {
     pendingDragRef.current = null;
-    if (reconstructionRef.current.method === "ssb" && !regionContextRef.current && frontendFullRef.current?.(c10Val, c12Val, phi12Val, rotationVal)) return;
+    if (reconstructionRef.current.method === "phase_of_mean" && !regionContextRef.current && frontendFullRef.current?.(c10Val, c12Val, phi12Val, rotationVal)) return;
     if (sentRequestsRef.current.length >= requestCapacity()) {
       pendingDragRef.current = { values: [c10Val, c12Val, phi12Val], committed: true };
       return;
@@ -2427,19 +2427,19 @@ function Explore() {
   React.useEffect(() => {
     if (sentRequestsRef.current.length || pendingDragRef.current) return;
     reconstructionRef.current = {
-      method: methodModel || "ssb", phase_damping: phaseDampingModel ?? 0.03,
-      amplitude_damping: amplitudeDampingModel ?? 0.03, smoothness_inv_A: smoothnessModel ?? 1.0,
+      method: methodModel || "phase_of_mean", phase_damp: phaseDampModel ?? 0.03,
+      amplitude_damp: amplitudeDampModel ?? 0.03, smoothness_inv_A: smoothnessModel ?? 1.0,
       detector_weighting: weightingModel ?? "uniform",
     };
     setReconstructionControls({ ...reconstructionRef.current });
-  }, [methodModel, phaseDampingModel, amplitudeDampingModel, smoothnessModel, weightingModel]);
+  }, [methodModel, phaseDampModel, amplitudeDampModel, smoothnessModel, weightingModel]);
   // `render` false: the control shows its own value while dragged; the widget renders on release.
   const changeReconstruction = (next: Partial<ReconstructionControls>, committed: boolean, render = true) => {
     reconstructionRef.current = { ...reconstructionRef.current, ...next };
     if (render) reconstructionFrame.schedule();
     // Python does not echo a strength the browser sent; the browser's model takes it on release.
     if (committed) {
-      for (const key of ["phase_damping", "amplitude_damping", "smoothness_inv_A"] as const) {
+      for (const key of ["phase_damp", "amplitude_damp", "smoothness_inv_A"] as const) {
         if (next[key] !== undefined) model.set(key, next[key]);
       }
     }
@@ -3113,7 +3113,7 @@ function Explore() {
       aberrations: { C10_nm: c10Val, C12_nm: c12Val, phi12_deg: phi12Val },
       higherOrderAberrations: higherOrderRef.current,
       scanDetectorRotationDeg: rotationVal,
-      upsampling: upsamplingRef.current,
+      upsample: upsampleRef.current,
       numBrightFieldPixels: bfCount,
       reducedBrightField: !isFull,
       computeLoss: false,
@@ -3182,7 +3182,7 @@ function Explore() {
       aberrations: { C10_nm: c10Val, C12_nm: c12Val, phi12_deg: phi12Val },
       higherOrderAberrations: higherOrderRef.current,
       scanDetectorRotationDeg: rotationVal,
-      upsampling: upsamplingRef.current,
+      upsample: upsampleRef.current,
       numBrightFieldPixels: bfCount,
       reducedBrightField: !isFull,
       computeLoss: false,
@@ -3215,12 +3215,12 @@ function Explore() {
   }, [effectiveTotalBf, runFrontendPreview, fullBrightFieldCount, webgpuStandalone, webgpuDiagnostic, computeLoss]);
 
   frontendFullRef.current = runFrontendFull;
-  const previousUpsamplingRef = React.useRef(upsampling);
+  const previousUpsampleRef = React.useRef(upsample);
   React.useEffect(() => {
-    if (previousUpsamplingRef.current === upsampling) return;
-    previousUpsamplingRef.current = upsampling;
+    if (previousUpsampleRef.current === upsample) return;
+    previousUpsampleRef.current = upsample;
     if (webgpuStandalone) frontendPreviewRef.current?.(sliderVals.current.c10, sliderVals.current.c12, sliderVals.current.phi12, rotationDegRef.current);
-  }, [upsampling, webgpuStandalone]);
+  }, [upsample, webgpuStandalone]);
   shouldCommitOnReleaseRef.current = effectiveTotalBf > 0 || !!webgpuSsbRef.current;
   const standaloneInitialRenderRef = React.useRef(false);
   React.useEffect(() => {
@@ -3487,13 +3487,13 @@ function Explore() {
       loss: loss ?? null,
       starred: false,
       generated_at_utc: new Date().toISOString(),
-      reconstruction: reconstructionRef.current.method === "ssb" ? { method: "ssb" } : {
+      reconstruction: reconstructionRef.current.method === "phase_of_mean" ? { method: "phase_of_mean" } : {
         method: reconstructionRef.current.method,
-        phase_damping: reconstructionRef.current.phase_damping,
+        phase_damp: reconstructionRef.current.phase_damp,
         smoothness_inv_A: reconstructionRef.current.smoothness_inv_A,
         detector_weighting: reconstructionRef.current.detector_weighting,
         ...(reconstructionRef.current.method === "complex"
-          ? { amplitude_damping: reconstructionRef.current.amplitude_damping } : {}),
+          ? { amplitude_damp: reconstructionRef.current.amplitude_damp } : {}),
       },
       phaseData: new Float32Array(phase.data),
       w: phase.w, h: phase.h,
@@ -3968,7 +3968,7 @@ function Explore() {
           </Tooltip>
         )}
         {tuning && (
-          <Tooltip title="Restore the fitted aberrations, rotation, tilt and depth, turn Tilt correction on, and return colormaps, contrast, method, damping and upsampling to the launch settings. Zoom is kept." placement="top" arrow>
+          <Tooltip title="Restore the fitted aberrations, rotation, tilt and depth, turn Tilt correction on, and return colormaps, contrast, method, damping and output sampling to the launch settings. Zoom is kept." placement="top" arrow>
             <span>
               <Button
                 size="small"
@@ -4046,7 +4046,7 @@ function Explore() {
           slotProps={{ paper: { ...themedMenuPaper, sx: { ...themedMenuPaper.sx, p: 1.25, maxWidth: "calc(100vw - 32px)" } } }}>
           <Box role="dialog" aria-label="View settings"
             sx={{ display: "flex", flexDirection: "column", gap: 1, fontFamily: WIDGET_UI_FONT, width: 280, maxWidth: "100%" }}>
-            {(upsamplingAvailable || webgpuStandalone) && <Box component="label"
+            {(upsampleAvailable || webgpuStandalone) && <Box component="label"
               sx={{ ...typography.label, display: "inline-flex", alignItems: "center", gap: 1 }}>
               Upsampling
               <Select value={sampling ?? "auto"}
@@ -4234,15 +4234,15 @@ function Explore() {
             inputProps={{ "aria-label": "Reconstruction method" }}
             onChange={event => changeReconstruction({ method: event.target.value }, true)}
             sx={{ ...typography.label, height: 28 }}>
-            <MenuItem value="ssb">SSB</MenuItem>
+            <MenuItem value="phase_of_mean">SSB</MenuItem>
             <MenuItem value="phase" disabled={!regularizationAvailable || webgpuStandalone || !!localTiltJson}>Phase · experimental</MenuItem>
             <MenuItem value="complex" disabled={!regularizationAvailable || webgpuStandalone || !!localTiltJson}>Amplitude + phase · experimental</MenuItem>
           </Select>
-          {reconstructionControls.method !== "ssb" && <>
-            {(["phase_damping", ...(reconstructionControls.method === "complex" ? ["amplitude_damping"] : [])] as const).map(key => {
-              const name = key as "phase_damping" | "amplitude_damping";
+          {reconstructionControls.method !== "phase_of_mean" && <>
+            {(["phase_damp", ...(reconstructionControls.method === "complex" ? ["amplitude_damp"] : [])] as const).map(key => {
+              const name = key as "phase_damp" | "amplitude_damp";
               const value = reconstructionControls[name];
-              return <DampingSlider key={name} name={name === "phase_damping" ? "Phase" : "Amplitude"} value={value}
+              return <DampingSlider key={name} name={name === "phase_damp" ? "Phase" : "Amplitude"} value={value}
                 onDrag={next => changeReconstruction({ [name]: next }, false, false)}
                 onCommit={next => changeReconstruction({ [name]: next }, true)} />;
             })}
@@ -4274,7 +4274,7 @@ function Explore() {
                 </Typography>
               </Tooltip>
               {loss != null && !regionalMode && (
-                <Tooltip title={reconstructionControls.method === "ssb" ? "Phase variance across the corrected bright-field pixel images. Lower values indicate closer agreement between those images, not a guarantee of sharper or more accurate phase. The default fit optimizes model agreement; this is a separate diagnostic." : "Measurement disagreement for the selected direct model. Damping trades data agreement against stability. This value is not an independent resolution measurement."} placement="top" arrow>
+                <Tooltip title={reconstructionControls.method === "phase_of_mean" ? "Phase variance across the corrected bright-field pixel images. Lower values indicate closer agreement between those images, not a guarantee of sharper or more accurate phase. The default fit optimizes model agreement; this is a separate diagnostic." : "Measurement disagreement for the selected direct model. Damping trades data agreement against stability. This value is not an independent resolution measurement."} placement="top" arrow>
                   <Typography sx={{ ...typography.label, ...statChip(tc, true), cursor: "help" }}>
                     loss <Box component="span" sx={{ color: tc.accent }}>{formatNumber(loss, 8)}</Box>
                     {delta != null && (

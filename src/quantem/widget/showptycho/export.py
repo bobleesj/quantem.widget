@@ -108,7 +108,7 @@ def write_showptycho_folder(widget, path: str | pathlib.Path | None, title: str 
         state = ssb.browser_state()
         counts_path = state["bright_field_source_path"]
     if counts_path is None or (qem_source is None and state["bright_field_source_dtype"] is None):
-        raise RuntimeError("ShowPtycho export needs exact bright-field counts: open the acquisition with SSB.open(...) or provide counts through a CUDA or MPS session.")
+        raise RuntimeError("ShowPtycho export needs exact bright-field counts: open the acquisition with DirectPtycho.open(...) or provide counts through a CUDA or MPS session.")
 
     num_bright_field_pixels = state["num_bright_field_pixels"]
     # geometry arrays are stored in the browser kernels' int32 / float32, the values they compute with

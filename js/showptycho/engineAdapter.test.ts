@@ -10,7 +10,7 @@ describe("the units at the engine boundary", () => {
     const controller = new AbortController();
     await reconstruct(engine, {
       aberrations: { C10_nm: 3, C12_nm: 1, phi12_deg: 90 }, higherOrderAberrations: {},
-      scanDetectorRotationDeg: 10, upsampling: 4, numBrightFieldPixels: 9000,
+      scanDetectorRotationDeg: 10, upsample: 4, numBrightFieldPixels: 9000,
       reducedBrightField: false, computeLoss: true, diagnosticOnly: true, signal: controller.signal,
       sample: { tiltRowMrad: 3, tiltColMrad: -4, depthSpreadNm: 12 },
     });
@@ -24,7 +24,7 @@ describe("the units at the engine boundary", () => {
     await reconstruct(engine, {
       aberrations: { C10_nm: 3, C12_nm: 1, phi12_deg: 90 },
       higherOrderAberrations: { [higherOrderMagnitudeKey("C21")]: 5, [higherOrderAzimuthKey("C21")]: 45, [higherOrderMagnitudeKey("C30")]: 2 },
-      scanDetectorRotationDeg: 10, upsampling: 2, numBrightFieldPixels: 7, reducedBrightField: true, computeLoss: false,
+      scanDetectorRotationDeg: 10, upsample: 2, numBrightFieldPixels: 7, reducedBrightField: true, computeLoss: false,
       sample: { tiltRowMrad: 3, tiltColMrad: -4, depthSpreadNm: 12 },
     });
     const [c10, c12, phi12, options] = calls[0] as [number, number, number, Record<string, unknown>];
@@ -44,7 +44,7 @@ describe("the units at the engine boundary", () => {
     const engine = { reconstruct: (...args: unknown[]) => { calls.push(args); return Promise.resolve(null); } } as unknown as WebGPUSSBBackend;
     await reconstruct(engine, {
       aberrations: { C10_nm: 0, C12_nm: 0, phi12_deg: 0 }, higherOrderAberrations: {}, scanDetectorRotationDeg: 0,
-      upsampling: 1, numBrightFieldPixels: 7, reducedBrightField: false, computeLoss: true,
+      upsample: 1, numBrightFieldPixels: 7, reducedBrightField: false, computeLoss: true,
       sample: { tiltRowMrad: 3, tiltColMrad: -4, depthSpreadNm: 0 },
     });
     expect((calls[0][3] as Record<string, unknown>).sample).toBeUndefined();

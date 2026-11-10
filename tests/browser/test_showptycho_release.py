@@ -41,7 +41,7 @@ import time
 import numpy as np
 import quantem.gpu
 import quantem.widget
-from quantem.gpu import SSB, io
+from quantem.gpu import DirectPtycho, io
 from quantem.gpu.device import detect
 
 for package in (quantem.gpu, quantem.widget):
@@ -53,14 +53,14 @@ for name, value in {calibration!r}.items():
     setattr(data.calibration, name, value)
 if data.calibration.detector_sampling_mrad is None and data.calibration.detector_sampling_inv_A is None:
     data.calibration.fit_detector_sampling()
-ssb = SSB(data)
+ssb = DirectPtycho(data)
 started = time.perf_counter()
-fit = ssb.fit_aberrations(num_trials=200, seed=42, compare_standard=False)
+fit = ssb.aberrations(trials=200, seed=42, compare_standard=False)
 full_fit_s = time.perf_counter() - started
 assert fit.optimizer["host_numerical_search"] is False
 assert fit.optimizer["device"] == backend
 assert len(fit.trial_records) == 200 * (len(fit.rotation_branches.branches) if fit.rotation_branches else 1)
-result = ssb.reconstruct(upsampling="auto")
+result = ssb.run(upsample="auto")
 save_dir = Path.cwd() / 'calibration'
 viewer = ssb.show(local_tilt=True, save_dir=save_dir)
 viewer.regions = []
@@ -203,7 +203,7 @@ save_dir = Path.cwd() / 'calibration'
 expected = json.loads((save_dir / 'release_expected.json').read_text())
 def unexpected_refit(*args, **kwargs):
     raise AssertionError('Saved calibration should restore without refitting')
-ssb.fit_aberrations = unexpected_refit
+ssb.aberrations = unexpected_refit
 viewer = ssb.show(local_tilt=True, save_dir=save_dir)
 assert viewer.region_fits == expected['fits']
 assert viewer.fitted_C10_nm == expected['C10_nm']

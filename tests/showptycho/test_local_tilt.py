@@ -173,7 +173,7 @@ class _Fit:
 
 
 class _PaddedSession:
-    """quantem.gpu.SSB as fit_regions reads it: a 96 x 80 scan centred in a 128 x 128 grid."""
+    """quantem.gpu.DirectPtycho as fit_regions reads it: a 96 x 80 scan centred in a 128 x 128 grid."""
     scan_region, source_path, backend = None, 'scan.npy', 'mps'
     voltage_kV, semiangle_mrad, scan_sampling_A = 300.0, 20.0, (0.5, 0.5)
     detector_sampling_mrad, bright_field_center_px, bright_field_radius_px = (5.0, 5.0), (7.5, 7.5), 4.0
@@ -188,13 +188,13 @@ class _PaddedSession:
         import contextlib
         return contextlib.nullcontext(self)
 
-    def fit_aberrations(self, *, seed, **options):
+    def aberrations(self, *, seed, **options):
         self.seeds.append(seed)
         self.options = options
         return _Fit(self.agreements[len(self.seeds) - 1], seed)
 
-    def preview(self, aberrations, *, upsampling, **options):
-        rows, cols = np.indices((128 * upsampling,) * 2)
+    def preview(self, aberrations, *, upsample, **options):
+        rows, cols = np.indices((128 * upsample,) * 2)
         return (rows * 10000 + cols).astype(np.float32), None
 
 
@@ -204,7 +204,7 @@ def _fit_padded(agreements):
     parameters = {'aberrations': {'C10_nm': 3.0, 'C12_nm': 1.0, 'phi12_deg': 10.0},
                   'scan_detector_rotation_deg': 0.0}
     return DirectSession(_PaddedSession(agreements)).fit_regions(
-        [region], parameters, upsampling=2)
+        [region], parameters, upsample=2)
 
 
 def test_the_retired_refinement_keyword_says_so_once_and_changes_nothing(capsys):
@@ -244,8 +244,8 @@ def test_regional_fit_passes_its_trial_count_and_tilt_limit_to_the_fit():
     session = _PaddedSession([0.5])
     region = {'id': 'r', 'label': 'R', 'bounds': [8, 40, 4, 36]}
     parameters = {'aberrations': {'C10_nm': 3.0, 'C12_nm': 1.0, 'phi12_deg': 10.0}, 'scan_detector_rotation_deg': 0.0}
-    result = DirectSession(session).fit_regions([region], parameters, upsampling=1, num_trials=12)
-    assert session.options['num_trials'] == 12 and 'refinement' not in session.options
+    result = DirectSession(session).fit_regions([region], parameters, upsample=1, num_trials=12)
+    assert session.options['trials'] == 12 and 'refinement' not in session.options
     assert session.options['tilt_limit_mrad'] == REGION_TILT_LIMIT_MRAD
     assert session.options['compute_loss'] is False
     assert session.options['search'] == 'standard'

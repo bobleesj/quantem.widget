@@ -233,19 +233,6 @@ def _finite_or_none(value) -> float | None:
     return float(value) if value is not None and math.isfinite(float(value)) else None
 
 
-def _library_options(options: dict) -> dict:
-    """Translate this widget's option names to quantem.gpu's current keywords."""
-    renamed = {"upsample": "upsample", "phase_damping": "phase_damp",
-               "amplitude_damping": "amplitude_damp"}
-    out = {renamed.get(key, key): value for key, value in options.items()}
-    if out.get("method") == "ssb":
-        out["method"] = "phase_of_mean"
-    estimator = out.pop("phase_estimator", None)
-    if estimator is not None:
-        out.setdefault("method", "phase_of_mean" if estimator in ("mean_phase", "phase_of_mean") else estimator)
-    return out
-
-
 class DirectSession:
     """A ``quantem.gpu.DirectPtycho`` session as the SSB widgets read and drive it.
 
@@ -463,8 +450,8 @@ class DirectSession:
     def restore_calibration(self, saved: dict) -> None:
         """Adopt a validated complete correction without running a new search.
 
-        Assigning ``ssb.aberrations`` states them as known (quantem.gpu), so a
-        later ``ptycho.reconstruct()`` applies them instead of fitting.
+        Assigning ``ssb.known_aberrations`` states them as known (quantem.gpu), so a
+        later ``ptycho.run()`` applies them instead of fitting.
         """
         from quantem.gpu.direct_ptycho.units import validate_aberrations
 
@@ -498,7 +485,7 @@ class DirectSession:
 
         The whole mapping is assigned, quantem.gpu's way to state known
         aberrations: an in-place update left an unfitted session to fit again
-        on ``reconstruct()``, discarding the reviewed values.
+        on ``run()``, discarding the reviewed values.
         """
         self.ssb.known_aberrations = {**self.ssb.known_aberrations, **aberrations}
         self.ssb.sample_tilt_mrad = None if sample is None else tuple(sample["sample_tilt_mrad"])
@@ -517,7 +504,7 @@ class DirectSession:
         float32, so a panel left at zero changed the last bits of most pixels of
         the two-term phase.
         """
-        return self.ssb.preview(_named_orders(aberrations), **_library_options(options))
+        return self.ssb.preview(_named_orders(aberrations), **options)
 
     @property
     def drag_windows(self) -> bool:
@@ -549,15 +536,14 @@ class DirectSession:
 
         return direct_workflow.advance(self.ssb)
 
-    def _drag_inputs(self, aberrations: dict, *, upsample, method: str = "ssb", sample_tilt_mrad=(0.0, 0.0),
+    def _drag_inputs(self, aberrations: dict, *, upsample, method: str = "phase_of_mean", sample_tilt_mrad=(0.0, 0.0),
                      depth_spread_nm: float = 0.0, **strengths):
         """``preview``'s options as ``direct_workflow``'s (aberrations, tilt, depth, factor, policy)."""
         from quantem.gpu.direct_ptycho import direct_workflow
         from quantem.gpu.direct_ptycho.units import validate_aberrations
 
-        method = "phase_of_mean" if method in (None, "ssb") else method
         policy = direct_workflow.settings(method, *(strengths.get(name) for name in (
-            "phase_damping", "amplitude_damping", "smoothness_inv_A", "detector_weighting")))
+            "phase_damp", "amplitude_damp", "smoothness_inv_A", "detector_weighting")))
         return (validate_aberrations(_named_orders(aberrations), higher_order=True), tuple(sample_tilt_mrad),
                 float(depth_spread_nm), self.ssb._resolve_upsample(upsample), policy)
 
@@ -597,16 +583,14 @@ class DirectSession:
         self.ssb.export_brightfield(path)
 
     def run(self, **options) -> dict:
-        """Run direct reconstruction at the reviewed optics; see ``result`` for the keys."""
-        return self.result(self.ssb.reconstruct(**options))
+        """Run direct reconstruction at the reviewed optics (``quantem.gpu.DirectPtycho.run``); see ``result`` for the keys."""
+        return self.result(self.ssb.run(**options))
 
-    reconstruct = run  # Existing widget integrations share the canonical implementation.
-
-    def fit_aberrations(self, **options) -> dict:
-        """Fit the aberrations (``quantem.gpu.DirectPtycho.fit_aberrations(**options)``); see ``result`` for the keys."""
+    def aberrations(self, **options) -> dict:
+        """Fit the aberrations (``quantem.gpu.DirectPtycho.aberrations(**options)``); see ``result`` for the keys."""
         options.setdefault("search", "standard")
         options.setdefault("show", False)
-        return self.result(self.ssb.fit_aberrations(**options))
+        return self.result(self.ssb.aberrations(**options))
 
     def fit_regions(self, regions: list[dict], parameters: dict, *,
                     upsample: int,
@@ -618,7 +602,7 @@ class DirectSession:
         Independent regional sessions leave the overview calibration intact.
         Detector geometry and rotation are common; aberrations, both tilt
         components and depth spread are optimized together for each region,
-        ``quantem.gpu.DirectPtycho.fit_aberrations(tilt=True, num_trials=)``
+        ``quantem.gpu.DirectPtycho.aberrations(tilt=True, trials=)``
         once with ``REGION_FIT_SEED`` and quantem.gpu's default refinement.
         The separate phase-variance diagnostic is not needed for this fit,
         so ``compute_loss=False`` omits it without changing any fitted value.
@@ -664,9 +648,9 @@ class DirectSession:
                 scan_detector_rotation_deg=parameters["scan_detector_rotation_deg"],
             ) as regional:
                 report("joint_fit", 1)
-                fitted = regional.fit_aberrations(
+                fitted = regional.aberrations(
                     search="standard",
-                    tilt=True, num_trials=int(num_trials),
+                    tilt=True, trials=int(num_trials),
                     tilt_limit_mrad=REGION_TILT_LIMIT_MRAD,
                     check_rotation=False, compare_standard=False,
                     compute_loss=False, seed=REGION_FIT_SEED, verbose=False, show=False)
@@ -723,7 +707,7 @@ class DirectSession:
 
     @staticmethod
     def result(result) -> dict:
-        """The values of a quantem.gpu ``SSBResult`` the widgets show and store.
+        """The values of a quantem.gpu ``DirectPtychoResult`` the widgets show and store.
 
         ``phase``, ``aberrations`` (``C10_nm``, ``C12_nm``, ``phi12_deg``),
         ``scan_detector_rotation_deg`` (the physical angle in [0, 360)),

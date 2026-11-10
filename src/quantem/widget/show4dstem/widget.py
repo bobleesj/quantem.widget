@@ -1057,7 +1057,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     def compute_ssb(self, *, set_source: bool = True, verbose: bool = False, **kwargs) -> np.ndarray:
         """Reconstruct the SSB phase of the current dataset and show it as the image.
 
-        The fit is quantem.gpu's default ``SSB.fit_aberrations()``, model-based
+        The fit is quantem.gpu's default ``DirectPtycho.aberrations()``, model-based
         and tilt-corrected: the SSB model fitted to the data together with the
         sample tilt and depth spread (C10 is then the defocus at mid-depth).
         ``compute_ssb(tilt=False)`` fits the same model with the tilt held at 0.
@@ -1069,7 +1069,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         ``aberrations`` (a dict of ``C10_nm``, ``C12_nm`` and ``phi12_deg``; a
         missing key is 0), ``scan_detector_rotation_deg`` (the physical angle
         in [0, 360); omitted, the rotation the acquisition records, else the
-        centre-of-mass estimate, as quantem.gpu.SSB chooses it),
+        centre-of-mass estimate, as quantem.gpu.DirectPtycho chooses it),
         ``scan_detector_rotation_flipped``, ``bright_field_center_px`` and
         ``bright_field_radius_px`` (omitted, the constructor's, else the disk
         quantem.gpu detects), ``bright_field_intensity_threshold``
@@ -2271,15 +2271,15 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 ssb.ssb.depth_spread_nm = float(self._ssb_compute_sample["depth_spread_nm"])
             if manual or (trials == 0 and not do_refine):
                 self.ssb_compute_status = f"Reconstructing SSB with the given coefficients ({num_bright_field_pixels} BF pixels)..."
-                result = ssb.reconstruct()
+                result = ssb.run()
             else:
                 method = "with sample tilt" if tilt else "at tilt 0"
                 self.ssb_compute_status = (f"Fitting SSB aberrations {method} ({trials} trials"
                                            f"{', refined' if do_refine else ''}, {num_bright_field_pixels} BF pixels)...")
                 search = "standard" if tilt and not fit_options and trials > 0 and refinement is not None else "primary"
-                result = ssb.fit_aberrations(search=search,
-                                              tilt=tilt, num_trials=trials, refinement=refinement,
-                                              seed=int(seed), verbose=verbose, show=False, **fit_options)
+                result = ssb.aberrations(search=search,
+                                          tilt=tilt, trials=trials, refinement=refinement,
+                                          seed=int(seed), verbose=verbose, show=False, **fit_options)
                 self._ssb_compute_sample = None if result.get("sample_tilt_mrad") is None else {
                     "sample_tilt_mrad": result["sample_tilt_mrad"], "depth_spread_nm": result["depth_spread_nm"]}
             # quantem.gpu centres a scan its FFT cannot take in a padded grid; keep the measured positions
