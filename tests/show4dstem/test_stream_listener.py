@@ -966,3 +966,22 @@ def test_failed_stream_releases_counts_but_preserves_error_details(monkeypatch, 
         assert traceback.format_exception(error) == stack
     finally:
         viewer.close()
+
+
+def test_stream_resizes_the_pattern_and_the_image_independently(recording):
+    """While scans arrive, dragging one panel never resizes the other; dp_size and image_size set each."""
+    viewer = Show4DSTEM.stream(recording)
+    try:
+        assert viewer.sync_resize is False
+    finally:
+        viewer.close()
+    viewer = Show4DSTEM.stream(recording, dp_size="small", image_size="large")
+    try:
+        assert (viewer.sync_resize, viewer.dp_panel_width_px, viewer.vi_panel_width_px) == (False, 300, 600)
+    finally:
+        viewer.close()
+    viewer = Show4DSTEM.stream(recording, sync_resize=True)
+    try:
+        assert viewer.sync_resize is True
+    finally:
+        viewer.close()

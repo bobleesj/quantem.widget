@@ -1132,6 +1132,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         not arm or trigger acquisition. Pass ``first_timeout_s=120`` to wait for
         the first pattern before returning, as in earlier versions.
         New scans appear at the top left, three per row (``compare_columns``); the selected scan stays selected.
+        The diffraction pattern and the virtual image resize independently (``sync_resize=False``):
+        drag either corner, or pass ``dp_size``/``image_size``.
         Set ``newest_first=False`` for chronological display. Data and dataset
         indices always retain acquisition order.
 
@@ -1144,6 +1146,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         if not math.isfinite(first_timeout_s) or first_timeout_s < 0:
             raise ValueError("first_timeout_s must be finite and nonnegative.")
         viewer_kwargs.setdefault("compare_columns", 3)   # a steady grid while scans arrive; 0 chooses automatically
+        viewer_kwargs.setdefault("sync_resize", False)   # the pattern and the image each keep the size dragged to
         partial = hasattr(recording, "acquisitions")
         lock = getattr(recording, "lock", nullcontext())
 

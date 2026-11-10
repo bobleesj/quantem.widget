@@ -4675,8 +4675,10 @@ function Show4DSTEM() {
       ? Math.max(SIDE_BY_SIDE_MIN, Math.floor((mainRowWidth - fittedDpWidth - PANEL_GAP * (showFft ? 2 : 1)) / (showFft ? 2 : 1)))
       : CANVAS_SIZE;
     const cap = viPanelWidthPx || panelWidthPx;
-    setViCanvasSize(cap ? Math.min(cap, rest) : rest);
-  }, [viPanelWidthPx, panelWidthPx, mainRowWidth, fittedDpWidth, showFft]);
+    // Linked panels share the row; an independent image keeps its own width (up to the row) and wraps below.
+    const room = syncResize ? rest : Math.max(rest, mainRowWidth || CANVAS_SIZE);
+    setViCanvasSize(cap ? Math.min(cap, room) : rest);
+  }, [viPanelWidthPx, panelWidthPx, mainRowWidth, fittedDpWidth, showFft, syncResize]);
   const [isResizingCanvas, setIsResizingCanvas] = React.useState(false);
   const [resizeCanvasStart, setResizeCanvasStart] = React.useState<{ x: number; y: number; size: number; panel: "dp" | "vi" } | null>(null);
 
