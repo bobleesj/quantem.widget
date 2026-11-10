@@ -717,79 +717,13 @@ w.set_image(
 )
 ```
 
-## Watch a growing image folder
-
-Use `Show2D.from_folder(...)` when a microscope or reconstruction job writes
-new 2D images into one folder. Each newly readable file becomes another panel
-in the existing gallery. The widget object is not rebuilt, so the current
-selection and the state of panels already present remain stable.
-
-```python
-from quantem.widget import Show2D
-
-w = Show2D.from_folder(
-    "/data/session/haadf",
-    pattern="*.tif",
-    watch_interval=2.0,
-    page_size=20,
-    title="Live HAADF images",
-)
-w
-```
-
-`watch=True` is the default. Pass `watch=False` for a fixed folder or a
-reproducible script that should update only when you call `poll_folder()`.
-Folder galleries default to `page_size=20`: page controls appear automatically
-when the 21st ready image arrives. Use another positive integer to change the
-visible limit, or `page_size=None` to keep one unpaged gallery. The final page
-contains only real files, so 45 images form pages of 20, 20, and 5 panels.
-Folder pages keep selection, stars, hidden state, and ordering keyed to each
-source file rather than sharing a hidden slot across pages.
-
-To change the grouping, open the folder again with another `page_size`.
-
-Paging limits the panels, histograms, and FFT views rendered at one time. The
-current folder implementation still retains the complete full-resolution
-gallery in Python and transports its display previews to the browser; it is not
-yet a lazy, bounded-memory source-page cache. Open a smaller file selection
-when the complete gallery exceeds available memory.
-
-An empty watched folder remains mounted with a waiting view and becomes the
-real gallery in the same widget model when its first stable file arrives.
-The compact title-area badge reports `Watching`, `Updating`, `Waiting for file
-completion`, `Watch error`, or `Stopped`; fixed `watch=False` snapshots do not
-show the badge.
-
-```python
-new_panels = w.poll_folder()       # scan now; return newly appended indices
-w.stop_folder_watch()             # pause background scans
-w.watch_folder(interval=1.0)      # resume with a different interval
-w.close()                         # stop watching and close the widget
-```
-
-Folder watching is append-only. A file already represented in the gallery is
-not duplicated, an incomplete file is deferred until a later poll, and removing
-or rewriting a source file does not silently remove or replace an existing
-panel. An incompatible shape is reported without blocking a later compatible
-file. Close long-running widgets when the notebook no longer needs them.
-
-`Show2D.from_folder(...)` reads the scientific image data at its source
-resolution.
-
-To verify the live path, add genuine EMD files after the widget is visibly
-mounted and check that the same browser canvas paints each full-resolution
-panel.
-
 ## Paged galleries
 
-Direct `Show2D(...)` pages are comparison pages. Use them when each view
+`Show2D` pages are comparison pages. Use them when each view
 contains the same panel grid across several
 analysis settings, iterations, or parameter values. A common example is a
 4-by-4 reconstruction sweep where each page is one iteration or one denoising
 parameter, and the panels within the page are the related output images.
-
-These repeated-slot comparison pages are distinct from the sequential item
-pages created by `Show2D.from_folder(..., page_size=20)`.
 
 Pass a 4D array with shape `(pages, panels_per_page, rows, cols)`:
 

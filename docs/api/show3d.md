@@ -86,27 +86,6 @@ for next_frame in acquisition:
     w.slice_idx = len(frames) - 1
 ```
 
-## Watch a growing frame folder
-
-`Show3D.from_folder(...)` plays every matching image file as the next frame of
-one stack and appends new files in place. `file_types` accepts one extension
-or a list; `pattern` filters names; both apply when given. A missing folder is
-created when `watch=True`. Supported files include EMD, TIFF, PNG, NumPy,
-DM3/DM4, JPEG, BMP and GIF.
-
-```python
-w = Show3D.from_folder("/data/session/reconstruction", file_types="tif", pattern="frame_*", watch_interval=2.0)
-new_frames = w.poll_folder()   # scan now; return newly appended indices
-w.stop_folder_watch()          # pause background scans
-w.watch_folder(interval=1.0)   # resume
-w.close()                      # stop watching and close the widget
-```
-
-Folder watching is append-only: existing frames are never duplicated or
-rewritten, incomplete files wait for a later poll, and an incompatible shape is
-reported without blocking later frames. Use `Show2D.from_folder` when each file
-should be its own gallery panel.
-
 ## Paged galleries
 
 Pass a 5D array shaped `(pages, panels_per_page, frames, rows, cols)` when each

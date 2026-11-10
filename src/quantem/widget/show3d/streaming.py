@@ -59,7 +59,7 @@ class Show3DStream:
             if labels:
                 raise ValueError("labels= needs data=; label appended frames with append(image, label=...).")
             viewer = cls(np.zeros((1, 1, 1), dtype=np.float32), labels=[""], **viewer_kwargs)
-            viewer._set_folder_waiting_empty_state()
+            viewer._set_waiting_empty_state()
             viewer.folder_status = "Waiting for the first frame"
         else:
             viewer = cls(data, labels=labels, **viewer_kwargs)

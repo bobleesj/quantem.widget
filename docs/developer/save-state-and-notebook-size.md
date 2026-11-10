@@ -20,7 +20,7 @@ Show2D, Show3D, Show4DSTEM and ShowPDF, support these choices:
   are available through `notebook_preview_format`.
 - **`save_state=True`:** retain the synchronized state and omit the static
   preview. A compatible widget manager can restore interactions supported by
-  the embedded data. This does not restart a Python folder watcher, preserve a
+  the embedded data. This does not restart a Python stream, preserve a
   GPU acquisition owner, or provide computations that require a live kernel.
 
 These are opt-in protocols, not parameters guaranteed on every widget.

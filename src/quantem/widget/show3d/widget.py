@@ -11,7 +11,6 @@ preview.
 import math
 import pathlib
 from collections.abc import Mapping, Sequence
-from typing import Self
 
 import anywidget
 import numpy as np
@@ -19,12 +18,6 @@ import torch
 import traitlets
 
 from quantem.widget.adapters import core as core_adapter
-from quantem.widget.folder_watch_status import FOLDER_WATCH_STATE_VALUES
-from quantem.widget.image_folder import (
-    ImageFolderRecord,
-    WatchedImageFolder,
-    WatchedImageFolderMixin,
-)
 from quantem.widget.colormap import VALID_CMAPS, Colormap, cmap_to_name
 from quantem.widget.export import HtmlExportMixin
 from quantem.widget.fallback import StaticFallbackMixin
@@ -125,7 +118,6 @@ def _validated_float32(stack: np.ndarray, panel_name: str) -> np.ndarray:
 
 class Show3D(
     Show3DStream,
-    WatchedImageFolderMixin,
     Show3DFallback,
     Show3DExport,
     Show3DPlayback,
@@ -236,8 +228,6 @@ class Show3D(
     n_slices = traitlets.Int(1).tag(sync=True)
     folder_waiting = traitlets.Bool(False).tag(sync=True)
     folder_status = traitlets.Unicode("").tag(sync=True)
-    folder_watch_state = traitlets.Enum(values=FOLDER_WATCH_STATE_VALUES, default_value="hidden").tag(sync=True)
-    folder_watch_detail = traitlets.Unicode("").tag(sync=True)
     height = traitlets.Int(1).tag(sync=True)
     width = traitlets.Int(1).tag(sync=True)
     # Browser-owned display filters. Python only mirrors the state and
@@ -635,52 +625,6 @@ class Show3D(
         self.denoise_banner = banner
 
     # --- construction ----------------------------------------------------------
-
-    @classmethod
-    def from_folder(
-        cls,
-        path: str | pathlib.Path,
-        *,
-        pattern: str = "*",
-        file_types: str | Sequence[str] | None = None,
-        recursive: bool = False,
-        watch: bool = True,
-        watch_interval: float = 1.0,
-        **kwargs,
-    ) -> Self:
-        """Play naturally ordered folder images as one stack that grows in place.
-
-        Every file is decoded through :func:`quantem.widget.io.read_image`;
-        partially written files stay pending until a later poll. A missing
-        folder is created when ``watch=True``. Frame labels come from the file
-        names so arrivals stay identifiable.
-        """
-        if "labels" in kwargs:
-            raise TypeError("Show3D.from_folder() derives frame labels from file paths; remove labels=.")
-        source = WatchedImageFolder(
-            path,
-            pattern=pattern,
-            file_types=file_types,
-            recursive=recursive,
-            interval=watch_interval,
-            mode="frames",
-            create=watch,
-        )
-        arrays, records = source.read_initial(allow_empty=watch, require_unchanged_followup=watch)
-        explicit_calibration = "sampling" in kwargs or "units" in kwargs
-        kwargs.setdefault("title", source.folder.name)
-        kwargs.setdefault("verbose", False)
-        if arrays:
-            widget = cls(np.stack(arrays, axis=0), labels=[source.label(record.path) for record in records], **kwargs)
-        else:
-            display_bin = kwargs.get("display_bin", 1)
-            side = max(1, int(display_bin)) if isinstance(display_bin, int) else 1
-            widget = cls(np.zeros((1, side, side), dtype=np.float32), labels=[""], **kwargs)
-            widget._set_folder_waiting_empty_state()
-        source.attach(widget, explicit_calibration=explicit_calibration)
-        if watch:
-            widget.watch_folder(interval=watch_interval)
-        return widget
 
     @property
     def columns(self) -> int:
@@ -1115,8 +1059,8 @@ class Show3D(
         announce_browser_limit("Show3D", len(self._offline_float_stack), int(self.display_bin))
         self.frame_seq += 1
 
-    def _set_folder_waiting_empty_state(self) -> None:
-        """Represent a watched folder that has no readable frame yet."""
+    def _set_waiting_empty_state(self) -> None:
+        """Show an empty stack until a stream's first frame arrives (``Show3D.stream()`` without data)."""
         empty = np.empty((0, 0, 0), dtype=np.float32)
         with self.hold_sync():
             self._data = empty
@@ -1142,54 +1086,6 @@ class Show3D(
             self._data_min_off = 0.0
             self._data_max_off = 0.0
             self.folder_waiting = True
-
-    def _apply_folder_image_records(
-        self,
-        old_records: list[ImageFolderRecord],
-        new_records: list[ImageFolderRecord],
-        changed_arrays: dict[pathlib.Path, np.ndarray],
-    ) -> None:
-        """Replace folder frames while keeping path-addressed viewer state.
-
-        Called by the folder watcher. Frame-indexed state (current frame,
-        bookmarks, star, loop range) is re-keyed by file path so a file that
-        arrives earlier in the natural order does not shift the user's view.
-        """
-        old_paths = [record.path for record in old_records]
-        new_paths = [record.path for record in new_records]
-        old_index = {path: idx for idx, path in enumerate(old_paths)}
-        new_index = {path: idx for idx, path in enumerate(new_paths)}
-        display_bin = max(1, int(self._display_bin))
-        new_labels = [self._folder_source.label(path) for path in new_paths]
-        if not old_paths:
-            self.set_image(np.stack([changed_arrays[path] for path in new_paths], axis=0), labels=new_labels, display_bin=display_bin)
-            return
-        existing = self._rgb_data if (self.is_rgb and self._rgb_data is not None) else self._data
-        stack = np.stack(
-            [changed_arrays[path] if path in changed_arrays else np.asarray(existing[old_index[path]]) for path in new_paths],
-            axis=0,
-        )
-        selected_path = old_paths[int(self.slice_idx)] if 0 <= int(self.slice_idx) < len(old_paths) else old_paths[0]
-        bookmark_paths = {old_paths[idx] for idx in self.bookmarked_frames if 0 <= int(idx) < len(old_paths)}
-        starred_path = old_paths[int(self.starred[0])] if self.starred and 0 <= int(self.starred[0]) < len(old_paths) else None
-        loop_start_path = old_paths[min(max(int(self.loop_start), 0), len(old_paths) - 1)]
-        loop_end_path = None if int(self.loop_end) < 0 else old_paths[int(self.loop_end)]
-        was_playing = bool(self.playing)
-        roi_active, roi_list, roi_selected_idx = bool(self.roi_active), list(self.roi_list), int(self.roi_selected_idx)
-        profile_line = list(self.profile_line)
-        with self.hold_sync():
-            self.set_image(stack, labels=new_labels, display_bin=display_bin)
-            self.slice_idx = new_index.get(selected_path, 0)
-            self.bookmarked_frames = sorted(new_index[path] for path in bookmark_paths if path in new_index)
-            self.starred = [new_index[starred_path] if starred_path in new_index else -1]
-            self.loop_start = 0
-            self.loop_end = -1 if loop_end_path is None else new_index.get(loop_end_path, -1)
-            self.loop_start = new_index.get(loop_start_path, 0)
-            self.roi_active = roi_active
-            self.roi_list = roi_list
-            self.roi_selected_idx = roi_selected_idx
-            self.profile_line = profile_line
-            self.playing = was_playing
 
     def __repr__(self) -> str:
         """Stack shape, current frame and colormap on one line."""
@@ -1327,7 +1223,6 @@ class Show3D(
         ``del widget`` alone does not free memory because traitlets observers
         pin the widget; call this before discarding it. Idempotent.
         """
-        self.stop_folder_watch()
         if self._data is None:
             return
         # Stop frontend playback before the buffers it reads are dropped.

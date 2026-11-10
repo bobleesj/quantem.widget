@@ -119,14 +119,6 @@ def test_a_refused_state_keyword_leaves_no_widget_behind(tmp_path):
     assert browser.dp_colormap == "viridis"
     with pytest.raises(ValueError, match="does not save"):
         Show4DSTEM(None, h5_urls=["scan_master.h5"], scan_shape=(4, 4), detector_shape=(8, 8), state={"not_a_key": 1}, verbose=False)
-    # a folder gallery restores its page: the state was loaded before the folder pages existed
-    for index in range(5):
-        np.save(tmp_path / f"frame_{index}.npy", np.full((6, 8), index, dtype=np.float32))
-    paged = Show2D.from_folder(tmp_path, page_size=2, watch=False)
-    paged.page_idx = 2
-    restored = Show2D.from_folder(tmp_path, page_size=2, watch=False, state=paged.state_dict())
-    assert (restored.n_pages, restored.page_idx) == (3, 2)
-    assert Show2D.from_folder(tmp_path, watch=False, state=paged.state_dict()).state_dict() == paged.state_dict()
 
 
 # ---------------------------------------------------------------------------

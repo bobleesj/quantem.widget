@@ -71,9 +71,6 @@ viewer = Show4DSTEM(read_4dstem([path1, path2, path3]), compare_cols=3)
 # A master by path: the same as Show4DSTEM(read_4dstem(path)).
 viewer = Show4DSTEM("/data/session/scan_master.h5")
 
-# Every ready master in a folder; masters completed later are appended.
-viewer = Show4DSTEM.from_folder("/data/session")
-
 # An array in the Python session: counts packed for browser compute and standalone export.
 viewer = Show4DSTEM(array, offline=True)
 viewer.export_html("show4dstem.html")
@@ -181,85 +178,13 @@ Show4DSTEM has two acceleration surfaces:
 `io.load` becomes a bounded view inside the constructor, and every other input
 is a dense tensor on its device.
 
-## Live scope folders
-
-For real-time processing on a microscope or acquisition workstation, open the
-acquisition folder directly:
-
-```python
-from quantem.widget import Show4DSTEM
-
-widget = Show4DSTEM.from_folder(
-    "/data/live-scope-session",
-    scan_size=512,          # keep only 512 x 512 scans in a mixed folder
-    columns=5,              # grid width
-    page_size=10,           # datasets per page
-    watch_interval=2.0,     # seconds between folder polls
-)
-widget
-```
-
-`from_folder(...)` loads every ready `*_master.h5` (`pattern=`, `recursive=`)
-with `quantem.gpu.io.load` into encoded storage on one CUDA device or the Apple
-GPU (`backend=`, `device=`), at full detector resolution. At about 0.1 to 2 GiB
-per 512 x 512 x 192 x 192 scan, the whole folder stays resident without
-detector binning or paging. The viewer opens once the first master is loaded;
-the others join the comparison grid in the background, and
-`widget.wait_for_folder()` blocks until they have.
-
-Masters that are not completely written are skipped (`ready_only=True`). When
-the folder mixes geometries, the largest group sharing one scan and detector
-shape is shown; `verbose=True` reports the skipped count. Use `scan_size=` or a
-narrower `pattern=` to choose another group, and `max_masters=` or
-`min_masters=` to bound the count. Other keyword arguments, such as
-`compare_dp_mode="selected"` or `title=`, go to the viewer.
-
-With `watch=True` (default), a master that completes while the viewer is open
-is appended once its header signature is unchanged on two consecutive polls, so
-a file still being written is never read. A compact title-area badge
-distinguishes a live `Watching` worker, `Updating`, `Waiting for file
-completion`, a corrective `Watch error`, and `Stopped`; `watch=False` opens a
-fixed snapshot with no badge.
-
-The folder lifecycle matches Show2D and Show3D:
-
-```python
-widget.wait_for_folder()                  # block until the opening masters are loaded
-new_datasets = widget.poll_folder()       # append newly completed masters now
-widget.stop_folder_watch()                # pause background discovery
-widget.watch_folder(interval=1.0)         # resume discovery
-widget.free()                             # close the acquisitions from_folder loaded
-widget.close()                            # stop folder work, release them, close the widget
-```
-
-Folder watching is append-only. Known masters are not duplicated, incomplete
-or externally linked masters wait until they are readable, and removing a file
-does not delete a dataset from an active scientific view.
-
-To verify the live path, introduce genuine master/chunk files while one
-Jupyter widget is mounted and measure both discovery/control paint and the
-requested virtual-image/diffraction paint.
-
-This path reads the original master data, not cached thumbnails.
-
-On Apple Silicon the same call loads onto the Apple GPU; pass `backend="mps"`
-to require it:
-
-```python
-widget = Show4DSTEM.from_folder(
-    "/data/live-scope-session",
-    backend="mps",
-    scan_size=512,
-    title="Live 4D-STEM",
-)
-widget
-```
+## GPU memory
 
 GPU memory belongs to the loaded acquisitions and the Python session, not to
-the visual widget alone. `free()` and `close()` release the acquisitions that
-`from_folder` loaded; acquisitions you pass to `Show4DSTEM(...)` stay open until
-you call their `close()`. The live widget shows a compact GPU memory label in
-its title row when CUDA or MPS memory is visible. Exported HTML has no live
+the visual widget alone. `free()` and `close()` release an acquisition the viewer
+opened from a path, `Show4DSTEM(path)`; acquisitions you pass to
+`Show4DSTEM(...)` stay open until you call their `close()`. The live widget
+shows a compact GPU memory label in its title row when CUDA or MPS memory is visible. Exported HTML has no live
 Python GPU allocation, so it does not expose a "free GPU memory" control.
 
 ## Compute SSB
@@ -340,8 +265,7 @@ acquisitions that should be inspected side by side. The viewer keeps the
 standard diffraction-panel workflow: one shared detector ROI, one shared scan
 cursor, and one Dataset slider. The virtual-image side becomes a grid of ready
 frames or datasets. Use `view_mode="single"` for one-at-a-time browsing. A list
-of datasets from `read_4dstem` and `Show4DSTEM.from_folder(...)` open in
-multiple mode by default.
+of datasets from `read_4dstem` opens in multiple mode by default.
 
 ```python
 from quantem.widget import Show4DSTEM, read_4dstem
@@ -410,12 +334,12 @@ Show4DSTEM has two HTML export modes with different goals:
 
 | Export kind | Use when | Data included | Memory behavior |
 |---|---|---|---|
-| `export_kind="report"` | Sharing a curated folder/multiple-grid result or saving a compact screening report | Static PNG virtual-image pages plus a representative diffraction pattern | Page-aware; folder data is rendered page by page and raw 4D tensors are not embedded |
+| `export_kind="report"` | Sharing a curated multiple-grid result or saving a compact screening report | Static PNG virtual-image pages plus a representative diffraction pattern | Page-aware; multiple-grid data is rendered page by page and raw 4D tensors are not embedded |
 | `export_kind="interactive"` | The recipient must drive the actual 4D dataset offline in the browser | Raw 4D payload, explicitly encoded as `uint8` or `uint16` and optionally binned | Can be large; use dtype and binning deliberately before sending. Needs the 4D array in the Python session, so it applies to viewers opened from an array or tensor |
 
 Quick decision rule:
 
-- Use `report` first for large folders, many masters, starred/hidden panel
+- Use `report` first for many masters, starred/hidden panel
   curation, and collaborator screening.
 - Use `interactive` only when the exported browser page must still recompute new
   detector ROIs from raw 4D data.
@@ -426,7 +350,7 @@ Quick decision rule:
 - Keep the original notebook or Python script when the recipient needs to keep
   doing analysis, not just view an export.
 
-Report exports are the safe default for large folders:
+Report exports are the safe default for many masters:
 
 ```python
 widget.export_html(
@@ -568,7 +492,7 @@ compare-grid signoff.
 
 ```{eval-rst}
 .. autoclass:: quantem.widget.show4dstem.Show4DSTEM
-   :members: selected_scan_region, from_folder, export_html, compute_ssb, apply_preset, state_dict, save, load_state_dict, free, close, poll_folder, wait_for_folder, watch_folder, stop_folder_watch, pattern, virtual_image
+   :members: selected_scan_region, export_html, compute_ssb, apply_preset, state_dict, save, load_state_dict, free, close, pattern, virtual_image
 ```
 
 ```{note}

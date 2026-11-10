@@ -7,8 +7,6 @@ around a real question from the microscope room:
   figure, or a full report package.
 - **Memory management** - know what a load will cost in RAM/VRAM, pick the
   GPU, and give the memory back.
-- **Live folder watching** - keep one widget open at the scope and let new
-  acquisitions appear in it.
 - **Comparing reconstructions** - panels with independent frame stacks for
   regularization sweeps, convergence checks, and slice-count comparisons.
 - **Advanced Show2D** - configure dense comparison galleries with rich math

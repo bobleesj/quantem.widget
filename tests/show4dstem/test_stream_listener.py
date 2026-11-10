@@ -699,7 +699,6 @@ def test_deferred_snapshot_preserves_saved_state_policy(recording, save_state, p
         viewer.frame_idx = 1
         viewer._offline_stack = b"test-only-heavy-buffer"
         viewer.export_payload = b"test-only-export-buffer"
-        viewer.folder_watch_state = "watching"
         viewer._handle_frontend_ready_msg(None, {
             "type": "show4dstem_frontend_ready", "version": 1, "stream_ack": True, "view": "browser"}, None)
         recording.acquisitions[:] = scans[1:]
@@ -707,13 +706,11 @@ def test_deferred_snapshot_preserves_saved_state_policy(recording, save_state, p
         assert viewer.frame_idx == 0 and viewer._stream_deferred_snapshot["frame_idx"] == 1
         saved = viewer.get_state(drop_defaults=True)
         assert saved["frame_idx"] == 1  # Filter defaults after restoring the published selection.
-        assert saved["folder_watch_state"] == "stopped"
         assert all((name in saved) == save_state for name in viewer._UNSAVED_HEAVY_KEYS)
         if not save_state:
             assert bool(saved.get("_static_fallback_image")) == bool(preview)
         live = viewer._with_initial_live_mount_state(viewer.get_state)
         assert live["frame_idx"] == 1 and live["frame_labels"] == ["0", "1"]
-        assert live["folder_watch_state"] == "watching"
         assert all(name in live for name in viewer._UNSAVED_HEAVY_KEYS)
         assert viewer.get_state("_offline_stack")["_offline_stack"] == b"test-only-heavy-buffer"
     finally:

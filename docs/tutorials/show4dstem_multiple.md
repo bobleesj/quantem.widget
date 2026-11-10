@@ -35,17 +35,8 @@ the Multiple view, uses the filenames as labels, and shows the selected
 dataset's diffraction pattern. Put the sample name and tilt angle in each
 filename so the viewer labels remain meaningful.
 
-`read_4dstem(masters)` returns after every master has loaded. To see the first panel
-while the rest are still loading, open the folder instead:
-
-```python
-viewer = Show4DSTEM.from_folder("/data/tilts")
-```
-
-The viewer opens after the first master, and each later panel joins the grid
-as its master loads. You can begin dragging the detector on the loaded panels
-while the remaining masters continue loading. `from_folder` orders masters by
-file name, so list them explicitly with `read_4dstem` when the tilt order differs.
+`read_4dstem(masters)` returns after every master has loaded, and the panels
+follow the order of the list.
 
 Use **Selected** for ordinary tilt review: clicking a virtual-image tile makes
 its dataset the source of the diffraction pattern. Use **Average** only when
@@ -86,9 +77,8 @@ The source HDF5 files remain local; WebGPU interaction runs in the browser.
 ## What to verify
 
 1. Panel labels match the intended sample and tilt order.
-2. With `from_folder` or the WebGPU folder, each virtual image appears as its
-   dataset loads; the grid does not wait for the final master before becoming
-   useful.
+2. In the WebGPU folder, each virtual image appears as its dataset loads; the
+   grid does not wait for the final master before becoming useful.
 3. Clicking a tile changes the selected diffraction pattern.
 4. Dragging the detector updates every loaded virtual-image panel immediately.
 5. Average produces a diffraction pattern from the loaded visible datasets and

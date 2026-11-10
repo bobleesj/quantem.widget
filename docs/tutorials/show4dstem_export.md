@@ -15,27 +15,28 @@ recipe, and keep the reduction choices explicit.
 | Export full native detector sampling from a terminal | `quantem show4dstem ... --backend webgpu --html --detector-bin 1 --dtype uint8` | WebGPU HDF5 folder | yes | yes, native detector sampling |
 | Preserve compressed HDF5 beside the viewer | WebGPU HDF5 folder | `index.html` + `Show4DSTEM.command` + `.viewer/` + `tilt_NN_master.h5` + `tilt_NN_data_*.h5` | yes, via folder grant or local server | yes, in source HDF5 files |
 
-Default recommendation: use `export_kind="report"` for large folders, many
-datasets, or collaborator screening. Use `export_kind="interactive"` only when
-the recipient must drag detector ROIs in the exported browser.
+Default recommendation: use `export_kind="report"` for many datasets or
+collaborator screening. Use `export_kind="interactive"` only when the recipient
+must drag detector ROIs in the exported browser.
 
 ## Minimal Report Export
 
 Report export writes a compact, self-contained HTML file. It contains rendered
 virtual-image PNG pages and a representative diffraction pattern, not raw 4D
-detector data. This is the safest default for large folder viewers, and the
+detector data. This is the safest default for viewers over many masters, and the
 only HTML export from a live viewer over encoded acquisitions.
 
 ```python
-from quantem.widget import Show4DSTEM
+from pathlib import Path
+from quantem.widget import Show4DSTEM, read_4dstem
 
-viewer = Show4DSTEM.from_folder(
-    "/data/session",
-    page_size=12,
+masters = sorted(Path("/data/session").glob("*_master.h5"))
+viewer = Show4DSTEM(
+    read_4dstem(masters),   # returns after every master is loaded
+    compare_max_panels=12,
     compare_group_mode="paged",
     compare_dp_mode="selected",
 )
-viewer.wait_for_folder()  # every opening master is loaded before the export
 
 path = viewer.export_html(
     "show4dstem_report.html",

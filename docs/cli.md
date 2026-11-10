@@ -8,7 +8,6 @@ widget notebook displayable in GitHub's static preview.
 quantem show4dstem ./masters/                  # *_master.h5        -> live Show4DSTEM notebook
 quantem show4dstem a_master.h5 b_master.h5     # several masters    -> one comparison viewer
 quantem show4dstem ./masters/ --html           # 4D-STEM            -> shareable offline HTML
-quantem show4dstem ./masters/ --watch          # live folder        -> notebook that appends new masters
 quantem show4dstem a.qem b.qem --html           # native QEM files   -> browser viewer folder
 quantem github tutorial_github.ipynb --no-execute # optional static copy for GitHub preview
 ```
@@ -77,10 +76,11 @@ exports open as one dataset-slider viewer. For a compact collaborator review,
 use the Python `export_kind="report"` path:
 
 ```python
-from quantem.widget import Show4DSTEM
+from pathlib import Path
+from quantem.widget import Show4DSTEM, read_4dstem
 
-viewer = Show4DSTEM.from_folder("/data/session")
-viewer.wait_for_folder()
+masters = sorted(Path("/data/session").glob("*_master.h5"))
+viewer = Show4DSTEM(read_4dstem(masters))
 viewer.export_html("show4dstem_report.html", export_kind="report", dtype="uint8")
 ```
 
@@ -127,8 +127,6 @@ quantem github analysis_github.ipynb --no-execute
 | `--dtype auto/uint8/uint16` | HDF5 HTML dtype; Python packing defaults to `auto`, choosing uint8 when counts fit and uint16 otherwise. An explicit uint8 choice is for compact browsing. Native QEM keeps its stored dtype |
 | `--serve` | open via a local HTTP server even for self-contained files (tunnelable URL) |
 | `--html` | write the offline-WebGPU HTML instead of a notebook |
-| `--watch`, `--watch-interval S` | folder: write a live viewer notebook that opens the ready masters and appends new ones |
-| `--scan-size N` | watched folder: keep only masters with this square scan size |
 | `--out PATH` | output file or directory (default `~/Downloads`) |
 | `--no-open` | write the file(s) without launching a browser or Jupyter |
 | `--title`, `-v/--verbose` | page title; verbose progress |

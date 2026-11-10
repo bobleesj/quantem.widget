@@ -716,15 +716,9 @@ def _add_show4dstem_args(parser: argparse.ArgumentParser) -> None:
                         help="Require and load this many compatible masters from the input.")
     parser.add_argument("--html", action="store_true",
                         help="Export a standalone offline-WebGPU HTML instead of a live notebook.")
-    parser.add_argument("--watch", action="store_true",
-                        help="Folder: write a live viewer notebook that appends new masters.")
-    parser.add_argument("--watch-interval", type=float, default=2.0,
-                        help="Polling interval in seconds for --watch live folders (default 2).")
     parser.add_argument("--dtype", default="auto", choices=("auto", "uint8", "uint16"),
                         help=("--html: packed dtype of the exported counts: auto (default; uint8 when every "
                               "count fits, else uint16, so nothing clips), uint8 or uint16."))
-    parser.add_argument("--scan-size", type=int, default=None,
-                        help="--watch: only include masters with this square scan size.")
     parser.add_argument("--backend", default="auto", choices=("auto", "webgpu"),
                         help=("auto (default): the data loads onto CUDA, Apple MPS or the CPU, whichever "
                               "this machine has; webgpu (with --html): the browser reads the HDF5 files."))
@@ -755,16 +749,9 @@ def _show4dstem(args: argparse.Namespace) -> int:
         _open_show4dstem_command(launcher, no_open=args.no_open)
         return 0
     if len(paths) > 1:
-        if args.watch:
-            raise ValueError("--watch requires one folder path, not multiple explicit paths.")
         masters = _select_show4dstem_masters([str(path) for path in paths], args)
-        return _do_4dstem(masters, f"{len(masters)}_datasets", args, source_path=None)
+        return _do_4dstem(masters, f"{len(masters)}_datasets", args)
     path = paths[0]
-    if args.watch:
-        if args.html:
-            raise ValueError("--watch writes a live notebook; omit --html.")
-        if not path.is_dir():
-            raise ValueError("--watch requires a folder path containing *_master.h5 files.")
     from quantem.widget.adapters import gpu as gpu_adapter
     from quantem.widget.show4dstem.reader import find_masters
 
@@ -779,20 +766,10 @@ def _show4dstem(args: argparse.Namespace) -> int:
         raise ValueError(f"no *_master.h5 found in {path}")
     masters = _select_show4dstem_masters(masters, args)
     label = pathlib.Path(masters[0]).stem.replace("_master", "") if path.is_file() else path.name
-    if args.watch:
-        notebook = _render_4dstem_watch_notebook(path, label, args)
-        _launch_notebook(notebook, no_open=args.no_open)
-        return 0
-    return _do_4dstem(masters, label, args, source_path=path)
+    return _do_4dstem(masters, label, args)
 
 
-def _do_4dstem(
-    masters: list[str],
-    label: str,
-    args: argparse.Namespace,
-    *,
-    source_path: pathlib.Path | None = None,
-) -> int:
+def _do_4dstem(masters: list[str], label: str, args: argparse.Namespace) -> int:
     """Dispatch 4D-STEM master(s) to either a live notebook (default) or an offline
     HTML (``--html``), then launch/open it. One master opens alone; many open as a
     dataset comparison (the multi-tilt case)."""
@@ -809,7 +786,7 @@ def _do_4dstem(
         return 0
     if args.backend == "webgpu":
         raise ValueError("Show4DSTEM --backend webgpu writes browser HTML; add --html.")
-    notebook = _render_4dstem_notebook(masters, label, args, source_path=source_path)
+    notebook = _render_4dstem_notebook(masters, label, args)
     _launch_notebook(notebook, no_open=args.no_open)
     return 0
 
@@ -867,13 +844,7 @@ def _effective_detector_bin(args: argparse.Namespace) -> int:
     return detector_bin
 
 
-def _render_4dstem_notebook(
-    masters: list[str],
-    label: str,
-    args: argparse.Namespace,
-    *,
-    source_path: pathlib.Path | None = None,
-) -> pathlib.Path:
+def _render_4dstem_notebook(masters: list[str], label: str, args: argparse.Namespace) -> pathlib.Path:
     """Write a live Jupyter notebook that loads the 4D-STEM master(s) and opens a
     kernel-backed ``Show4DSTEM`` (no baked HTML). Each master stays encoded on the
     GPU at full detector sampling; many open as a dataset comparison (the
@@ -885,21 +856,7 @@ def _render_4dstem_notebook(
             "storage; --detector-bin applies to --html exports only."
         )
     print(f"{len(masters)} master(s) -> Show4DSTEM (live notebook)")
-    if source_path is not None and source_path.is_dir():
-        source = (
-            "from quantem.widget import Show4DSTEM\n"
-            "\n"
-            f"folder = {str(source_path)!r}\n"
-            "viewer = Show4DSTEM.from_folder(\n"
-            "    folder,\n"
-            f"    max_masters={len(masters)},\n"
-            f"    min_masters={len(masters)},\n"
-            "    watch=False,\n"
-            "    verbose=True,\n"
-            ")\n"
-            "viewer\n"
-        )
-    elif len(masters) == 1:
+    if len(masters) == 1:
         # a path opens through quantem.gpu when it is installed, else densely
         source = (
             "from quantem.widget import Show4DSTEM\n"
@@ -917,31 +874,6 @@ def _render_4dstem_notebook(
         )
     title = [f"# {label}\n", f"\n{len(masters)} master(s), full detector sampling."]
     return _write_viewer_notebook(_out_dir(args.out) / f"{label}.ipynb", title, "viewer", source)
-
-
-def _render_4dstem_watch_notebook(folder: pathlib.Path, label: str, args: argparse.Namespace) -> pathlib.Path:
-    """Write a live viewer notebook for a 4D-STEM acquisition folder."""
-    if _effective_detector_bin(args) != 1:
-        raise ValueError(
-            "A live folder viewer keeps full detector sampling in encoded GPU "
-            "storage; --detector-bin applies to --html exports only."
-        )
-    print(f"{folder.name}: watched folder -> Show4DSTEM over encoded masters")
-    scan_size = "None" if args.scan_size is None else str(int(args.scan_size))
-    source = (
-        "from quantem.widget import Show4DSTEM\n\n"
-        "viewer = Show4DSTEM.from_folder(\n"
-        f"    {str(folder)!r},\n"
-        f"    scan_size={scan_size},\n"
-        f"    watch=True, watch_interval={float(args.watch_interval)!r},\n"
-        ")\nviewer\n"
-    )
-    title = [
-        f"# {label} live Show4DSTEM\n",
-        f"\nWatched folder: `{folder}`\n",
-        f"\nFull detector sampling; watch interval {args.watch_interval:g}s.",
-    ]
-    return _write_viewer_notebook(_out_dir(args.out) / f"{label}_live.ipynb", title, "live-viewer", source)
 
 
 def _write_viewer_notebook(path: pathlib.Path, title: list[str], cell_id: str, source: str) -> pathlib.Path:

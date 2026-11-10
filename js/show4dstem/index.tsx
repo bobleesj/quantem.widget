@@ -64,7 +64,7 @@ import { displayLog } from "../display/displayMath";
 import { downloadBlob, formatNumber, preserveRestoredWidgetModelsOnSave } from "../format";
 import { useHideStaticFallback } from "../staticFallback";
 import { MetadataSection } from "../widgetInfo";
-import { FolderWatchBadge, useFolderWatchModelLive } from "../folderWatchStatus";
+import { useModelCommLive } from "../shared/commLive";
 import { InfoTooltip } from "../shared/InfoTooltip";
 import { RenderPathBadge } from "../shared/RenderPathBadge";
 import { KeyboardShortcuts } from "../shared/KeyboardShortcuts";
@@ -2234,7 +2234,7 @@ function useLatestCallback<A extends unknown[], R>(fn: (...args: A) => R): (...a
 function Show4DSTEM() {
   // Direct model access for batched updates
   const model = useModel();
-  const folderWatchLive = useFolderWatchModelLive(model);
+  const commLive = useModelCommLive(model);
   React.useEffect(() => preserveRestoredWidgetModelsOnSave(model), [model]);
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -2262,8 +2262,6 @@ function Show4DSTEM() {
   const kPixelUnit = detectorSamplingMrad?.length === 2 ? "mrad" : detectorSamplingInvA?.length === 2 ? "1/angstrom" : "px";
   const [title] = useModelState<string>("title");
   const [showTitle] = useModelState<boolean>("show_title");
-  const [folderWatchState] = useModelState<string>("folder_watch_state");
-  const [folderWatchDetail] = useModelState<string>("folder_watch_detail");
 
   const [frameBytes] = useModelState<DataView>("frame_bytes");
   const [virtualImageBytes, setVirtualImageBytes] = useModelState<DataView>("virtual_image_bytes");
@@ -2440,7 +2438,7 @@ function Show4DSTEM() {
   }, [model, centerRequests]);
   // Offline rendering still uses canonical local traits; live requests pipeline one computation.
   const writeRoiCenterModel = React.useCallback((row: number, col: number) => {
-    if (!model.get("offline") && folderWatchLive && model.get("vi_source") === "roi"
+    if (!model.get("offline") && commLive && model.get("vi_source") === "roi"
         && centerRequests.request(row, col)) {
       return;
     }
@@ -2448,7 +2446,7 @@ function Show4DSTEM() {
     model.set("roi_center_col", col);
     model.set("roi_center", [row, col]);
     model.save_changes();
-  }, [model, centerRequests, folderWatchLive]);
+  }, [model, centerRequests, commLive]);
   const queueScanPosition = React.useCallback((row: number, col: number) => {
     const current = scanPositionPendingRef.current
       ?? scanPositionOptimisticRef.current
@@ -2555,7 +2553,7 @@ function Show4DSTEM() {
     if (Object.keys(updates).length) {
       const outer = updates.roi_radius ?? localRadiiRef.current?.[0] ?? Number(model.get("roi_radius"));
       const inner = updates.roi_radius_inner ?? localRadiiRef.current?.[1] ?? Number(model.get("roi_radius_inner"));
-      if (!model.get("offline") && folderWatchLive && model.get("vi_source") === "roi"
+      if (!model.get("offline") && commLive && model.get("vi_source") === "roi"
           && radiusRequests.request(outer, inner)) {
         localRadiiRef.current = [outer, inner];
         setLocalRadii([outer, inner]);
@@ -2566,7 +2564,7 @@ function Show4DSTEM() {
     }
     if (!dpRoiInteractiveRef.current && !radiusRequests.isPending()) clearLocalRadii();
     if (paint) roiRadiusRafRef.current = null;
-  }, [model, folderWatchLive, radiusRequests, clearLocalRadii]);
+  }, [model, commLive, radiusRequests, clearLocalRadii]);
   const sendRoiRadius = React.useCallback((radius: number, boundary: "inner" | "outer" = "outer") => {
     if (boundary === "inner") roiRadiusInnerPendingRef.current = radius;
     else roiRadiusPendingRef.current = radius;
@@ -8268,11 +8266,6 @@ function Show4DSTEM() {
       onDrop={onLocalDrop}
       sx={{ p: "4px", bgcolor: themeColors.bg, color: themeColors.text, outline: "none", borderRadius: "2px", width: "100%", maxWidth: "100%", boxSizing: "border-box", "@media (max-width: 700px)": { p: 0, overflowX: "hidden", ".jp-OutputArea-output &, .jp-OutputArea-child &": { width: "calc(100vw - 96px)", maxWidth: "calc(100vw - 96px)" } } }}
     >
-      <FolderWatchBadge
-        state={folderWatchState}
-        detail={folderWatchDetail}
-        live={folderWatchLive}
-      />
       <input
         ref={h5LocalInputRef}
         type="file"

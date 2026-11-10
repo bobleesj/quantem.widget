@@ -205,8 +205,8 @@ viewer.close()   # closes the ipywidget comm/model
 loaded.close()   # returns the encoded storage to the GPU
 ```
 
-A viewer from `Show4DSTEM.from_folder(...)` owns the acquisitions it loaded;
-`viewer.free()` or `viewer.close()` closes them.
+A viewer opened from a path, `Show4DSTEM("scan_master.h5")`, owns the
+acquisition it loaded; `viewer.free()` or `viewer.close()` closes it.
 
 If memory is still occupied after this pattern, another variable, notebook, or
 kernel still owns it. A small residual allocation can remain because CUDA keeps

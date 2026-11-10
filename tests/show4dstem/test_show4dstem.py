@@ -351,38 +351,15 @@ def test_many_encoded_acquisitions_drag_reorder_hide_and_retain_exact_images(tmp
             source.close()
 
 
-def test_from_folder_fills_two_masters_and_free_closes_them(tmp_path, accelerator):
-    counts = [_counts(seed) for seed in range(2)]
-    for idx, values in enumerate(counts):
-        _write_master(tmp_path, f"scan_{idx:02d}", values)
-    widget = Show4DSTEM.from_folder(tmp_path, watch=False)
+def test_free_closes_the_acquisition_a_path_opened(tmp_path, accelerator):
+    widget = Show4DSTEM(_write_master(tmp_path, "scan_00", _counts(0)))
     try:
-        widget.wait_for_folder()
-        assert widget.n_frames == 2
-        assert list(widget.frame_labels) == ["scan_00", "scan_01"]
-        assert widget.compare_panel_indices == [0, 1]
         acquisitions = list(widget._owned_acquisitions)
+        assert len(acquisitions) == 1
         widget.free()
         assert widget._owned_acquisitions == []
         with pytest.raises((RuntimeError, ValueError)):
             gpu_adapter.prepare_session(acquisitions[0]).masked_sum(np.ones(DET, bool))
-    finally:
-        widget.close()
-    with pytest.raises(ValueError, match="at least 3"):
-        Show4DSTEM.from_folder(tmp_path, watch=False, min_masters=3)
-
-
-def test_a_watched_folder_emptied_of_masters_polls_without_error(tmp_path, accelerator, monkeypatch):
-    _write_master(tmp_path, "scan_00", _counts(0))
-    widget = Show4DSTEM.from_folder(tmp_path, watch=False)
-    try:
-        widget.wait_for_folder()
-        for path in tmp_path.iterdir():
-            path.unlink()
-        # the poll lists the folder itself; quantem.gpu's discover raises on an empty match
-        monkeypatch.setattr(gpu_adapter, "discover_masters", lambda *args, **kwargs: pytest.fail("discover called"))
-        assert widget.poll_folder() == []
-        assert widget.n_frames == 1
     finally:
         widget.close()
 
@@ -840,39 +817,6 @@ def test_refusal_states_the_size_the_read_needs(tmp_path):
         with pytest.raises(MemoryError) as refusal:
             reader.read_4dstem(path, "cpu", max_bytes=6_400_000_000)
         assert expected in str(refusal.value)
-
-
-def test_from_folder_reads_masters_densely_without_quantem_gpu(tmp_path, monkeypatch, capsys):
-    counts = [_counts(seed) for seed in range(2)]
-    for idx, values in enumerate(counts):
-        _write_master(tmp_path, f"scan_{idx:02d}", values)
-    monkeypatch.setattr(gpu_adapter, "accelerator_ready", lambda: False)
-    widget = Show4DSTEM.from_folder(tmp_path, device="cpu", verbose=False)
-    try:
-        assert "watching a folder for new masters needs quantem.gpu" in capsys.readouterr().out
-        assert widget.n_frames == 2 and list(widget.frame_labels) == ["scan_00", "scan_01"]
-        widget.frame_idx = 1
-        widget.pos_row, widget.pos_col = 2, 1
-        np.testing.assert_array_equal(_pattern(widget), counts[1][2, 1])
-    finally:
-        widget.close()
-
-
-@pytest.mark.parametrize("first, second", [
-    (_counts(5).astype(np.uint32) + 70000, _counts(6).astype(np.float32) + 0.25),  # int64 counts, then fractions
-    (_counts(5), _counts(6).astype(np.float16) + 0.5),  # uint16 counts, then float16 of the same width
-])
-def test_from_folder_holds_a_float_master_after_integer_counts_exactly(tmp_path, monkeypatch, first, second):
-    for idx, values in enumerate((first, second)):
-        _write_master(tmp_path, f"scan_{idx:02d}", values)
-    monkeypatch.setattr(gpu_adapter, "accelerator_ready", lambda: False)
-    widget = Show4DSTEM.from_folder(tmp_path, device="cpu", watch=False, verbose=False)
-    try:
-        for idx, values in enumerate((first, second)):
-            widget.frame_idx = idx
-            np.testing.assert_array_equal(widget.pattern(2, 1), values[2, 1].astype(np.float32))
-    finally:
-        widget.close()
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])

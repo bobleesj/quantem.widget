@@ -52,7 +52,6 @@ import {
 import { useHideStaticFallback } from "../staticFallback";
 import { findDataRange, applyLogScale, applyLogScaleInPlace, percentileClip, signedLog1p, sliderRange, computeStats } from "../display/stats";
 import { MetadataSection } from "../widgetInfo";
-import { FolderWatchBadge, useFolderWatchModelLive } from "../folderWatchStatus";
 import { applyFrequencyFilterBrowser, frequencyFilterActive, getFrequencyFilterBackend, normalizeFrequencyFilterMode } from "../display/frequencyFilter";
 import { encodeIndexedGif, quantizeRgbaForBrowserGif } from "./gif";
 import { missingDisplayStackStatus } from "./displayStack";
@@ -514,7 +513,6 @@ function Show3D() {
   const isMobileViewport = useMobileViewport();
   const canvasRepaintSignal = useCanvasRepaintSignal();
   const model = useModel();
-  const folderWatchLive = useFolderWatchModelLive(model);
   React.useLayoutEffect(() => applyStandaloneWidgetViewState(model), [model]);
   React.useEffect(() => preserveRestoredWidgetModelsOnSave(model), [model]);
 
@@ -561,8 +559,6 @@ function Show3D() {
   const [nSlices] = useModelState<number>("n_slices");
   const [folderWaiting] = useModelState<boolean>("folder_waiting");
   const [folderStatus] = useModelState<string>("folder_status");
-  const [folderWatchState] = useModelState<string>("folder_watch_state");
-  const [folderWatchDetail] = useModelState<string>("folder_watch_detail");
   const [labels] = useModelState<string[]>("labels");
   const [width] = useModelState<number>("width");
   const [height] = useModelState<number>("height");
@@ -9960,11 +9956,6 @@ function Show3D() {
       onMouseDownCapture={handleRootMouseDownCapture}
       sx={{ ...container.root, width: "100%", maxWidth: "100%", boxSizing: "border-box", position: "relative", bgcolor: themeColors.bg, color: themeColors.text, outline: "none", "&:focus::after": { content: '""', position: "absolute", inset: 0, pointerEvents: "none", zIndex: 20, boxShadow: "inset 0 0 0 2px #0af" }, "& canvas": { display: "block" }, "@media (max-width: 700px)": { p: 0, ".jp-OutputArea-output &, .jp-OutputArea-child &": { width: "calc(100vw - 96px)", maxWidth: "calc(100vw - 96px)" } } }}
     >
-      <FolderWatchBadge
-        state={folderWatchState}
-        detail={folderWatchDetail}
-        live={folderWatchLive}
-      />
       {gpuStatusText && (
         <Box
           role="status"

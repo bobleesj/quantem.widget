@@ -793,7 +793,7 @@ class AcquisitionSeries:
         return (len(self.frames), *self.frames[0].shape)
 
     def append(self, source) -> None:
-        """Add one acquisition that arrived while a folder is watched."""
+        """Add one acquisition that joined the comparison after it opened (``Show4DSTEM.append``, a stream)."""
         frame = AcquisitionView(source)
         if frame.shape != self.frames[0].shape or frame.device != self.device:
             raise ValueError(

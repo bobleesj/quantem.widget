@@ -45,7 +45,7 @@ class Show2DStream:
             if labels is not None:
                 raise ValueError("labels= needs data=; pass labels with update(images, labels=...).")
             viewer = cls(np.zeros((1, 1), dtype=np.float32), labels=[""], **viewer_kwargs)
-            viewer._set_folder_waiting_empty_state()
+            viewer._set_waiting_empty_state()
             viewer.folder_status = "Waiting for the first image"
         else:
             viewer = cls(data, labels=labels, **viewer_kwargs)

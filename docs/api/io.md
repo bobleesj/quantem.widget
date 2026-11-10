@@ -60,8 +60,8 @@ the scan. A `Dataset4dstemGPU` reports an uncalibrated axis as `None` in
 `sampling` and `units` where a dense dataset has `1.0` and `"pixels"`; the
 widgets read both as an axis without a calibration. A dense dataset's
 `metadata` names the file (`source_path`) and records the replacement of the
-detector pixels the master flags (`hot_pixel_correction`). `read_4dstem`,
-`Show4DSTEM(path)` and `Show4DSTEM.from_folder` replace them with the median of
+detector pixels the master flags (`hot_pixel_correction`). `read_4dstem` and
+`Show4DSTEM(path)` replace them with the median of
 their unflagged 3x3 neighbours by default (the smallest larger window inside a
 flagged cluster, a .5 median rounded half to even, as quantem.gpu's `io.load`
 does) and print how many;
@@ -144,8 +144,8 @@ Show4DSTEM(io.load(files[0]))
 
 `io.discover(path, scan_shape=(512, 512))` keeps only matching acquisitions when
 a folder mixes scan sizes. `io.inspect(path)` reads readiness and calibration
-headers without decoding measurements. Use `Show4DSTEM.from_folder(path)` for a
-live acquisition viewer.
+headers without decoding measurements. Pass several discovered files to
+`Show4DSTEM(read_4dstem(files))` to compare them in one viewer.
 
 For named sample data, see [Tutorial datasets](datasets.md). The [IO/GPU
 notebook](../tutorials/io_gpu.ipynb) demonstrates a real Gold image session.

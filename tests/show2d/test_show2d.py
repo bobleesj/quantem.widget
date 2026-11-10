@@ -491,30 +491,6 @@ def test_static_png_shows_diff_panel_and_rgb_pixels():
     assert green.mean() > 0.5
 
 
-# --- folder watching ----------------------------------------------------------
-
-
-def test_from_folder_pages_and_remaps_state_by_path(tmp_path: Path):
-    for index in range(21):
-        np.save(tmp_path / f"frame_{index:03d}.npy", np.full((6, 8), index, dtype=np.float32))
-    widget = Show2D.from_folder(tmp_path, watch=False)
-    assert widget.page_kind == "items" and widget.labels[:2] == ["frame_000", "frame_001"]
-    assert (widget.n_images, widget.n_pages, widget.panels_per_page) == (21, 2, 20)
-    assert widget.page_labels == ["Images 1–20", "Images 21–21"]
-    widget.page_idx = 1
-    assert widget._visible_panels() == [20]
-    widget.selected_idx = 20
-    widget.starred = [0] * 20 + [1]
-    np.save(tmp_path / "frame_000b.npy", np.full((6, 8), 99, dtype=np.float32))
-    assert widget.poll_folder() == []  # a new file must be stable for one poll
-    assert widget.poll_folder() == [1]
-    assert widget.labels[1] == "frame_000b" and widget.n_images == 22
-    assert widget.selected_idx == 21 and widget.starred[21] == 1  # state follows the path
-    assert widget.page_idx == 1 and len(widget.folder_paths) == 22
-    with pytest.raises(TypeError, match="derives labels"):
-        Show2D.from_folder(tmp_path, labels=["x"])
-
-
 # --- review regressions (each failed on rc41) ---------------------------------
 
 

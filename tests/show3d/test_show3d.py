@@ -318,50 +318,6 @@ def test_static_preview_matches_a_show2d_gallery_pixel_for_pixel():
     widget.free()
 
 
-# --- folders --------------------------------------------------------------------
-
-
-def _save(path: pathlib.Path, value: float) -> None:
-    np.save(path, np.full((6, 8), value, dtype=np.float32))
-
-
-def test_from_folder_appends_files_and_remaps_frame_state(tmp_path: pathlib.Path):
-    _save(tmp_path / "frame_2.npy", 2)
-    _save(tmp_path / "frame_10.npy", 10)
-    widget = Show3D.from_folder(tmp_path, watch=False, show_fft=True)
-    try:
-        assert widget.labels == ["frame_2", "frame_10"] and widget.title == tmp_path.name
-        widget.slice_idx = 1
-        widget.bookmarked_frames = [0, 1]
-        widget.loop_end = 1
-        widget.starred = [1]
-        widget.playing = True
-        _save(tmp_path / "frame_1.npy", 1)
-        assert widget.poll_folder() == []
-        assert widget.poll_folder() == [0]
-        assert widget.labels == ["frame_1", "frame_2", "frame_10"]
-        np.testing.assert_array_equal(widget._data[:, 0, 0], [1, 2, 10])
-        assert (widget.slice_idx, widget.bookmarked_frames, widget.loop_end, widget.starred) == (2, [1, 2], 2, [2])
-        assert widget.playing is True and widget.show_fft is True
-    finally:
-        widget.close()
-
-
-def test_watched_folder_is_created_and_fills_on_the_first_stable_frame(tmp_path: pathlib.Path):
-    folder = tmp_path / "session" / "frames"
-    widget = Show3D.from_folder(folder, file_types=".PNG", watch=True, watch_interval=60)
-    try:
-        assert folder.is_dir() and widget.n_slices == 0 and widget.folder_waiting is True
-        widget.stop_folder_watch()
-        Image.fromarray(np.arange(48, dtype=np.uint8).reshape(6, 8)).save(folder / "frame_001.png")
-        _save(folder / "ignored.npy", 3)
-        assert widget.poll_folder() == []
-        assert widget.poll_folder() == [0]
-        assert widget.n_slices == 1 and widget.labels == ["frame_001"]
-    finally:
-        widget.close()
-
-
 def test_horizontal_scale_bar_uses_the_column_sampling():
     # D-1: Show3D labelled the horizontal bar with the row step of anisotropic sampling.
     stack = np.zeros((2, 8, 12), dtype=np.float32)

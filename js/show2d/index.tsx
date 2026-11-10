@@ -47,7 +47,6 @@ import { useHideStaticFallback } from "../staticFallback";
 import { findDataRange, applyLogScale, signedLog1p, sliderRange, computeStats, computeHistogramFromBytes } from "../display/stats";
 import { dequantizeUint8 } from "../display/quantization";
 import { MetadataSection } from "../widgetInfo";
-import { FolderWatchBadge, useFolderWatchModelLive } from "../folderWatchStatus";
 import { getDisplayFFT, DisplayFFT, fftshift, computeMagnitude, autoEnhanceFFT, nextPow2, applyHannWindow2D, fftClickReadout, zeroPadTopLeft } from "../display/fft";
 import { computeFftQualityMetrics, formatFftQualityLabel, type FftQualityMetrics } from "../display/fftMetrics";
 import {
@@ -85,11 +84,7 @@ import {
   resolveVisibleDiffPlan,
   type GalleryFftCacheEntry,
 } from "./localStack";
-import {
-  itemPageIndices,
-  pageShortcutTarget,
-  usesGalleryLayout,
-} from "./itemPages";
+import { pageShortcutTarget, usesGalleryLayout } from "./pageLayout";
 import {
   cancelContrastPreview,
   contrastPreviewIndices,
@@ -683,7 +678,6 @@ function Show2D() {
   const isMobileViewport = useMobileViewport();
   const canvasRepaintSignal = useCanvasRepaintSignal();
   const model = useModel();
-  const folderWatchLive = useFolderWatchModelLive(model);
   React.useLayoutEffect(() => applyStandaloneWidgetViewState(model), [model]);
   React.useEffect(() => preserveRestoredWidgetModelsOnSave(model), [model]);
 
@@ -744,16 +738,12 @@ function Show2D() {
   const [nImages] = useModelState<number>("n_images");
   const [folderWaiting] = useModelState<boolean>("folder_waiting");
   const [folderStatus] = useModelState<string>("folder_status");
-  const [folderWatchState] = useModelState<string>("folder_watch_state");
-  const [folderWatchDetail] = useModelState<string>("folder_watch_detail");
   const [nPages] = useModelState<number>("n_pages");
   const [pageIdx, setPageIdx] = useModelState<number>("page_idx");
   const [panelsPerPage] = useModelState<number>("panels_per_page");
-  const [pageKind] = useModelState<"comparison" | "items">("page_kind");
   const [pageLabels] = useModelState<string[]>("page_labels");
   const [pageStarred, setPageStarred] = useModelState<number[]>("page_starred");
   const isPaged = (nPages || 1) > 1 && (panelsPerPage || 0) > 0;
-  const isItemPaged = isPaged && pageKind === "items";
   const {
     currentPageIdx, pagePlaying, setPagePlaying, pagePlayFps, setPagePlayFps, setPageSliderPreviewIdx,
     clampPageIdx, commitPageIdx, stopPagePlayback, pageControlIdx, pageControlLabel, pageControlStatus,
@@ -800,11 +790,6 @@ function Show2D() {
   const [hiddenPanels, setHiddenPanels] = useModelState<number[]>("hidden_panels");
   const [hiddenPageSlotsTrait, setHiddenPageSlotsTrait] = useModelState<number[] | undefined>("hidden_page_slots");
   const [panelOrder, setPanelOrder] = useModelState<number[]>("panel_order");
-  const activeItemPageIndices = React.useMemo(
-    () => itemPageIndices(nImages, pageControlIdx, panelsPerPage, panelOrder),
-    [nImages, pageControlIdx, panelsPerPage, panelOrder],
-  );
-  const activePagePanelIndices = isItemPaged ? activeItemPageIndices : activePageIndices;
   const [showPanelTitles] = useModelState<boolean>("show_panel_titles");
   const [panelTitleFontSize] = useModelState<number>("panel_title_font_size");
   const [panelTitleStyle] = useModelState<PanelTitleStyle>("panel_title_style");
@@ -2062,10 +2047,10 @@ function Show2D() {
   const [fftCropDims, setFftCropDims] = React.useState<{ cropWidth: number; cropHeight: number; fftWidth: number; fftHeight: number } | null>(null);
 
   const totalPanelCount = Math.max(1, nImages || 1);
-  const [hiddenPageSlots, setHiddenPageSlots] = useHiddenPageSlots(isPaged && !isItemPaged, hiddenPageSlotsTrait, hiddenPanels, activePageStart, activePanelCount);
+  const [hiddenPageSlots, setHiddenPageSlots] = useHiddenPageSlots(isPaged, hiddenPageSlotsTrait, hiddenPanels, activePageStart, activePanelCount);
   const hiddenPanelSet = React.useMemo(() => {
     const out = new Set<number>();
-    if (isPaged && !isItemPaged) {
+    if (isPaged) {
       for (const value of hiddenPageSlots || []) {
         const slot = Math.trunc(Number(value));
         const idx = activePageStart + slot;
@@ -2080,15 +2065,15 @@ function Show2D() {
       }
     }
     const currentPanels = isPaged
-      ? activePagePanelIndices
+      ? activePageIndices
       : Array.from({ length: totalPanelCount }, (_, i) => i);
     const activeHiddenCount = currentPanels
       .filter((idx) => out.has(idx)).length;
-    if (!isItemPaged && activeHiddenCount >= Math.max(1, activePanelCount)) {
+    if (activeHiddenCount >= Math.max(1, activePanelCount)) {
       out.delete(currentPanels[Math.max(0, activePanelCount - 1)]);
     }
     return out;
-  }, [activePageEnd, activePagePanelIndices, activePageStart, activePanelCount, hiddenPageSlots, hiddenPanels, totalPanelCount, isItemPaged, isPaged]);
+  }, [activePageEnd, activePageIndices, activePageStart, activePanelCount, hiddenPageSlots, hiddenPanels, totalPanelCount, isPaged]);
   React.useEffect(() => {
     setPlayingPanelFrames(previous => {
       const next = new Set(Array.from(previous).filter(panel => !hiddenPanelSet.has(panel)));
@@ -2096,8 +2081,8 @@ function Show2D() {
     });
   }, [hiddenPanelSet]);
   const naturalPanelOrder = React.useMemo(
-    () => isPaged ? activePagePanelIndices : Array.from({ length: totalPanelCount }, (_, i) => i),
-    [activePagePanelIndices, isPaged, totalPanelCount]
+    () => isPaged ? activePageIndices : Array.from({ length: totalPanelCount }, (_, i) => i),
+    [activePageIndices, isPaged, totalPanelCount]
   );
   const orderedImageIndices = React.useMemo(() => {
     if (isPaged) return naturalPanelOrder;
@@ -2198,7 +2183,7 @@ function Show2D() {
     richTitlePlainText(imageResizePending(idx) ? completedMainPanelsRef.current[idx]!.titleSpans : panelTitleSpans?.[idx], panelLabel(idx))
   ), [panelLabel, panelTitleSpans]);
   const setPanelHidden = React.useCallback((panel: number, hidden: boolean) => {
-    if (isPaged && !isItemPaged) {
+    if (isPaged) {
       if (panel < activePageStart || panel >= activePageEnd) return;
       const slot = panel - activePageStart;
       const next = validIndexSet(hiddenPageSlots, activePanelCount, Math.trunc);
@@ -2217,12 +2202,8 @@ function Show2D() {
     if (hidden) next.add(panel);
     else next.delete(panel);
     if (next.size >= totalPanelCount) return;
-    if (
-      isItemPaged
-      && activePagePanelIndices.every(value => next.has(value))
-    ) return;
     setHiddenPanels(Array.from(next).sort((a, b) => a - b));
-  }, [activePageEnd, activePagePanelIndices, activePageStart, activePanelCount, hiddenPageSlots, hiddenPanels, totalPanelCount, isItemPaged, isPaged, setHiddenPanels, setHiddenPageSlotsTrait]);
+  }, [activePageEnd, activePageStart, activePanelCount, hiddenPageSlots, hiddenPanels, totalPanelCount, isPaged, setHiddenPanels, setHiddenPageSlotsTrait]);
   const setPanelsHidden = React.useCallback((panels: number[], hidden: boolean) => {
     const panelSet = new Set(
       panels
@@ -2230,7 +2211,7 @@ function Show2D() {
         .filter((panel) => Number.isFinite(panel) && panel >= 0 && panel < totalPanelCount),
     );
     if (panelSet.size === 0) return;
-    if (isPaged && !isItemPaged) {
+    if (isPaged) {
       const next = validIndexSet(hiddenPageSlots, activePanelCount, Math.trunc);
       for (const panel of panelSet) {
         if (panel < activePageStart || panel >= activePageEnd) continue;
@@ -2250,9 +2231,8 @@ function Show2D() {
       else next.delete(panel);
     }
     if (next.size >= totalPanelCount) return;
-    if (isItemPaged && activePagePanelIndices.every(value => next.has(value))) return;
     setHiddenPanels(Array.from(next).sort((a, b) => a - b));
-  }, [activePageEnd, activePagePanelIndices, activePageStart, activePanelCount, hiddenPageSlots, hiddenPanels, totalPanelCount, isItemPaged, isPaged, setHiddenPanels, setHiddenPageSlotsTrait]);
+  }, [activePageEnd, activePageStart, activePanelCount, hiddenPageSlots, hiddenPanels, totalPanelCount, isPaged, setHiddenPanels, setHiddenPageSlotsTrait]);
   const handlePanelSelectionMouseDown = React.useCallback((event: React.MouseEvent, panel: number): boolean => {
     if (!isGallery || reorderMode) return false;
     const orderedVisible = orderedImageIndices.filter((idx) => visibleImageIndices.includes(idx));
@@ -7375,11 +7355,6 @@ function Show2D() {
       data-frequency-filter-backend={frequencyFilterEnabled ? frequencyFilterBackend : "off"}
       sx={{ p: 2, bgcolor: themeColors.bg, color: themeColors.text, width: "100%", maxWidth: "100%", boxSizing: "border-box", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", "& canvas": { display: "block" }, "@media (max-width: 700px)": { p: 0, ".jp-OutputArea-output &, .jp-OutputArea-child &": { width: "calc(100vw - 96px)", maxWidth: "calc(100vw - 96px)" } } }}
     >
-      <FolderWatchBadge
-        state={folderWatchState}
-        detail={folderWatchDetail}
-        live={folderWatchLive}
-      />
       {folderWaiting && (
         <Box
           role="region"
@@ -7550,7 +7525,7 @@ function Show2D() {
           {/* Page navigation sits above the analysis toolbar, matching Show3D. */}
           {controlsVisible && isPaged && (
             <Box
-              data-show2d-page-controls={pageKind || "comparison"}
+              data-show2d-page-controls="comparison"
               aria-label="Page navigation"
               sx={{
                 display: "flex",
@@ -7633,27 +7608,25 @@ function Show2D() {
                     <MenuItem key={fps} value={String(fps)}>{fps} fps</MenuItem>
                   ))}
                 </Select>
-                {pageKind !== "items" && (
-                  <IconButton
-                    size="small"
-                    onClick={() => {
-                      const next = Array.from({ length: Math.max(1, nPages || 1) }, (_, idx) => pageStarred?.[idx] ? 1 : 0);
-                      next[pageControlIdx] = next[pageControlIdx] ? 0 : 1;
-                      setPageStarred(next);
-                    }}
-                    title={(pageStarred?.[pageControlIdx] ? "Unstar " : "Star ") + pageControlLabel}
-                    aria-label={(pageStarred?.[pageControlIdx] ? "Unstar " : "Star ") + pageControlLabel}
-                    sx={{
-                      width: 24,
-                      height: 24,
-                      p: 0,
-                      color: pageStarred?.[pageControlIdx] ? "#ffc107" : themeColors.textMuted,
-                      "&:hover": { color: pageStarred?.[pageControlIdx] ? "#ffc107" : themeColors.text },
-                    }}
-                  >
-                    {pageStarred?.[pageControlIdx] ? "★" : "☆"}
-                  </IconButton>
-                )}
+                <IconButton
+                  size="small"
+                  onClick={() => {
+                    const next = Array.from({ length: Math.max(1, nPages || 1) }, (_, idx) => pageStarred?.[idx] ? 1 : 0);
+                    next[pageControlIdx] = next[pageControlIdx] ? 0 : 1;
+                    setPageStarred(next);
+                  }}
+                  title={(pageStarred?.[pageControlIdx] ? "Unstar " : "Star ") + pageControlLabel}
+                  aria-label={(pageStarred?.[pageControlIdx] ? "Unstar " : "Star ") + pageControlLabel}
+                  sx={{
+                    width: 24,
+                    height: 24,
+                    p: 0,
+                    color: pageStarred?.[pageControlIdx] ? "#ffc107" : themeColors.textMuted,
+                    "&:hover": { color: pageStarred?.[pageControlIdx] ? "#ffc107" : themeColors.text },
+                  }}
+                >
+                  {pageStarred?.[pageControlIdx] ? "★" : "☆"}
+                </IconButton>
               </Box>
             </Box>
           )}

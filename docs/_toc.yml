@@ -54,8 +54,6 @@ parts:
             title: Advanced Show2D
           - file: tutorials/memory_management
             title: Memory management
-          - file: tutorials/watch_folder
-            title: Live folder watching
           - file: tutorials/compare_reconstructions
             title: Comparing reconstructions
   # API reference lives under Developers, separate from the tutorials.

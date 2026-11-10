@@ -437,12 +437,11 @@ def test_show4dstem_cli_count_defaults_to_full_detector(tmp_path, monkeypatch):
         seen["discover_path"] = str(path)
         return [str(tmp_path / "scan_0_master.h5"), str(tmp_path / "scan_1_master.h5")]
 
-    def fake_render(masters, label, args, *, source_path=None):
+    def fake_render(masters, label, args):
         seen["masters"] = masters
         seen["label"] = label
         seen["detector_bin"] = args.detector_bin
         seen["backend"] = args.backend
-        seen["source_path"] = source_path
         return tmp_path / "viewer.ipynb"
 
     def fake_launch(notebook, *, no_open):
@@ -460,7 +459,6 @@ def test_show4dstem_cli_count_defaults_to_full_detector(tmp_path, monkeypatch):
     assert seen["label"] == tmp_path.name
     assert seen["detector_bin"] == 1
     assert seen["backend"] == "auto"
-    assert seen["source_path"] == tmp_path.resolve()
     assert seen["notebook"] == tmp_path / "viewer.ipynb"
     assert seen["no_open"] is True
 
@@ -644,24 +642,17 @@ def test_show4dstem_dataset_label_uses_coordinates_when_available():
     assert cli._show4dstem_dataset_label("unknown_master.h5", 2) == "Dataset 3"
 
 
-def test_render_show4dstem_folder_notebook_records_the_count(tmp_path):
-    """C7: generated folder notebooks preserve the seven-entry gate options."""
+def test_render_show4dstem_notebook_reads_every_selected_master(tmp_path):
+    """C7: a generated notebook opens exactly the seven selected masters."""
     args = SimpleNamespace(backend="auto", detector_bin=1, out=str(tmp_path))
+    masters = [str(tmp_path / f"tilt_{idx:02d}_master.h5") for idx in range(7)]
 
-    notebook = cli._render_4dstem_notebook(
-        [str(tmp_path / f"tilt_{idx:02d}_master.h5") for idx in range(7)],
-        "seven",
-        args,
-        source_path=tmp_path,
-    )
+    notebook = cli._render_4dstem_notebook(masters, "seven", args)
 
-    text = notebook.read_text(encoding="utf-8")
-    assert "Show4DSTEM.from_folder(" in text
-    assert "backend=" not in text
-    assert "max_masters=7" in text
-    assert "min_masters=7" in text
-    assert "watch=False" in text
-    assert "detector_bin" not in text and "dtype" not in text
+    code = "".join(json.loads(notebook.read_text(encoding="utf-8"))["cells"][1]["source"])
+    assert f"masters = {masters!r}" in code and "read_4dstem(masters)" in code
+    assert "backend=" not in code
+    assert "detector_bin" not in code and "dtype" not in code
 
 
 
@@ -670,45 +661,6 @@ def test_show4dstem_subcommand_writes_notebook(tmp_path):
     dest = tmp_path / "out"
     assert cli.main(["show4dstem", str(tmp_path / "scan_master.h5"), "--no-open", "--out", str(dest)]) == 0
     assert list(dest.glob("*.ipynb"))
-
-
-def test_show4dstem_folder_watch_writes_live_notebook(tmp_path):
-    source = tmp_path / "live"
-    source.mkdir()
-    (source / "scan_000_master.h5").write_bytes(b"\x00")
-    dest = tmp_path / "out"
-
-    assert cli.main([
-        "show4dstem",
-        str(source),
-        "--watch",
-        "--scan-size",
-        "512",
-        "--watch-interval",
-        "1.5",
-        "--no-open",
-        "--out",
-        str(dest),
-    ]) == 0
-
-    notebooks = list(dest.glob("*_live.ipynb"))
-    assert len(notebooks) == 1
-    import json
-
-    code = "".join(json.loads(notebooks[0].read_text())["cells"][1]["source"])
-    assert "Show4DSTEM.from_folder(" in code
-    assert "scan_size=512" in code
-    assert "backend=" not in code
-    assert "watch=True, watch_interval=1.5" in code
-
-
-def test_show4dstem_watch_requires_live_folder_notebook(tmp_path):
-    master = tmp_path / "scan_master.h5"
-    master.write_bytes(b"\x00")
-
-    assert cli.main(["show4dstem", str(master), "--watch", "--no-open"]) == 1
-    assert cli.main(["show4dstem", str(tmp_path), "--watch", "--html", "--no-open"]) == 1
-
 
 
 def test_show4dstem_html_cli_threads_export_dtype(tmp_path, monkeypatch) -> None:
