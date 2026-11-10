@@ -29,6 +29,11 @@ function clearColorFromRgb(bgRgb: number): GPUColorDict {
 
 type DisplayRange = { vmin: number; vmax: number };
 type ViewTransform = { zoom: number; panX: number; panY: number };
+/** One panel of renderSlotsDirectToCanvases: a resident slot drawn into its own canvas. */
+export type PanelCanvasDraw = {
+  slot: number; ctx: GPUCanvasContext; range: DisplayRange; logScale: boolean;
+  lut: { name: string; lut: Uint8Array }; transform?: ViewTransform;
+};
 /** One canvas view of a slot: its size, background and optional zoom/pan. */
 type CanvasViewOptions = { width: number; height: number; bgRgb: number; transform?: ViewTransform; smooth?: boolean };
 /** A cols x rows grid of equal panels with `gap` pixels between them in a width x height canvas. */
@@ -413,6 +418,77 @@ export class DirectRenderer {
       pass.draw(3);
     }
     pass.end();
+    return true;
+  }
+
+  /**
+   * Draw each slot into its own canvas in one queue submission: a gallery whose panels are
+   * separate canvases, each with its own range, log scale, LUT and zoom/pan. Every canvas is
+   * `opts.width` x `opts.height`; the image fills it at zoom 1, as `drawImage(offscreen, 0, 0, w, h)`
+   * would. Returns false, drawing nothing, when a slot is missing or not a float32 frame.
+   */
+  renderSlotsDirectToCanvases(draws: PanelCanvasDraw[], opts: { width: number; height: number; bgRgb: number; smooth?: boolean }): boolean {
+    if (draws.length === 0) return false;
+    if (new Set(draws.map(draw => draw.slot)).size !== draws.length) throw new Error("Supply one distinct resident slot for each canvas context.");
+    const slots = draws.map(draw => this.engine.slots[draw.slot]);
+    if (slots.some(slot => !slot || slot.dataKind !== "f32")) return false;
+    const outW = Math.max(1, Math.round(opts.width));
+    const outH = Math.max(1, Math.round(opts.height));
+    this.ensureDirectSlotPipeline(navigator.gpu.getPreferredCanvasFormat());
+    const pipeline = this.directSlotPipeline;
+    if (!pipeline) return false;
+    const params = this.directGridParams;
+    const paramsU32 = this.directGridParamsU32;
+    const paramsF32 = this.directGridParamsF32;
+    const encoder = this.device.createCommandEncoder();
+    for (let k = 0; k < draws.length; k++) {
+      const draw = draws[k];
+      const slot = slots[k]!;
+      const transform = draw.transform;
+      const zoomValue = Math.max(1e-6, transform?.zoom ?? 1);
+      paramsU32[0] = slot.width;
+      paramsU32[1] = slot.height;
+      paramsU32[2] = 0;
+      paramsU32[3] = slot.width;
+      paramsU32[4] = outH;
+      paramsU32[5] = outW;
+      paramsF32[6] = 0;
+      paramsF32[7] = 0;
+      paramsU32[8] = draw.logScale ? 1 : 0;
+      paramsU32[9] = opts.bgRgb & 0xFFFFFF;
+      paramsF32[10] = zoomValue;
+      paramsU32[11] = shouldSmoothDirectSample(opts.smooth, zoomValue, slot.width, slot.height, outW, outH) ? 1 : 0;
+      paramsF32[12] = draw.range.vmin;
+      paramsF32[13] = draw.range.vmax;
+      paramsF32[14] = transform?.panX ?? 0;
+      paramsF32[15] = transform?.panY ?? 0;
+      this.device.queue.writeBuffer(slot.paramsBuffer, 0, params);
+      const lutBuffer = this.engine.namedLutBuffer(draw.lut.name, draw.lut.lut);
+      if (!slot.directCanvasBindGroup || slot.directCanvasLut !== lutBuffer) {
+        slot.directCanvasBindGroup = this.device.createBindGroup({
+          layout: pipeline.getBindGroupLayout(0),
+          entries: [
+            { binding: 0, resource: { buffer: slot.paramsBuffer } },
+            { binding: 1, resource: { buffer: slot.dataBuffer } },
+            { binding: 2, resource: { buffer: lutBuffer } },
+          ],
+        });
+        slot.directCanvasLut = lutBuffer;
+      }
+      const pass = encoder.beginRenderPass({
+        colorAttachments: [{
+          view: draw.ctx.getCurrentTexture().createView(),
+          loadOp: "clear" as GPULoadOp,
+          storeOp: "store" as GPUStoreOp,
+          clearValue: clearColorFromRgb(opts.bgRgb),
+        }],
+      });
+      pass.setPipeline(pipeline);
+      pass.setBindGroup(0, slot.directCanvasBindGroup);
+      pass.draw(3);
+      pass.end();
+    }
+    this.device.queue.submit([encoder.finish()]);
     return true;
   }
 

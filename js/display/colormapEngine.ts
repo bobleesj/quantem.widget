@@ -33,6 +33,9 @@ export type GPUSlot = {
   };
   directGridBindGroup: GPUBindGroup | null;
   directSlotBindGroup: GPUBindGroup | null;
+  // Per-canvas panel binding (renderSlotsDirectToCanvases) and the LUT buffer it was built for.
+  directCanvasBindGroup: GPUBindGroup | null;
+  directCanvasLut: GPUBuffer | null;
   // Colormap compute binding and the LUT buffer it was built for.
   colormapBindGroup: GPUBindGroup | null;
   colormapLut: GPUBuffer | null;
@@ -289,6 +292,8 @@ export class GPUColormapEngine {
       rangeBuffer: null,
       directGridBindGroup: null,
       directSlotBindGroup: null,
+      directCanvasBindGroup: null,
+      directCanvasLut: null,
       colormapBindGroup: null,
       colormapLut: null,
       directRegionParamsBuffers: [],
@@ -747,6 +752,7 @@ export class GPUColormapEngine {
   renderSharedGridDirectToCanvas(...args: Parameters<DirectRenderer["renderSharedGridDirectToCanvas"]>) { return this.direct.renderSharedGridDirectToCanvas(...args); }
   renderSharedGridToImageBitmapAsync(...args: Parameters<DirectRenderer["renderSharedGridToImageBitmapAsync"]>) { return this.direct.renderSharedGridToImageBitmapAsync(...args); }
   renderPanelSlotsDirectToCanvas(...args: Parameters<DirectRenderer["renderPanelSlotsDirectToCanvas"]>) { return this.direct.renderPanelSlotsDirectToCanvas(...args); }
+  renderSlotsDirectToCanvases(...args: Parameters<DirectRenderer["renderSlotsDirectToCanvases"]>) { return this.direct.renderSlotsDirectToCanvases(...args); }
   renderPanelSlotsToImageBitmapAsync(...args: Parameters<DirectRenderer["renderPanelSlotsToImageBitmapAsync"]>) { return this.direct.renderPanelSlotsToImageBitmapAsync(...args); }
   renderSlotDirectWithGpuRangeToCanvas(...args: Parameters<DirectRenderer["renderSlotDirectWithGpuRangeToCanvas"]>) { return this.direct.renderSlotDirectWithGpuRangeToCanvas(...args); }
   renderSlotsDirectWithGpuRangeToCanvases(...args: Parameters<DirectRenderer["renderSlotsDirectWithGpuRangeToCanvases"]>) { return this.direct.renderSlotsDirectWithGpuRangeToCanvases(...args); }

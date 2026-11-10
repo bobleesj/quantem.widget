@@ -59,6 +59,7 @@ import { createLatestFrameQueue } from "../show4dstem/latestFrameQueue";
 import { resizeDetectorFromPointer, type DetectorResizeStart, type DetectorRoiMode } from "../show4dstem/detectorInteraction";
 import { colormapSampledPixels, createColormapEngine, createCPUColormapEngine, packRgbPixels, type DisplayColormapEngine } from "../display/cpuColormap";
 import { onGPULost, type RenderPath } from "../display/device";
+import type { PanelCanvasDraw } from "../display/directRender";
 import { applyDisplayFilterBrowser, browserFilterSupported, filterKnobsActive, resolvePanelDenoiseKnobs } from "../display/filter";
 import { applyFrequencyFilterBrowser, frequencyFilterActive, getFrequencyFilterBackend, normalizeFrequencyFilterMode } from "../display/frequencyFilter";
 import { InfoTooltip } from "../shared/InfoTooltip";
@@ -414,6 +415,9 @@ function quarterTurns(rotation: number): number {
 // frames (9.6 M) or four 1.7k images. Larger previews (a single 4096^2 frame) recolor only the
 // canvas pixels on screen instead of allocating a full-resolution bitmap per tick.
 const GPU_PREVIEW_MAX_SOURCE_PIXELS = 12_000_000;
+// A WebGPU gallery frame is copied to the panel's 2D canvas once its panel has not been redrawn
+// for this long, so a drag, wheel or pan never pays the copy per move.
+const GPU_PANEL_RETAIN_MS = 150;
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 20;
 const DPR = window.devicePixelRatio || 1;
@@ -1600,7 +1604,7 @@ function Show2D() {
         // whole gallery here can momentarily apply stale/default ranges to
         // untouched panels before React's settled render restores them. RGB
         // overlays stay on their true-color path in both linked modes.
-        const previewIndices = contrastPreviewIndices(
+        let previewIndices = contrastPreviewIndices(
           linkedContrast,
           visibleImageIndicesRef.current,
           previewIdx,
@@ -1647,7 +1651,7 @@ function Show2D() {
           }
         }
         panelRangesRef.current = ranges;  // keep detail tiles on the live contrast window
-        const bitmapRanges = previewIndices.map(i => ranges[i] || { vmin: 0, vmax: 1 });
+        let bitmapRanges = previewIndices.map(i => ranges[i] || { vmin: 0, vmax: 1 });
         // Paint as the settled render does: every panel in its own colormap,
         // and packed uint8 frames through the scaled pass at canvas size.
         const cmapNames = Array.from({ length: nImages }, (_, i) => panelCmapForRef.current(i));
@@ -1655,6 +1659,12 @@ function Show2D() {
         // canvas pixel per tick (a 48-panel sheet took ~46 ms a tick and dropped half the moves).
         // Only a source too large to colormap per tick (a few 4k panels) keeps the sampled path,
         // which touches canvas pixels instead of source pixels.
+        const gpuDrawn = drawGpuPanelsRef.current(previewIndices, ranges, previewLogScale);
+        if (gpuDrawn.size === previewIndices.length) return;
+        if (gpuDrawn.size > 0) {
+          previewIndices = previewIndices.filter(i => !gpuDrawn.has(i));
+          bitmapRanges = previewIndices.map(i => ranges[i] || { vmin: 0, vmax: 1 });
+        }
         const previewSourcePixels = previewIndices.length * width * height;
         const gpuColormapsPreview = engine instanceof GPUColormapEngine && previewSourcePixels <= GPU_PREVIEW_MAX_SOURCE_PIXELS;
         if (!gpuColormapsPreview && paintSampledPreviewRef.current(previewIndices, bitmapRanges, previewLogScale, cmapNames)) return;
@@ -1701,18 +1711,17 @@ function Show2D() {
     }
     Array.from({ length: nImages }, (_, i) => setContrastState(i, { vminPct: lo, vmaxPct: hi }, true));
   }, [linkedContrast, nImages, setAutoContrast, setContrastPreset, setContrastState]);
-  // A histogram drag leaves Auto and the named presets. The preview commits to
-  // React state only on the tick that leaves Auto; the preset is written only
+  // A histogram drag leaves Auto and the named presets on release. The preview
+  // only draws from the contrast refs: a model write or React commit mid-drag
+  // re-renders the widget and messages the kernel. The preset is written only
   // when it changes, since every model write is a message to the kernel.
   const leaveAutoContrast = () => {
-    const leavingAuto = autoContrast;
-    if (leavingAuto) setAutoContrast(false);
+    if (autoContrast) setAutoContrast(false);
     if (contrastPreset !== "manual") setContrastPreset("manual");
-    return leavingAuto;
   };
   const histogramRangeHandlers = (panel: number) => ({
     onRangeChange: (min: number, max: number) => { leaveAutoContrast(); setContrastState(panel, { vminPct: min, vmaxPct: max }); },
-    onRangePreview: (min: number, max: number) => setContrastState(panel, { vminPct: min, vmaxPct: max }, leaveAutoContrast()),
+    onRangePreview: (min: number, max: number) => setContrastState(panel, { vminPct: min, vmaxPct: max }, false),
     onRangeCommit: (min: number, max: number) => { leaveAutoContrast(); setContrastState(panel, { vminPct: min, vmaxPct: max }, true); },
   });
   // Convenience accessors for active image
@@ -1946,6 +1955,11 @@ function Show2D() {
 
   // Cached offscreen canvases for main image rendering (avoids per-zoom/pan recompute)
   const mainOffscreensRef = React.useRef<HTMLCanvasElement[]>([]);
+  // WebGPU canvas per gallery panel, layered over its 2D canvas (see drawGpuPanels).
+  const gpuPanelCanvasRefs = React.useRef<(HTMLCanvasElement | null)[]>([]);
+  const gpuPanelContextsRef = React.useRef(new WeakMap<HTMLCanvasElement, { engine: GPUColormapEngine; ctx: GPUCanvasContext; w: number; h: number }>());
+  const gpuPanelsToRetainRef = React.useRef(new Set<number>());
+  const gpuPanelRetainTimerRef = React.useRef(0);
   const mainImgDatasRef = React.useRef<ImageData[]>([]);
   // Resize targets stay private until the whole visible batch has rendered.
   // Layout/hover events must never expose a freshly allocated, blank target.
@@ -4017,11 +4031,111 @@ function Show2D() {
       flipY: Boolean(imageFlipsVertical?.[panel]),
     };
   };
+  // Gallery panels draw on WebGPU: each panel's slot goes straight into the WebGPU canvas
+  // layered over its 2D canvas, through the one shader every display state uses (a contrast
+  // drag, zoom, pan and the settled frame), so a held drag and its release show the same
+  // pixels. The 2D canvas gets a copy of the GPU frame once the panel stops changing
+  // (GPU_PANEL_RETAIN_MS); exports and the static page read the 2D canvas.
+  const gpuPanelSlotCurrent = (engine: GPUColormapEngine, panel: number): boolean => {
+    const slot = engine.slots[panel];
+    const uploaded = uploadedFramesRef.current;
+    return !!slot && slot.dataKind === "f32" && slot.width === width && slot.height === height
+      && uploaded.engine === engine && !!rawDataRef.current?.[panel] && uploaded.arrays[panel] === rawDataRef.current[panel];
+  };
+  const gpuPanelContext = (engine: GPUColormapEngine, panel: number): GPUCanvasContext | null => {
+    const canvas = gpuPanelCanvasRefs.current[panel];
+    if (!canvas) return null;
+    const w = Math.max(1, Math.round(canvasW));
+    const h = Math.max(1, Math.round(canvasH));
+    const cached = gpuPanelContextsRef.current.get(canvas);
+    if (cached && cached.engine === engine && cached.w === w && cached.h === h) return cached.ctx;
+    const ctx = engine.configureCanvas(canvas, w, h);
+    if (ctx) gpuPanelContextsRef.current.set(canvas, { engine, ctx, w, h });
+    return ctx;
+  };
+  /** Show `panel`'s 2D canvas, which a 2D paint or the retained copy has just drawn. */
+  const hideGpuPanel = (panel: number) => {
+    gpuPanelsToRetainRef.current.delete(panel);
+    const gpuCanvas = gpuPanelCanvasRefs.current[panel];
+    if (gpuCanvas && gpuCanvas.style.opacity !== "0") gpuCanvas.style.opacity = "0";
+  };
+  /**
+   * Draw the eligible `panels` of a gallery on WebGPU with `ranges` (indexed by panel) in one
+   * submission and return the panels drawn; the rest stay on the 2D path. Rotated or flipped
+   * kernel-less exports, packed uint8 folder frames, binned previews with detail tiles, true
+   * color and panels whose slot lags the data are left to it. With `retain`, each drawn frame is
+   * copied to its 2D canvas in the same task, while the canvas texture still holds it (after
+   * presentation it may be discarded), and the 2D canvas shows again.
+   */
+  const drawGpuPanels = (panels: number[], ranges: { vmin: number; vmax: number }[], panelLogScale: boolean, retain = false): Set<number> => {
+    const drawn = new Set<number>();
+    const engine = gpuCmapRef.current;
+    if (!isGallery || !(engine instanceof GPUColormapEngine) || !gpuCmapReadyRef.current) return drawn;
+    if (uint8FolderPreviewMode || (displayBin ?? 1) > 1 || canvasW <= 0 || canvasH <= 0) return drawn;
+    const draws: PanelCanvasDraw[] = [];
+    for (const panel of panels) {
+      const range = ranges[panel];
+      if (!range || (isRgbFlags && isRgbFlags[panel]) || imageResizePending(panel)) continue;
+      const placement = panelPlacement(panel);
+      if (placement.rotationTurns !== 0 || placement.flipX || placement.flipY) continue;
+      if (!gpuPanelSlotCurrent(engine, panel)) continue;
+      const ctx = gpuPanelContext(engine, panel);
+      if (!ctx) continue;
+      const name = panelCmapFor(panel);
+      draws.push({
+        slot: panel, ctx, range, logScale: panelLogScale,
+        lut: { name, lut: COLORMAPS[name] || COLORMAPS.inferno },
+        // Zoom about the canvas centre, as applyPanelTransform draws it.
+        transform: { zoom: placement.zoom, panX: canvasW / 2 * (1 - placement.zoom) + placement.panX, panY: canvasH / 2 * (1 - placement.zoom) + placement.panY },
+      });
+    }
+    if (draws.length === 0) return drawn;
+    try {
+      if (!engine.renderSlotsDirectToCanvases(draws, { width: canvasW, height: canvasH, bgRgb: 0, smooth })) return drawn;
+    } catch (error) {
+      console.error("[Show2D] WebGPU panel draw failed", error);
+      return drawn;
+    }
+    for (const draw of draws) {
+      const panel = draw.slot;
+      drawn.add(panel);
+      const gpuCanvas = gpuPanelCanvasRefs.current[panel];
+      const canvas = canvasRefs.current[panel];
+      const ctx2d = retain ? canvas?.getContext("2d") : null;
+      if (gpuCanvas && canvas && ctx2d) {
+        ctx2d.clearRect(0, 0, canvas.width, canvas.height);
+        ctx2d.drawImage(gpuCanvas, 0, 0, canvas.width, canvas.height);
+        hideGpuPanel(panel);
+        continue;
+      }
+      if (gpuCanvas && gpuCanvas.style.opacity !== "1") gpuCanvas.style.opacity = "1";
+      gpuPanelsToRetainRef.current.add(panel);
+    }
+    if (gpuPanelsToRetainRef.current.size > 0) {
+      window.clearTimeout(gpuPanelRetainTimerRef.current);
+      gpuPanelRetainTimerRef.current = window.setTimeout(() => retainGpuPanelsRef.current(), GPU_PANEL_RETAIN_MS);
+    }
+    return drawn;
+  };
+  // Once the panels stop changing, draw their current state once more and keep that frame.
+  const retainGpuPanels = () => {
+    const panels = Array.from(gpuPanelsToRetainRef.current);
+    gpuPanelsToRetainRef.current.clear();
+    if (panels.length > 0) drawGpuPanels(panels, panelRangesRef.current, logScale, true);
+  };
+  const drawGpuPanelsRef = React.useRef(drawGpuPanels);
+  drawGpuPanelsRef.current = drawGpuPanels;
+  const retainGpuPanelsRef = React.useRef(retainGpuPanels);
+  retainGpuPanelsRef.current = retainGpuPanels;
+  React.useEffect(() => () => window.clearTimeout(gpuPanelRetainTimerRef.current), []);
   const paintMainPanels = (paintIndices: number[]) => {
+    const gpuDrawn = drawGpuPanels(paintIndices.filter(i => completedMainPanelsRef.current[i]), panelRangesRef.current, logScale);
     for (const i of paintIndices) {
+      if (gpuDrawn.has(i)) continue;
       const canvas = canvasRefs.current[i];
       const completed = completedMainPanelsRef.current[i];
       if (!canvas || !completed) continue;
+      hideGpuPanel(i);
       const offscreen = completed.canvas;
       const ctx = canvas.getContext("2d");
       if (!ctx) continue;
@@ -4108,6 +4222,7 @@ function Show2D() {
       const name = cmapNames[panel];
       colormapSampledPixels(data, target.index, ranges[k], logScale, COLORMAPS[name] || COLORMAPS.inferno, target.image);
       canvas.getContext("2d")?.putImageData(target.image, 0, 0);
+      hideGpuPanel(panel);
     });
     return true;
   };
@@ -6493,6 +6608,7 @@ function Show2D() {
   // -------------------------------------------------------------------------
   // Copy to clipboard handler
   const handleCopy = React.useCallback(async () => {
+    retainGpuPanelsRef.current();
     const canvas = canvasRefs.current[isGallery ? selectedIdx : 0];
     if (!canvas) return;
     try {
@@ -6506,6 +6622,7 @@ function Show2D() {
   }, [isGallery, selectedIdx, labels]);
 
   const buildSvgExport = React.useCallback((scale: number = 3): Show2DSvgExport => {
+    retainGpuPanelsRef.current();  // the 2D canvases hold every panel's current frame
     const exportScale = Math.max(1, Math.min(8, Math.round(Number(scale) || 2)));
     const panels = isGallery ? visibleImageIndices : [0];
     if (panels.length === 0 || canvasW <= 0 || canvasH <= 0) {
@@ -8374,6 +8491,13 @@ function Show2D() {
                       ref={(el) => { if (el && canvasRefs.current[i] !== el) { canvasRefs.current[i] = el; setCanvasReady(count => count + 1); } }}
                       width={canvasW} height={canvasH}
                       style={responsiveCanvasStyle}
+                    />
+                    <canvas
+                      data-show2d-gpu-canvas={i}
+                      ref={(el) => { gpuPanelCanvasRefs.current[i] = el; }}
+                      width={canvasW} height={canvasH}
+                      style={{ ...responsiveCanvasStyle, opacity: 0, pointerEvents: "none" }}
+                      aria-hidden="true"
                     />
                     <canvas
                       ref={(el) => { overlayRefs.current[i] = el; }}
