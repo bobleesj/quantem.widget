@@ -105,13 +105,11 @@ export class DirectRenderer {
    * so callers that keep a frame (exports, compare tiles) need a durable copy.
    */
   private async durableFrame(width: number, height: number, draw: (context: GPUCanvasContext) => boolean): Promise<ImageBitmap | null> {
-    const canvas = new OffscreenCanvas(Math.max(1, Math.round(width)), Math.max(1, Math.round(height)));
-    const context = canvas.getContext("webgpu") as GPUCanvasContext | null;
-    if (!context) return null;
-    context.configure({ device: this.device, format: navigator.gpu.getPreferredCanvasFormat(), alphaMode: "opaque" });
-    if (!draw(context)) return null;
+    const target = this.engine.acquireOffscreen(width, height, navigator.gpu.getPreferredCanvasFormat());
+    if (!target) return null;
+    if (!draw(target.context)) return null;
     await this.device.queue.onSubmittedWorkDone();
-    return canvas.transferToImageBitmap();
+    return this.engine.transferOffscreen(target.canvas);
   }
 
   private ensureDirectGridPipeline(format: GPUTextureFormat): void {
@@ -205,8 +203,7 @@ export class DirectRenderer {
     const blit = this.engine.encodeBlitToOffscreen(encoder, slot.rgbaBuffer, canvasWidth, canvasHeight, format);
     if (!blit) return null;
     this.device.queue.submit([encoder.finish()]);
-    blit.blitParamsBuffer.destroy();
-    return blit.canvas.transferToImageBitmap();
+    return this.engine.transferOffscreen(blit.canvas);
   }
 
   /**
@@ -242,9 +239,8 @@ export class DirectRenderer {
     const blit = this.engine.encodeBlitToOffscreen(encoder, slot.rgbaBuffer, canvasWidth, canvasHeight, format);
     if (!blit) return null;
     this.device.queue.submit([encoder.finish()]);
-    blit.blitParamsBuffer.destroy();
     await this.device.queue.onSubmittedWorkDone();
-    return blit.canvas.transferToImageBitmap();
+    return this.engine.transferOffscreen(blit.canvas);
   }
 
   renderSharedGridDirectToCanvas(

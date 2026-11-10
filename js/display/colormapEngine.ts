@@ -33,6 +33,9 @@ export type GPUSlot = {
   };
   directGridBindGroup: GPUBindGroup | null;
   directSlotBindGroup: GPUBindGroup | null;
+  // Colormap compute binding and the LUT buffer it was built for.
+  colormapBindGroup: GPUBindGroup | null;
+  colormapLut: GPUBuffer | null;
   directRegionParamsBuffers: (GPUBuffer | null)[];
   directRegionBindGroups: (GPUBindGroup | null)[];
   directRegionLutNames: string[];
@@ -43,6 +46,12 @@ export type GPUSlot = {
   directOnly: boolean;
   dataKind: "f32" | "u8";
 };
+
+// A pooled canvas's context and format, so a transfer can hand the canvas back to its pool.
+const offscreenFormats = new WeakMap<OffscreenCanvas, { context: GPUCanvasContext; format: GPUTextureFormat }>();
+// Enough canvases per size for two 48-panel gallery frames in flight at once. A pooled canvas
+// holds no texture between frames, so the pool costs little memory.
+const OFFSCREEN_POOL_PER_SIZE = 128;
 
 /**
  * WebGPU colormap engine. Holds persistent data buffers on the GPU; histogram
@@ -79,6 +88,12 @@ export class GPUColormapEngine {
   // Scratch for the 24-byte colormap params; writeBuffer copies it before reuse.
   private colormapParams = new ArrayBuffer(24);
   private retiredSlots: GPUSlot[] = [];
+  // Configured WebGPU OffscreenCanvases by size and format. A canvas stays configured after
+  // transferToImageBitmap, so a durable frame borrows one and returns it after the transfer
+  // instead of creating and configuring a canvas per frame.
+  private offscreenPool = new Map<string, { canvas: OffscreenCanvas; context: GPUCanvasContext }[]>();
+  // Blit params and bind group per rgba buffer, rebuilt only when the size or pipeline changes.
+  private blitBindings = new WeakMap<GPUBuffer, { width: number; height: number; pipeline: GPURenderPipeline; params: GPUBuffer; group: GPUBindGroup }>();
   // The drawing sections, one module each; they draw through the slots, LUT and blit pass above.
   private readonly ranges: GPURanges;
   private readonly direct: DirectRenderer;
@@ -271,6 +286,8 @@ export class GPUColormapEngine {
       rangeBuffer: null,
       directGridBindGroup: null,
       directSlotBindGroup: null,
+      colormapBindGroup: null,
+      colormapLut: null,
       directRegionParamsBuffers: [],
       directRegionBindGroups: [],
       directRegionLutNames: [],
@@ -407,15 +424,19 @@ export class GPUColormapEngine {
   ): void {
     this.writeColormapParams(this.colormapParams, slot.width, slot.height, vmin, vmax, logScale);
     this.device.queue.writeBuffer(slot.paramsBuffer, 0, this.colormapParams);
-    const bindGroup = this.device.createBindGroup({
-      layout: this.pipeline!.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: slot.paramsBuffer } },
-        { binding: 1, resource: { buffer: slot.dataBuffer } },
-        { binding: 2, resource: { buffer: lutBuffer } },
-        { binding: 3, resource: { buffer: slot.rgbaBuffer } },
-      ],
-    });
+    if (!slot.colormapBindGroup || slot.colormapLut !== lutBuffer) {
+      slot.colormapBindGroup = this.device.createBindGroup({
+        layout: this.pipeline!.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: slot.paramsBuffer } },
+          { binding: 1, resource: { buffer: slot.dataBuffer } },
+          { binding: 2, resource: { buffer: lutBuffer } },
+          { binding: 3, resource: { buffer: slot.rgbaBuffer } },
+        ],
+      });
+      slot.colormapLut = lutBuffer;
+    }
+    const bindGroup = slot.colormapBindGroup;
     const pass = encoder.beginComputePass();
     pass.setPipeline(this.pipeline!);
     pass.setBindGroup(0, bindGroup);
@@ -451,42 +472,75 @@ export class GPUColormapEngine {
   }
 
   /**
-   * Encode the fullscreen blit of a packed rgba buffer into a new width x height
-   * OffscreenCanvas. Returns the canvas and its blit params buffer, which the
-   * caller destroys once the encoder is submitted, or null when the canvas has
-   * no WebGPU context. The blit pipeline must already exist.
+   * Borrow a configured width x height WebGPU OffscreenCanvas. Hand it back with
+   * transferOffscreen once its frame is snapshotted.
    */
-  encodeBlitToOffscreen(
-    encoder: GPUCommandEncoder, rgbaBuffer: GPUBuffer, width: number, height: number, format: GPUTextureFormat,
-  ): { canvas: OffscreenCanvas; blitParamsBuffer: GPUBuffer } | null {
-    const canvas = new OffscreenCanvas(width, height);
+  acquireOffscreen(width: number, height: number, format: GPUTextureFormat): { canvas: OffscreenCanvas; context: GPUCanvasContext } | null {
+    const w = Math.max(1, Math.round(width));
+    const h = Math.max(1, Math.round(height));
+    const pooled = this.offscreenPool.get(`${w}x${h}:${format}`)?.pop();
+    if (pooled) return pooled;
+    const canvas = new OffscreenCanvas(w, h);
     const context = canvas.getContext("webgpu") as GPUCanvasContext | null;
     if (!context) return null;
     context.configure({ device: this.device, format, alphaMode: "opaque" });
-    const blitParamsBuffer = this.device.createBuffer({
-      size: 8, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    this.device.queue.writeBuffer(blitParamsBuffer, 0, new Uint32Array([width, height]));
-    const blitGroup = this.device.createBindGroup({
-      layout: this.blitPipeline!.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: blitParamsBuffer } },
-        { binding: 1, resource: { buffer: rgbaBuffer } },
-      ],
-    });
+    offscreenFormats.set(canvas, { context, format });
+    return { canvas, context };
+  }
+
+  /** Snapshot a borrowed canvas and return it to the pool. */
+  transferOffscreen(canvas: OffscreenCanvas): ImageBitmap {
+    const bitmap = canvas.transferToImageBitmap();
+    const entry = offscreenFormats.get(canvas);
+    if (entry) {
+      const key = `${canvas.width}x${canvas.height}:${entry.format}`;
+      const free = this.offscreenPool.get(key) ?? [];
+      if (free.length < OFFSCREEN_POOL_PER_SIZE) free.push({ canvas, context: entry.context });
+      this.offscreenPool.set(key, free);
+    }
+    return bitmap;
+  }
+
+  /**
+   * Encode the fullscreen blit of a packed rgba buffer into a pooled width x height
+   * OffscreenCanvas, or null when the canvas has no WebGPU context. Snapshot the
+   * canvas with transferOffscreen after the submit. The blit pipeline must already exist.
+   */
+  encodeBlitToOffscreen(
+    encoder: GPUCommandEncoder, rgbaBuffer: GPUBuffer, width: number, height: number, format: GPUTextureFormat,
+  ): { canvas: OffscreenCanvas } | null {
+    const target = this.acquireOffscreen(width, height, format);
+    if (!target) return null;
+    const pipeline = this.blitPipeline!;
+    let binding = this.blitBindings.get(rgbaBuffer);
+    if (!binding || binding.width !== width || binding.height !== height || binding.pipeline !== pipeline) {
+      const params = binding?.params ?? this.device.createBuffer({
+        size: 8, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      this.device.queue.writeBuffer(params, 0, new Uint32Array([width, height]));
+      const group = this.device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: params } },
+          { binding: 1, resource: { buffer: rgbaBuffer } },
+        ],
+      });
+      binding = { width, height, pipeline, params, group };
+      this.blitBindings.set(rgbaBuffer, binding);
+    }
     const renderPass = encoder.beginRenderPass({
       colorAttachments: [{
-        view: context.getCurrentTexture().createView(),
+        view: target.context.getCurrentTexture().createView(),
         loadOp: "clear" as GPULoadOp,
         storeOp: "store" as GPUStoreOp,
         clearValue: { r: 0, g: 0, b: 0, a: 1 },
       }],
     });
-    renderPass.setPipeline(this.blitPipeline!);
-    renderPass.setBindGroup(0, blitGroup);
+    renderPass.setPipeline(pipeline);
+    renderPass.setBindGroup(0, binding.group);
     renderPass.draw(3);
     renderPass.end();
-    return { canvas, blitParamsBuffer };
+    return { canvas: target.canvas };
   }
 
   /**
@@ -573,8 +627,7 @@ export class GPUColormapEngine {
       const blit = this.encodeBlitToOffscreen(encoder, this.rgbRgbaBuffer, width, height, format);
       if (!blit) return null;
       this.device.queue.submit([encoder.finish()]);
-      blit.blitParamsBuffer.destroy();
-      return blit.canvas.transferToImageBitmap();
+      return this.transferOffscreen(blit.canvas);
     } catch {
       return null;
     }
@@ -607,7 +660,7 @@ export class GPUColormapEngine {
 
   /** Snapshot each encoded canvas as an ImageBitmap, keeping null slots in place. */
   transferOffscreens(canvases: (OffscreenCanvas | null)[]): ImageBitmap[] {
-    return canvases.map((canvas) => canvas ? canvas.transferToImageBitmap() : null as never);
+    return canvases.map((canvas) => canvas ? this.transferOffscreen(canvas) : null as never);
   }
 
   /**
@@ -627,18 +680,15 @@ export class GPUColormapEngine {
 
     const encoder = this.device.createCommandEncoder();
     const canvases: (OffscreenCanvas | null)[] = [];
-    const tempBuffers: GPUBuffer[] = [];
     for (let k = 0; k < indices.length; k++) {
       const slot = this.slots[indices[k]];
       if (!slot || slot.directOnly || slot.rgbaCapacity < slot.count) { canvases.push(null as never); continue; }
       const range = ranges[k] || { vmin: 0, vmax: 1 };
       this.encodeColormapPass(encoder, slot, range.vmin, range.vmax, logScale, lutBuffer);
-      const blit = this.encodeBlitToOffscreen(encoder, slot.rgbaBuffer, slot.width, slot.height, format)!;
-      tempBuffers.push(blit.blitParamsBuffer);
-      canvases.push(blit.canvas);
+      const blit = this.encodeBlitToOffscreen(encoder, slot.rgbaBuffer, slot.width, slot.height, format);
+      canvases.push(blit ? blit.canvas : null as never);
     }
     this.device.queue.submit([encoder.finish()]);
-    for (const buffer of tempBuffers) buffer.destroy();
     return canvases;
   }
 
@@ -690,6 +740,8 @@ export class GPUColormapEngine {
     for (const buffer of this.namedLutBuffers.values()) buffer.destroy();
     this.namedLutBuffers.clear();
     this.currentLutName = "";
+    for (const free of this.offscreenPool.values()) for (const { context } of free) context.unconfigure();
+    this.offscreenPool.clear();
     this.ranges.destroy();
     this.volume.destroy();
   }
