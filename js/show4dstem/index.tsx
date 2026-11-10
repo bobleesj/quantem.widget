@@ -5906,8 +5906,13 @@ function Show4DSTEM() {
       }
     }
 
-    // Pre-pad non-power-of-2 full images so fft2d doesn't truncate frequency data
+    // Window the full image at its native size, as the ROI crop is, then pre-pad non-power-of-2 images so fft2d
+    // doesn't truncate frequency data. The window works on a copy: the raw virtual image is shared.
     if (!roiFftActive) {
+      if (fftWindow) {
+        sourceData = sourceData.slice();
+        applyHannWindow2D(sourceData, width, height);
+      }
       const padW = nextPow2(width);
       const padH = nextPow2(height);
       if (padW !== width || padH !== height) {

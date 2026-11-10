@@ -108,7 +108,7 @@ import { type RichTitleSpan, renderRichTitle, richTitlePlainText } from "../shar
 import { type PanelAnnotationSpec, type PanelOverlaySpec, type OverlaySelection, type OverlayDragState, panelAnnotationSx, drawROI, drawPanelOverlays, panelOverlayHit, updateOverlayFromDrag, drawPanelOverlaySelection, normalizeHiddenPageSlots, clonePanelOverlays, renderPanelAnnotation, sameNumberArray, useHiddenPageSlots } from "../shared/panelOverlays";
 import { Histogram } from "../shared/Histogram";
 import { applyDisplayFilterBrowser, browserFilterSupported, filterKnobsActive } from "../display/filter";
-import { COLORMAPS, COLORMAP_NAMES, applyColormap, renderToOffscreen, renderToOffscreenReuse, createGPUColormapEngine, GPUColormapEngine } from "../display/colormaps";
+import { COLORMAPS, COLORMAP_NAMES, applyColormap, displayNormalize, renderToOffscreen, renderToOffscreenReuse, createGPUColormapEngine, GPUColormapEngine } from "../display/colormaps";
 import { histogramBins } from "../display/cpuColormap";
 import { getGPUInfo } from "../display/device";
 import { DisplayFFT, getDisplayFFT, fftshift, computeMagnitude, autoEnhanceFFT, nextPow2, applyHannWindow2D, fftClickReadout } from "../display/fft";
@@ -6411,7 +6411,9 @@ function Show3D() {
     const regionCtx = regionCanvas.getContext("2d");
     if (!regionCtx) return;
     const imgData = regionCtx.createImageData(regionSize, regionSize);
-    const range = vmax - vmin || 1;
+    // The float32 normalize and truncating LUT index of the display shader, so the lens shows the image's colors.
+    const low = Math.fround(vmin);
+    const high = Math.fround(vmax);
     for (let rowOffset = 0; rowOffset < regionSize; rowOffset++) {
       for (let colOffset = 0; colOffset < regionSize; colOffset++) {
         const sourceRow = rowStart + rowOffset;
@@ -6421,8 +6423,7 @@ function Show3D() {
           imgData.data[idx] = 0; imgData.data[idx + 1] = 0; imgData.data[idx + 2] = 0; imgData.data[idx + 3] = 255;
         } else {
           const val = processed[sourceRow * width + sourceCol];
-          const normalized = Math.max(0, Math.min(1, (val - vmin) / range));
-          const lutIndex = Math.round(normalized * 255);
+          const lutIndex = Math.min(255, Math.trunc(Math.fround(displayNormalize(val, low, high) * 255)));
           imgData.data[idx] = lut[lutIndex * 3]; imgData.data[idx + 1] = lut[lutIndex * 3 + 1]; imgData.data[idx + 2] = lut[lutIndex * 3 + 2]; imgData.data[idx + 3] = 255;
         }
       }
