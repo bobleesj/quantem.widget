@@ -459,6 +459,10 @@ function trackSliderPress(
   event.preventDefault();
   event.stopPropagation();
   event.nativeEvent.stopImmediatePropagation();
+  // preventDefault also stops MUI focusing a thumb; focus the value thumb (the middle one of a
+  // start / value / end slider) so Left / Right keep stepping it after a track press.
+  const inputs = event.currentTarget.querySelectorAll<HTMLInputElement>(".MuiSlider-thumb input");
+  inputs[inputs.length === 3 ? 1 : 0]?.focus({ preventScroll: true });
   apply(valueFromClientX(event.clientX), false);
   const onMove = (moveEvent: PointerEvent) => {
     moveEvent.preventDefault();

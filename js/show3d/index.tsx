@@ -9862,6 +9862,9 @@ function Show3D() {
     sliderGestureCleanupRef.current = cleanup;
     const endGesture = (event: Event) => {
       if (event instanceof PointerEvent && event.pointerId !== e.pointerId) return;
+      // A capture listener on window also sees element blurs (focus moving between thumbs); only
+      // the window itself losing focus ends the gesture.
+      if (event.type === "blur" && event.target !== window) return;
       // The listeners and the playback hold go first, so a failing commit cannot leave the gesture open.
       cleanup();
       finish(event);
@@ -9913,6 +9916,10 @@ function Show3D() {
     e.preventDefault();
     e.stopPropagation();
     e.nativeEvent.stopImmediatePropagation();
+    // preventDefault also stops MUI focusing a thumb, which left focus on the page (arrows did
+    // nothing) or on the loop-start thumb (arrows moved the loop start). Focus the frame thumb so
+    // Left / Right step the frame after a click or drag.
+    (e.currentTarget.querySelector(".MuiSlider-thumb[data-index='1'] input") as HTMLInputElement | null)?.focus({ preventScroll: true });
     paintCurrent();
     const onMove = (ev: PointerEvent) => {
       if (ev.pointerId !== e.pointerId) return;
