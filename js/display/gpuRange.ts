@@ -428,7 +428,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     this.ensureColormapRangePipeline();
     if (!this.colormapRangePipeline || !this.engine.lutBuffer) return null;
     const slot = this.engine.slots[slotIdx];
-    if (!slot || regions.length === 0) return null;
+    if (!slot || slot.dataKind === "rgb" || regions.length === 0) return null;
     const format = navigator.gpu.getPreferredCanvasFormat();
     this.engine.ensureBlitPipeline(format);
     if (!this.engine.blitPipeline) return null;
