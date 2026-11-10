@@ -543,8 +543,9 @@ for example `"500 pm"` instead of an automatically formatted label.
 
 ### Export to Illustrator
 
+For Illustrator, use the Export menu's `SVG` item; from Python, write the standalone page:
+
 ```python
-svg_path = w.export_svg("figure2_show2d.svg")
 html_path = w.export_html("figure2_show2d.html", encoding="uint8")
 ```
 

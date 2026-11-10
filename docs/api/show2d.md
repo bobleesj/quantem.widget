@@ -239,8 +239,7 @@ In live Jupyter, the Export menu can request exact or uint8 standalone HTML
 through the Python backend. In standalone HTML, the Export button downloads the
 current embedded page using the representation already present in that file.
 
-For Illustrator or Inkscape, use the Export menu's `SVG` item or call
-`w.export_svg(...)`. Show2D writes a hybrid publication SVG: measured image
+For Illustrator or Inkscape, use the Export menu's `SVG` item. Show2D writes a hybrid publication SVG: measured image
 panels remain embedded rasters, while panel titles, annotations, geometric
 overlays, inset plots, scale bars, colorbars, and group markers are editable
 SVG objects that match the current figure state.

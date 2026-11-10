@@ -327,28 +327,6 @@ def test_export_html_embeds_the_model_state(tmp_path: Path):
         Show2D(np.zeros((8, 2048, 2048), dtype=np.float32), display_bin=1, verbose=False).export_html(tmp_path / "big.html")
 
 
-def test_export_svg_writes_vector_chrome_around_png_panels(tmp_path: Path):
-    widget = Show2D(
-        [_frame(1), _frame(2)],
-        labels=["raw", "denoised"],
-        sampling=0.23,
-        units="A",
-        title="figure",
-        marker_colors=["#ff0000", "#00ff00"],
-        panel_annotations={"denoised": {"text": "A", "position": "top-left"}},
-        panel_overlays={"raw": {"shape": "circle", "center": (32, 32), "radius": 8}},
-        verbose=False,
-    )
-    path = widget.export_svg(tmp_path / "figure.svg", include_colorbar=True)
-    svg = path.read_text()
-    assert svg.startswith('<?xml version="1.0"') and svg.count('<image ') == 2
-    assert svg.count("<g id=\"show2d-panel-") == 2 and ">figure</text>" in svg
-    assert ">raw</text>" in svg and ">A</text>" in svg and "<circle " in svg
-    assert svg.count("<linearGradient") == 2 and 'fill="#ff0000"' in svg
-    assert ">2 Å</text>" in svg  # 60 css px on a 300 px gallery panel of 64 px -> 2.9 A -> nice 2 A
-    assert Image.open(widget.save_image(tmp_path / "raw.png", show_scale_bar=True, colorbar=True, title=True)).size[0] > 64
-
-
 def test_save_image_scale_bar_labels_the_pixel_unit(tmp_path: Path, monkeypatch):
     drawn: list[str] = []
     draw_text = matplotlib.axes.Axes.text
@@ -601,7 +579,7 @@ def test_labels_of_the_wrong_length_raise():
 
 
 def test_col_markers_are_normalized_like_row_markers():
-    # A-15: col_markers was a bare trait, so {'x': None} reached int('x') in export_svg.
+    # A-15: col_markers was a bare trait, so {'x': None} reached int('x').
     widget = Show2D([_frame(1), _frame(2)], col_markers={1: "#ff0000"}, verbose=False)
     assert widget.col_markers == {"1": "#ff0000"}
     assert Show2D([_frame(1), _frame(2)], col_markers={"x": None}, verbose=False).col_markers == {}
@@ -662,9 +640,8 @@ def test_save_image_uses_the_panel_colormap_window_and_native_pixel_size(tmp_pat
     assert drawn == ["2 nm"]  # 20% of 64 native px x 0.2 nm = 2.56 nm -> 2 nm; the binned 0.4 nm drew "5 nm"
 
 
-def test_preview_and_svg_show_the_window_around_center(tmp_path: Path):
-    # A-7: the preview cropped the image center whatever center= or the synced view said, and the SVG
-    # stretched the part of the window inside the image over the whole panel.
+def test_preview_shows_the_window_around_center():
+    # A-7: the preview cropped the image center whatever center= or the synced view said.
     frame = np.zeros((256, 256), dtype=np.float32)
     frame[96:160, 216:256] = 1.0  # bright block around center (128, 250)
     widget = Show2D(frame, cmap="gray", zoom=4, center=(128, 250), verbose=False)
@@ -672,10 +649,6 @@ def test_preview_and_svg_show_the_window_around_center(tmp_path: Path):
     png = _decode_png(widget).max(axis=-1)
     middle = png[png.shape[0] // 2]
     assert middle[len(middle) // 3] > 200 and middle[int(len(middle) * 0.85)] < 30  # block, then past the edge
-    svg = widget.export_svg(tmp_path / "window.svg").read_text()
-    embedded = re.search(r'base64,([^"]+)"', svg).group(1)
-    panel = np.asarray(Image.open(io.BytesIO(base64.b64decode(embedded))).convert("L"))
-    assert panel[panel.shape[0] // 2, panel.shape[1] // 3] > 200 and panel[panel.shape[0] // 2, int(panel.shape[1] * 0.85)] < 30
     widget = Show2D(frame, verbose=False)
     widget.view_box = [0.0, 128.0, 0.0, 128.0]  # the browser zoomed into the top-left quadrant
     (_, _, bar_text, bar_px), = widget._static_overlay_texts()
@@ -683,8 +656,7 @@ def test_preview_and_svg_show_the_window_around_center(tmp_path: Path):
 
 
 def test_static_paths_flip_like_the_browser_and_draw_inset_curves(tmp_path: Path):
-    # A-11: flips were applied only in the browser; A-8: the SVG inset curve had stroke="" without
-    # marker colors; A-9: the preview inset margin defaulted to 0.035 CSS px instead of 12.
+    # A-11: flips were applied only in the browser; A-9: the preview inset margin defaulted to 0.035 CSS px instead of 12.
     frame = _frame(0, (16, 24))
     widget = Show2D(frame, cmap="gray", inset_plots=[{"x": [0, 1], "y": [0, 1], "position": "top-left"}], verbose=False)
     widget.image_flips_horizontal = [True]
@@ -692,7 +664,6 @@ def test_static_paths_flip_like_the_browser_and_draw_inset_curves(tmp_path: Path
     (vmin, vmax), = widget._resolve_panel_display_ranges([frame])
     np.testing.assert_array_equal(saved, widget._static_panel_rgb(frame[:, ::-1], vmin, vmax, "gray"))
     np.testing.assert_array_equal(widget._static_panel_specs()[0]["frame"], frame[:, ::-1])
-    assert 'stroke=""' not in widget.export_svg(tmp_path / "inset.svg").read_text()
     figure = matplotlib.figure.Figure()
     axes = figure.add_subplot()
     widget._draw_static_inset_plot(axes, widget.inset_plots[0], panel_index=0, line_color="#ffffff")
@@ -783,9 +754,9 @@ def test_a_page_dict_carries_its_panels_under_images():
         Show2D([{"label": "iteration 10", "images": [_frame(1), _frame(2)]}], verbose=False)
 
 
-def test_overlay_keys_have_one_spelling(tmp_path: Path):
+def test_overlay_keys_have_one_spelling():
     # an overlay took up to seven spellings per value (stroke, stroke_color, border_color or color; xyxy, xywh, region,
-    # row0..col1 or box; ...) and nine line styles for four; the kept keys reach the state and the SVG export
+    # row0..col1 or box; ...) and nine line styles for four; the kept keys reach the state
     circle = {"shape": "circle", "center": (20, 30), "radius": 5, "color": "#123456", "line_width": 3, "line_dash": [6, 2]}
     rect = {"shape": "rect", "box": (40, 50, 10, 12), "fill_color": "#abcdef", "opacity": 0.5, "line_style": "dotted", "z_order": 1}
     widget = Show2D(_frame(0), display_bin=2, panel_overlays=[circle, rect], verbose=False)
@@ -793,8 +764,6 @@ def test_overlay_keys_have_one_spelling(tmp_path: Path):
     assert widget.panel_overlays[0][0]["center"] == [10.0, 15.0] and widget.panel_overlays[0][1]["box"] == [5.0, 6.0, 20.0, 25.0]
     native_circle, native_rect = widget.state_dict()["panel_overlays"][0]
     assert (native_circle["center"], native_circle["radius"], native_rect["box"]) == ([20.0, 30.0], 5.0, [10.0, 12.0, 40.0, 50.0])
-    svg = widget.export_svg(tmp_path / "overlays.svg").read_text()
-    assert 'stroke="#123456" stroke-width="3"' in svg and 'stroke-dasharray="6 2"' in svg and 'fill="#abcdef"' in svg
     removed = {"type": "rect", "kind": "rect", "coordinate_system": "data", "row": 1, "col": 1, "y": 1, "x": 1, "r": 2,
                "size": 4, "region": (0, 0, 4, 4), "xyxy": (0, 0, 4, 4), "xywh": (0, 0, 4, 4), "row0": 0, "col0": 0, "row1": 4,
                "col1": 4, "stroke": "red", "stroke_color": "red", "border_color": "red", "fill": "red", "stroke_width": 2,
@@ -813,14 +782,12 @@ def test_overlay_keys_have_one_spelling(tmp_path: Path):
         Show2D(_frame(0), panel_overlays={"row": 8, "col": 8, "r": 2}, verbose=False)
 
 
-def test_annotation_keys_have_one_spelling(tmp_path: Path):
+def test_annotation_keys_have_one_spelling():
     # annotation text came from text, label or title, the text color from fg or color, class from class or class_name,
     # the region from box or region
     widget = Show2D(_frame(0), panel_annotations={"text": "A", "color": "#ff4dff", "box": (0.1, 0.2, 0.3, 0.1), "class_name": "tag"}, verbose=False)
     (annotation,) = widget.panel_annotations[0]
     assert (annotation["text"], annotation["color"], annotation["class_name"], annotation["box"]) == ("A", "#ff4dff", "tag", [0.1, 0.2, 0.3, 0.1])
-    svg = widget.export_svg(tmp_path / "annotations.svg").read_text()
-    assert 'fill="#ff4dff">A</text>' in svg
     for key, value in {"label": "A", "title": "A", "fg": "#fff", "class": "tag", "region": (0.1, 0.2, 0.3, 0.1)}.items():
         with pytest.raises(ValueError, match=f"panel_annotations entries only accept keys .*, got '{key}'"):
             Show2D(_frame(0), panel_annotations={"text": "A", key: value}, verbose=False)

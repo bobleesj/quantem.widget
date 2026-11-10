@@ -1,5 +1,5 @@
-"""Static PNG fallback for Show2D: the saved-notebook preview and the panel
-plan that export_svg shares with it.
+"""Static PNG fallback for Show2D: the saved-notebook preview and its panel
+plan.
 
 ``_static_png_b64`` mirrors the live widget panel for panel (same colormap,
 contrast window, zoom crop, overlays, scale bar) so a notebook reopened
