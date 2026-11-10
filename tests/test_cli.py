@@ -595,7 +595,7 @@ def test_render_show4dstem_webgpu_h5_uses_anonymous_h5_urls(
     monkeypatch.setattr("quantem.widget.show4dstem.widget.master_contract", fake_contract)
     monkeypatch.setattr("quantem.widget.show4dstem.export.write_webgpu_bundle", fake_export)
     monkeypatch.setattr(qw, "Show4DSTEM", FakeShow4DSTEM)
-    args = SimpleNamespace(detector_bin=1, dtype="uint8", out=str(tmp_path / "out"), title=None, verbose=False)
+    args = SimpleNamespace(detector_bin=1, dtype="uint8", save_dir=str(tmp_path / "out"), title=None, verbose=False)
 
     html = cli._render_4dstem_webgpu_h5(masters, "private_folder", args)
 
@@ -644,7 +644,7 @@ def test_show4dstem_dataset_label_uses_coordinates_when_available():
 
 def test_render_show4dstem_notebook_reads_every_selected_master(tmp_path):
     """C7: a generated notebook opens exactly the seven selected masters."""
-    args = SimpleNamespace(backend="auto", detector_bin=1, out=str(tmp_path))
+    args = SimpleNamespace(backend="auto", detector_bin=1, save_dir=str(tmp_path))
     masters = [str(tmp_path / f"tilt_{idx:02d}_master.h5") for idx in range(7)]
 
     notebook = cli._render_4dstem_notebook(masters, "seven", args)
