@@ -11,6 +11,7 @@ preview.
 import math
 import pathlib
 from collections.abc import Mapping, Sequence
+from typing import Literal
 
 import anywidget
 import numpy as np
@@ -147,9 +148,11 @@ class Show3D(
         One label per page for 5D input.
     title : str
         Title above the canvas; a ``Dataset3d`` name is used when empty.
-    mode : {"interactive", "presentation", "report", "minimal"}
-        Chrome preset. ``show_title``, ``show_stats`` and ``show_scale_bar``
-        override the preset when given.
+    mode : {"interactive", "stream", "presentation", "report", "minimal"}
+        Chrome preset. ``"stream"`` is the interactive layout with the frame
+        thumbnail strip, for watching a recording (``Show3D.stream`` opens in
+        it). ``show_title``, ``show_stats``, ``show_scale_bar`` and
+        ``thumbnails`` override the preset when given.
     cmap : str or Colormap
         Colormap for every panel.
     vmin, vmax : float, optional
@@ -177,6 +180,15 @@ class Show3D(
     avg_window : int
         Moving-window frame average shown during scrubbing; 1 shows raw frames.
         Auto contrast keeps the stack-wide window, so averaging only reduces noise.
+    thumbnails : bool, optional
+        Show a scrollable strip of frame thumbnails left of the viewer; on with
+        ``mode="stream"``, off otherwise unless given. Hovering a
+        thumbnail shows that frame; clicking it moves the frame slider there. The
+        thumbnails are drawn on the GPU from the frames already resident for the
+        viewer (no second full-size copy), each panel stretched to its own range;
+        the viewer and the data keep native pixels.
+    thumbnail_columns : {1, 2, 3}, default 2
+        Thumbnails across the strip; the strip header switches it too.
     show_fft : bool
         Show the FFT of the current frame.
     fft_layout : {"bottom", "right", "overlay"}
@@ -371,6 +383,18 @@ class Show3D(
     compare_background = traitlets.Enum(["light", "dark"], default_value="dark").tag(sync=True)
     panel_annotations = traitlets.List(traitlets.List(traitlets.Dict()), default_value=[]).tag(sync=True)
     panel_overlays = traitlets.List(traitlets.List(traitlets.Dict()), default_value=[]).tag(sync=True)
+
+    # Frame thumbnails in a scrollable strip left of the viewer: hover shows a frame, click goes to it.
+    thumbnails = traitlets.Bool(False).tag(sync=True)
+    thumbnail_columns = traitlets.Int(2).tag(sync=True)
+
+    @traitlets.validate("thumbnail_columns")
+    def _validate_thumbnail_columns(self, proposal: dict) -> int:
+        """Thumbnails across the strip: 1, 2 or 3."""
+        value = proposal["value"]
+        if isinstance(value, bool) or int(value) != value or int(value) not in (1, 2, 3):
+            raise traitlets.TraitError(f"thumbnail_columns must be 1, 2 or 3, got {value!r}; use thumbnail_columns=2")
+        return int(value)
 
     show_fft = traitlets.Bool(False).tag(sync=True)
     fft_layout = traitlets.Enum(["bottom", "right", "overlay"], default_value="bottom").tag(sync=True)
@@ -635,7 +659,7 @@ class Show3D(
         panel_titles: Sequence[str | Sequence[Mapping[str, object]] | Mapping[str, object] | None] | None = None,
         page_labels: Sequence[str | None] | None = None,
         title: str = "",
-        mode: DisplayMode = "interactive",
+        mode: DisplayMode | Literal["stream"] = "interactive",
         show_title: bool | None = None,
         show_stats: bool | None = None,
         show_scale_bar: bool | None = None,
@@ -651,6 +675,8 @@ class Show3D(
         panel_overlays: Sequence[object] | Mapping[object, object] | object | None = None,
         fps: float = 30.0,
         avg_window: int = 1,
+        thumbnails: bool | None = None,
+        thumbnail_columns: int = 2,
         show_fft: bool = False,
         fft_layout: str = "bottom",
         fft_overlay_zoom: float = 1.0,
@@ -668,8 +694,13 @@ class Show3D(
         verbose: bool = True,
     ):
         """Validate the display options, open the widget model, then load the stacks in one batched sync."""
+        # "stream" is Show3D's own preset: the interactive chrome plus the thumbnail strip
+        stream_mode = str(mode or "").strip().lower() == "stream"
+        presets = ("interactive", "stream", "presentation", "report", "minimal")
+        if str(mode or "interactive").strip().lower() not in presets:
+            raise ValueError(f"mode must be one of {', '.join(map(repr, presets))}, got {mode!r}")
         ui = resolve_mode(
-            mode,
+            "interactive" if stream_mode else mode,
             defaults={
                 "show_title": True,
                 "show_controls": True,
@@ -744,6 +775,8 @@ class Show3D(
             self.auto_contrast = bool(auto_contrast)
             self.fps = float(fps)
             self.avg_window = int(avg_window)
+            self.thumbnails = stream_mode if thumbnails is None else bool(thumbnails)
+            self.thumbnail_columns = thumbnail_columns
             self.show_fft = bool(show_fft)
             self.fft_layout = fft_layout
             self.fft_overlay_zoom = fft_overlay_zoom
@@ -1091,7 +1124,7 @@ class Show3D(
         "percentile_high", "percentile_low", "image_vmin_pct", "image_vmax_pct", "contrast_preset",
         "vmin", "vmax", "link_contrast", "link_panels", "view_state", "vmin_per_panel", "vmax_per_panel",
         "show_title", "show_stats", "show_controls", "controls_collapsed", "columns",
-        "panel_gap_px", "show_panel_titles", "show_zoom_indicator", "show_fft", "fft_layout",
+        "panel_gap_px", "show_panel_titles", "show_zoom_indicator", "thumbnails", "thumbnail_columns", "show_fft", "fft_layout",
         "fft_overlay_position", "fft_overlay_size", "fft_overlay_zoom", "show_kymograph", "fft_window",
         "pixel_size", "pixel_unit", "smooth", "image_rotation", "rotation_scope", "frame_rotations",
         "flip_horizontal", "flip_vertical", "show_scale_bar", "panel_width_px", "fps", "avg_window", "loop",

@@ -1106,11 +1106,6 @@ class Show2D(
                 # no silent reduction: name the quantization and the way back to float32
                 print(f"Show2D packs {self.n_images} panel(s) as uint8 over each panel's own range (256 levels); "
                       "offline=False keeps float32.")
-            # Standalone HTML export packs panels through the grayscale stack
-            # machinery, which cannot carry (H, W, 3) pixels: hide the export menu
-            # and reject programmatic export instead of corrupting RGB panels.
-            if any(self.is_rgb):
-                self.export_enabled = False
             # Scalar OR list for vmin/vmax. List -> per-image (vmins/vmaxs).
             if isinstance(vmin, (list, tuple)) or isinstance(vmax, (list, tuple)):
                 n_images = self.n_images

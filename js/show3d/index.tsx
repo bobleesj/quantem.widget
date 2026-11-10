@@ -55,6 +55,8 @@ import { MetadataSection } from "../widgetInfo";
 import { applyFrequencyFilterBrowser, frequencyFilterActive, getFrequencyFilterBackend, normalizeFrequencyFilterMode } from "../display/frequencyFilter";
 import { encodeIndexedGif, quantizeRgbaForBrowserGif } from "./gif";
 import { missingDisplayStackStatus } from "./displayStack";
+import { ThumbnailStrip } from "./ThumbnailStrip";
+import { ThumbnailRenderer } from "../display/thumbnails";
 import {
   MAX_PLAYBACK_FPS,
   MAX_EXPORT_FPS,
@@ -198,6 +200,8 @@ const SHOW3D_STANDALONE_VIEW_STATE_KEYS = [
   "roi_list",
   "roi_selected_idx",
   "rotation_scope",
+  "thumbnail_columns",
+  "thumbnails",
   "show_scale_bar",
   "selected_panels",
   "show_controls",
@@ -1374,6 +1378,8 @@ function Show3D() {
   const [panelGapPxState] = useModelState<number>("panel_gap_px");
   const [linkContrast, setLinkContrast] = useModelState<boolean>("link_contrast");
   const [cmap, setCmap] = useModelState<string>("cmap");
+  const [thumbnails, setThumbnails] = useModelState<boolean>("thumbnails");
+  const [thumbnailColumns, setThumbnailColumns] = useModelState<number>("thumbnail_columns");
   // The model-backed setter can emit its React update after another synced
   // trait in the same control event. Direct WebGPU repaint paths must use the
   // palette selected by this event, not the palette from the previous render.
@@ -2854,12 +2860,21 @@ function Show3D() {
   const gpuDisplayVisibleRef = React.useRef<boolean | null>(false);
   const [gpuDisplayVisible, setGpuDisplayVisibleState] = React.useState(false);
   const [gpuResidency, setGpuResidency] = React.useState<{
-    // missing: the display stack never arrived; rgb: true color draws on the canvas by design.
-    // Neither is a WebGPU fault, so only "fallback" says WebGPU is unavailable.
-    stage: "waiting" | "uploading" | "ready" | "fallback" | "missing" | "rgb";
+    // missing: the display stack never arrived, which is not a WebGPU fault, so only "fallback"
+    // says WebGPU is unavailable. True color is resident on WebGPU like grayscale.
+    stage: "waiting" | "uploading" | "ready" | "fallback" | "missing";
     ready: number;
     error: string;
   }>({ stage: "waiting", ready: 0, error: "" });
+  // Which path drew the last true-color frame, so the title badge names the renderer of the
+  // pixels on screen rather than only whether the browser has an adapter.
+  const [rgbDrawPath, setRgbDrawPath] = React.useState<"WebGPU" | "CPU" | null>(null);
+  const rgbDrawPathRef = React.useRef<"WebGPU" | "CPU" | null>(null);
+  const noteRgbDrawPath = React.useCallback((path: "WebGPU" | "CPU") => {
+    if (rgbDrawPathRef.current === path) return;
+    rgbDrawPathRef.current = path;
+    setRgbDrawPath(path);
+  }, []);
   const ensureFftGpu = React.useCallback(async (): Promise<DisplayFFT> => {
     if (gpuFFTRef.current) return gpuFFTRef.current;
     if (!gpuFftInitPromiseRef.current) {
@@ -4545,6 +4560,67 @@ function Show3D() {
     return true;
   };
 
+  /**
+   * True-color twin of the packed-panel path: draw resident RGB slot `slotIdx` straight into the
+   * WebGPU canvas, every visible panel through its own viewport, channels as stored (no colormap).
+   * Declines the views the grayscale direct paths decline, so both draw the same pixels as the
+   * Canvas2D reference: rotation and flips, a zoomed or panned single panel (drawMain owns that
+   * view), and a default view enlarged by a non-integer factor (nearest-sample ties at texel edges).
+   */
+  const renderGpuRgbSliceDirect = (normalized: number, updateDisplayState: boolean, slotIdx: number): boolean => {
+    if (!isRgb || flipRows || flipCols) return false;
+    const engine = gpuCmapRef.current;
+    if (!engine || !gpuCmapReadyRef.current) return false;
+    const settings = playRef.current;
+    if (settings.imageRotation % 4 !== 0 || settings.width <= 0 || settings.height <= 0 || settings.canvasW <= 0 || settings.canvasH <= 0) return false;
+    const panelSourceCount = Math.max(1, nPanels || 1);
+    const panels = panelSourceCount === 1
+      ? [0]
+      : (settings.visiblePanelIndices.length ? settings.visiblePanelIndices : visiblePanelIndices)
+        .filter((panel) => Number.isFinite(panel) && panel >= 0 && panel < panelSourceCount);
+    if (panels.length === 0) return false;
+    const sourcePanelWidth = sharedPanelSource || panelSourceCount === 1
+      ? Math.max(1, numPanelCols || settings.width)
+      : Math.max(1, numPanelCols || Math.round(settings.width / panelSourceCount));
+    if (sourcePanelWidth > settings.width) return false;
+    const transforms = panelSourceCount === 1
+      ? [{ zoom: settings.zoom, panX: settings.panX, panY: settings.panY }]
+      : directPanelTransforms(panels, settings);
+    const defaultView = transforms.every((t) => t.zoom === 1 && t.panX === 0 && t.panY === 0);
+    if (panelSourceCount === 1 && !defaultView) return false;
+    const panelCount = panels.length;
+    const cols = Math.max(1, Math.min(panelCount, Math.round(settings.panelCols || 1)));
+    const rows = Math.ceil(panelCount / cols);
+    const gap = panelCount > 1 ? panelGapPx : 0;
+    const slotW = (settings.canvasW - gap * (cols - 1)) / cols;
+    const slotH = (settings.canvasH - gap * (rows - 1)) / rows;
+    const enlarged = slotW > sourcePanelWidth || slotH > settings.height;
+    const integerFactor = Number.isInteger(slotW / sourcePanelWidth) && Number.isInteger(slotH / settings.height);
+    if (defaultView && enlarged && (!integerFactor || (panelSourceCount === 1 && settings.smooth))) return false;
+    const gpuCtx = ensureGpuDisplayContext(engine, settings.canvasW, settings.canvasH);
+    if (!gpuCtx) return false;
+    const opts = {
+      width: settings.canvasW,
+      height: settings.canvasH,
+      panelCount,
+      cols,
+      rows,
+      gap,
+      bgRgb: packedRgbFromHex(interPanelGapColor),
+      sourcePanelWidth,
+      transforms,
+      sourcePanelIndices: sharedPanelSource ? panels.map(() => 0) : panels,
+      smooth: settings.smooth,
+    };
+    if (!engine.renderRgbPanelRegionsDirectToCanvas(slotIdx, gpuCtx, opts)) return false;
+    setGpuDisplayVisible(true);
+    noteRgbDrawPath("WebGPU");
+    if (!playing) retainGpuDisplayFrame(engine.renderRgbPanelRegionsToImageBitmapAsync(slotIdx, opts));
+    playbackIdxRef.current = normalized;
+    if (updateDisplayState) setDisplaySliceIdx(normalized);
+    return true;
+  };
+
   const renderGpuCachedSliceDirect = (
     idx: number,
     updateDisplayState = true,
@@ -4554,6 +4630,7 @@ function Show3D() {
     if (residentSlotIdx === null && !gpuFrameCacheUploadedRef.current.has(normalized)) return false;
     if (gpuSlotMissesTheView(residentSlotIdx)) return false;
     const renderSlotIdx = residentSlotIdx ?? normalized;
+    if (isRgb) return renderGpuRgbSliceDirect(normalized, updateDisplayState, renderSlotIdx);
     if (
       Math.max(1, nPanels || 1) > 1 &&
       renderGpuPackedPanelTransformSlice(normalized, updateDisplayState, residentSlotIdx)
@@ -4693,7 +4770,7 @@ function Show3D() {
     const settings = playRef.current;
     const win = normalizedAverageWindow(settings.avgWindow);
     if (
-      isRgb || win <= 1 || settings.diffMode !== "off" ||
+      win <= 1 || settings.diffMode !== "off" ||
       browserFilterOnRef.current || frequencyFilterIsActive || subpixelAlignEnabled ||
       settings.imageRotation % 4 !== 0
     ) return false;
@@ -4722,10 +4799,6 @@ function Show3D() {
       setGpuResidency(nSlices > 0
         ? { stage: "missing", ready: 0, error: missingDisplayStackStatus(frameCount * frameSize * 4, Math.max(1, displayBin || 1)) }
         : { stage: "waiting", ready: 0, error: "" });
-      return;
-    }
-    if (isRgb) {
-      setGpuResidency({ stage: "rgb", ready: 0, error: "" });
       return;
     }
     if (!gpuCmapChecked) {
@@ -4759,7 +4832,8 @@ function Show3D() {
           if (!frame || frame.length < frameSize) {
             throw new Error(`display frame ${idx + 1} is unavailable`);
           }
-          engine.uploadData(idx, frame, width, height, 1, true);
+          if (isRgb) engine.uploadRgbData(idx, frame.length === frameSize ? frame : frame.subarray(0, frameSize), width, height);
+          else engine.uploadData(idx, frame, width, height, 1, true);
           uploaded.add(idx);
           setGpuResidency({ stage: "uploading", ready: uploaded.size, error: "" });
           if (position === 0) renderGpuCachedSliceDirect(current, false);
@@ -4991,16 +5065,16 @@ function Show3D() {
         sourceFrameDataRef.current = sourceFrame;
         displayFrameRef.current = frame;
       }
+      // Static paint is driven by liveSliceIdx. When WebGPU is ready we render
+      // frames directly in the rAF hot path and throttle React state updates
+      // below so large 2k/4k stacks do not double-paint. True color has no
+      // colormap pass below, so it is direct only when a resident slot drew.
+      const gpuDirectRender = gpuCachedFrameReady || gpuResidentTransformReady;
       const directRender = (
-        !isRgb &&
-        !!frame &&
+        (isRgb ? gpuDirectRender : !!frame) &&
         !!gpuCmapRef.current &&
         gpuCmapReadyRef.current
       );
-      // Static paint is driven by liveSliceIdx. When WebGPU is ready we render
-      // frames directly in the rAF hot path and throttle React state updates
-      // below so large 2k/4k stacks do not double-paint.
-      const gpuDirectRender = gpuCachedFrameReady || gpuResidentTransformReady;
       if (!directRender && !gpuDirectRender) setLiveSliceIdx(next);
       // Without a direct WebGPU paint, hand the frame to the React static paint pipeline (the one
       // slider drags use) and skip the rAF direct paint: the two paths paint over each other on
@@ -5584,14 +5658,21 @@ function Show3D() {
         console.warn("[Show3D] WebGPU transform refresh failed during static paint; using retained 2D canvas", err);
       }
     }
-    // True-color RGB: paint on the GPU (paintRgbFrame), applying the moving
-    // average across color frames when avg > 1 so an avg change re-denoises the
-    // static frame, not just live playback.
+    // True-color RGB: draw the resident WebGPU slot (or the GPU moving average when avg > 1, so an
+    // avg change re-denoises the static frame, not just playback). The native-size offscreen is
+    // still filled, since a zoomed single panel and the exports draw from it; it reaches the
+    // visible canvas only when the direct WebGPU draw declined the view.
     if (isRgb && rgbFrameDataRef.current && rgbFrameDataRef.current.length >= width * height * 3) {
-      const rgb = normalizedAverageWindow(avgWindow) > 1
+      const averaging = normalizedAverageWindow(avgWindow) > 1;
+      const rgb = averaging
         ? averagedRgbFrameForIndex(liveSliceIdx, rgbFrameDataRef.current)
         : rgbFrameDataRef.current;
-      paintRgbFrame(rgb);
+      const frameCount = Math.max(1, nSlices || 1);
+      const drawIdx = ((Math.round(liveSliceIdx) % frameCount) + frameCount) % frameCount;
+      const gpuDrew = imageRotation % 4 === 0 && (averaging
+        ? renderGpuTemporalAverageSliceDirect(drawIdx, false)
+        : gpuFrameCacheUploadedRef.current.has(drawIdx) && renderGpuCachedSliceDirect(drawIdx, false));
+      paintRgbFrame(rgb, !gpuDrew);
       return;
     }
     const gpuPlaybackOwnsCanvas = (
@@ -6031,24 +6112,34 @@ function Show3D() {
     return true;
   }, [width, height]);
 
-  const paintRgbFrame = (rgb: Float32Array): boolean => {
+  /**
+   * Fill the native-size offscreen with true-color frame `rgb` and, when `present`, draw it to the
+   * visible canvas. The channels pack on WebGPU (renderRgbToImageBitmap); the JavaScript loop below
+   * runs only when the page has no WebGPU engine or the frame exceeds its storage-buffer limit, and
+   * the title badge then says CPU.
+   */
+  const paintRgbFrame = (rgb: Float32Array, present = true): boolean => {
     if (!ensureFullSizeMainOffscreen() || !mainOffscreenRef.current) return false;
-    // WebGPU passthrough: pack the RGB channels on the GPU and blit, keeping the
-    // per-pixel loop off the UI thread. Falls back to the CPU loop when the
-    // engine is unavailable or the frame exceeds the storage-buffer limit.
     const engine = gpuCmapRef.current;
     if (engine && gpuCmapReadyRef.current) {
       const bitmap = engine.renderRgbToImageBitmap(rgb, width, height);
       if (bitmap) {
         try {
           const octx = mainOffscreenRef.current.getContext("2d");
-          if (octx) octx.drawImage(bitmap, 0, 0);
+          if (octx) {
+            octx.clearRect(0, 0, width, height);
+            octx.drawImage(bitmap, 0, 0);
+          }
         } finally {
           bitmap.close();
         }
-        const canvas = canvasRef.current;
-        const ctx = canvas?.getContext("2d");
-        if (ctx) drawMain(ctx, mainOffscreenRef.current);
+        if (present) {
+          noteRgbDrawPath("WebGPU");
+          setGpuDisplayVisible(false);
+          const canvas = canvasRef.current;
+          const ctx = canvas?.getContext("2d");
+          if (ctx) drawMain(ctx, mainOffscreenRef.current);
+        }
         return true;
       }
     }
@@ -6062,6 +6153,9 @@ function Show3D() {
       px[4 * k + 3] = 255;
     }
     mainOffscreenRef.current.getContext("2d")!.putImageData(mainImgDataRef.current, 0, 0);
+    if (!present) return true;
+    noteRgbDrawPath("CPU");
+    setGpuDisplayVisible(false);
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
     if (ctx) drawMain(ctx, mainOffscreenRef.current);
@@ -9842,6 +9936,71 @@ function Show3D() {
     if (commitLater) scheduleScrubModelCommit(next);
   };
   const commitSlice = (idx: number) => setAllSliceIdx(clampSlice(idx));
+  // Thumbnail strip: drawn on the GPU from the resident frame slots, so it adds only thumbnail-sized buffers.
+  const thumbnailRendererRef = React.useRef<ThumbnailRenderer | null>(null);
+  React.useEffect(() => () => { thumbnailRendererRef.current?.destroy(); thumbnailRendererRef.current = null; }, []);
+  const thumbnailHoverOriginRef = React.useRef<number | null>(null);
+  // The strip is exactly as tall as the viewer as drawn (the canvas box can render shorter than canvasH).
+  const [viewerBoxHeight, setViewerBoxHeight] = React.useState(0);
+  React.useEffect(() => {
+    const box = canvasContainerRef.current;
+    if (!thumbnails || !box || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => setViewerBoxHeight(box.getBoundingClientRect().height));
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [thumbnails]);
+  const thumbnailDataVersionRef = React.useRef(0);
+  const thumbnailDataVersion = React.useMemo(() => ++thumbnailDataVersionRef.current, [offlineFloatStack, offlineStack]);
+  const drawThumbnail = React.useCallback((canvas: HTMLCanvasElement, frame: number): boolean => {
+    const engine = gpuCmapRef.current;
+    if (!engine || !gpuCmapReadyRef.current || isRgb || !gpuFrameCacheUploadedRef.current.has(frame)) return false;
+    if (!thumbnailRendererRef.current) thumbnailRendererRef.current = new ThumbnailRenderer(engine);
+    const context = canvas.getContext("webgpu") as GPUCanvasContext | null;
+    if (!context) return false;
+    // One square thumbnail per frame: the first shown panel (with several panels, the others follow it).
+    const panels = Math.max(1, nPanels || 1);
+    const panelSourceWidth = sharedPanelSource ? Math.max(1, numPanelCols || width) : Math.max(1, numPanelCols || Math.round(width / panels));
+    const firstPanel = sharedPanelSource ? 0 : Math.max(0, Math.min(panels - 1, visiblePanelIndices[0] ?? 0));
+    const liveCmap = cmapLiveRef.current || cmap || "inferno";
+    return thumbnailRendererRef.current.draw(context, frame, {
+      panels: 1,
+      panelSourceWidth,
+      panelOffset: firstPanel * panelSourceWidth,
+      sharedSource: !!sharedPanelSource,
+      thumbWidth: canvas.width,
+      thumbHeight: canvas.height,
+      gap: 0,
+      bgRgb: packedRgbFromHex(interPanelGapColor),
+      logScale: !!logScale,
+      lutName: liveCmap,
+      lut: COLORMAPS[liveCmap] || COLORMAPS.inferno,
+    });
+  }, [isRgb, nPanels, sharedPanelSource, numPanelCols, width, cmap, logScale, interPanelGapColor, visiblePanelIndices]);
+  const releaseThumbnail = React.useCallback((canvas: HTMLCanvasElement) => {
+    const context = canvas.getContext("webgpu") as GPUCanvasContext | null;
+    if (context) thumbnailRendererRef.current?.release(context);
+  }, []);
+  const thumbnailUnavailableReason = isRgb
+    ? "Thumbnails for color stacks are not drawn yet."
+    : gpuResidency.stage === "fallback" || gpuResidency.stage === "missing"
+      ? `Thumbnails need the WebGPU display${gpuResidency.error ? `: ${gpuResidency.error}` : "."}`
+      : null;
+  const handleThumbnailHover = (frame: number | null) => {
+    if (playing) return;
+    if (frame === null) {
+      const origin = thumbnailHoverOriginRef.current;
+      thumbnailHoverOriginRef.current = null;
+      if (origin !== null) scrubToSlice(origin, false);
+      return;
+    }
+    if (thumbnailHoverOriginRef.current === null) thumbnailHoverOriginRef.current = clampSlice(sliceIdx ?? 0);
+    scrubToSlice(frame, false);
+  };
+  const handleThumbnailSelect = (frame: number) => {
+    thumbnailHoverOriginRef.current = null;
+    scrubToSlice(frame, false);
+    commitSlice(frame);
+  };
   const handleLoopSliderPointerDownCapture = (e: React.PointerEvent<HTMLSpanElement>) => {
     if (e.button !== 0) return;
     sliderGestureCleanupRef.current?.();
@@ -9964,7 +10123,9 @@ function Show3D() {
         : "not run yet";
   const resolvedDisplayBin = Math.max(1, displayBin || 1);
   const displayStackBytes = offlineFloatStack?.byteLength || offlineStack?.byteLength || 0;
-  const displayPayloadLabel = offlineFloatStack?.byteLength
+  const displayPayloadLabel = isRgb
+    ? "true-color"
+    : offlineFloatStack?.byteLength
     ? "float32"
     : offlineStack?.byteLength
       ? "uint8 (decoded once for WebGPU)"
@@ -9978,9 +10139,7 @@ function Show3D() {
         ? `WebGPU unavailable · using CPU/canvas${gpuResidency.error ? `: ${gpuResidency.error}` : ""}`
         : gpuResidency.stage === "missing"
           ? gpuResidency.error
-          : gpuResidency.stage === "rgb"
-            ? `${displayBinLabel} true-color display · drawn on the CPU canvas`
-            : "Loading one display-resolution stack into the browser";
+          : "Loading one display-resolution stack into the browser";
   const sourceBytes = Math.max(1, nSlices) * (sharedPanelSource ? 1 : Math.max(1, nPanels)) * Math.max(1, sourceHeight || height) * Math.max(1, nativeSourcePanelWidth || numPanelCols || width) * 4;
   const gpuDetailText = `Original: ${Math.max(1, nSlices)} frames × ${Math.max(1, nPanels)} panels × ${Math.max(1, sourceHeight || height)}×${Math.max(1, nativeSourcePanelWidth || numPanelCols || width)} · float32 · ${formatSavedBytes(sourceBytes || 0)}. ${resolvedDisplayBin === 1 ? "Native display requested" : `${resolvedDisplayBin}×${resolvedDisplayBin} mean bin`} → ${Math.max(1, height)}×${Math.max(1, numPanelCols || Math.round(width / Math.max(1, nPanels)))} per panel · ${displayStackBytes > 0 ? formatSavedBytes(displayStackBytes) : "not received"}.`;
   const gpuStatusTitle = "One display-resolution stack is embedded in the widget and uploaded once to WebGPU when available; native source arrays are not duplicated in the browser.";
@@ -10147,7 +10306,10 @@ function Show3D() {
           {/* Title row */}
           {showTitle && <Typography variant="caption" sx={{ ...typography.label, color: themeColors.accent, mb: `${SPACING.XS}px`, display: "block", height: 16, lineHeight: "16px", overflow: "hidden" }}>
             {title || "Image"}
-            <RenderPathBadge colors={themeColors} />
+            <RenderPathBadge
+              colors={themeColors}
+              drawnBy={isRgb ? rgbDrawPath : gpuResidency.stage === "fallback" ? "CPU" : null}
+            />
             {diffMode !== "off" && (
               <Typography component="span" sx={{ fontSize: 9, fontWeight: "bold", color: "#fff", bgcolor: "#e65100", px: 0.5, py: 0.125, ml: 0.5, verticalAlign: "middle" }}>
                 {diffMode === "previous" ? "\u0394-PREV" : "\u0394-FIRST"}
@@ -11023,6 +11185,26 @@ function Show3D() {
             </Box>
           </Box>
           )}
+          <Box sx={thumbnails && nSlices > 1 ? { display: "flex", alignItems: "flex-start", gap: 1.5 } : { display: "contents" }}>
+          {thumbnails && nSlices > 1 && (
+            <ThumbnailStrip
+              frames={nSlices}
+              currentFrame={playing ? playbackUiSliceIdx : (sliceIdx ?? 0)}
+              labels={labels}
+              columns={thumbnailColumns || 2}
+              onColumnsChange={setThumbnailColumns}
+              onHide={() => setThumbnails(false)}
+              onHover={handleThumbnailHover}
+              onSelect={handleThumbnailSelect}
+              height={viewerBoxHeight || canvasH}
+              imageAspect={(sharedPanelSource ? Math.max(1, numPanelCols || width) : Math.max(1, numPanelCols || Math.round(width / Math.max(1, nPanels || 1)))) / Math.max(1, height)}
+              draw={drawThumbnail}
+              release={releaseThumbnail}
+              drawKey={`${thumbnailDataVersion}|${gpuResidency.ready}|${cmap}|${logScale}|${width}x${height}|${nPanels}|${nSlices}|${themeColors.bg}|${visiblePanelIndices[0] ?? 0}`}
+              unavailableReason={thumbnailUnavailableReason}
+              colors={{ text: themeColors.text, textMuted: themeColors.textMuted, border: themeColors.border, accent: themeColors.accent, controlBg: themeColors.controlBg }}
+            />
+          )}
           <Box
             ref={canvasContainerRef}
             sx={{
@@ -11030,6 +11212,8 @@ function Show3D() {
               bgcolor: compareMode !== "off" ? (compareBackground === "light" ? "#f7f7f7" : "#050505") : container.imageBox.bgcolor,
               width: "100%",
               maxWidth: canvasW,
+              // beside the thumbnail strip the viewer keeps its own width; the row grows instead
+              ...(thumbnails && nSlices > 1 ? { width: canvasW, flex: "0 0 auto" } : {}),
               boxSizing: "content-box",
               aspectRatio: mainPanelAspectRatio,
               height: "auto",
@@ -11617,6 +11801,7 @@ function Show3D() {
                 );
               });
             })()}
+          </Box>
           </Box>
           {/* Statistics bar - right below the image. Multi-panel = one row per panel. */}
           {showStats && (

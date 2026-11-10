@@ -117,6 +117,8 @@ class Show3DExport:
             fps=self.fps,
             avg_window=self.avg_window,
             show_title=self.show_title,
+            thumbnails=self.thumbnails,
+            thumbnail_columns=self.thumbnail_columns,
             show_fft=self.show_fft,
             fft_layout=self.fft_layout,
             fft_overlay_zoom=self.fft_overlay_zoom,

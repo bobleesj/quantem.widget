@@ -14,6 +14,7 @@ import { COLORMAPS } from "../display/colormaps";
 type Paint = { slot: number; pixels: Uint8ClampedArray; width: number; height: number; pass: "batched" | "scaled" };
 const paints = vi.hoisted(() => [] as Paint[]);
 const engineCalls = vi.hoisted(() => [] as string[]);
+const rgbPaints = vi.hoisted(() => [] as { pixels: Uint8ClampedArray; bitmap: unknown }[]);
 const gates = vi.hoisted(() => ({ range: null as Promise<void> | null, bitmap: null as Promise<void> | null }));
 vi.mock("../display/cpuColormap", async (importOriginal) => {
   const original = await importOriginal<typeof import("../display/cpuColormap")>();
@@ -44,6 +45,12 @@ vi.mock("../display/cpuColormap", async (importOriginal) => {
       engine.renderSlotScaledToImageBitmapAsync = async (slot, ...rest) => {
         const bitmap = await renderScaled(slot, ...rest);
         if (bitmap) record(slot, bitmap, "scaled");
+        return bitmap;
+      };
+      const renderRgb = engine.renderRgbToImageBitmapAsync.bind(engine);
+      engine.renderRgbToImageBitmapAsync = async (...args) => {
+        const bitmap = await renderRgb(...args);
+        if (bitmap) rgbPaints.push({ pixels: (bitmap as unknown as TestImageData).data, bitmap });
         return bitmap;
       };
       return engine;
@@ -126,6 +133,7 @@ async function paintFrame() {
 
 beforeEach(() => {
   paints.length = 0;
+  rgbPaints.length = 0;
   engineCalls.length = 0;
   gates.range = gates.bitmap = null;
   canvasDraws = [];
@@ -388,4 +396,24 @@ it.each([[true, false], [true, true]])("commits resized true-color panels with R
   await settle();
   for (let i = 0; i < 6; i++) await paintFrame();
   expect(panels.map(displayedSource).map(canvas => canvas.width)).toEqual([SIZE * 2, SIZE * 2]);
+});
+
+it("packs a color panel through the colormap engine's true-color pass, beside a gray panel", async () => {
+  // The engine is WebGPU in a browser with an adapter and Canvas2D here; either way the color panel is
+  // packed by the engine, so the panel is drawn by the path the title badge names.
+  const model = new Model();
+  const rgb = Float32Array.from({ length: 3 * SIZE * SIZE }, (_, i) => [0, 0.25, 0.5, 1, -0.5, 2, Number.NaN][i % 7]);
+  const out = new Float32Array(3 * SIZE * SIZE + SIZE * SIZE);
+  out.set(rgb);
+  out.set(BF, 3 * SIZE * SIZE);
+  Object.assign(model.values, { show_controls: false, is_rgb: [true, false], frame_bytes: new DataView(out.buffer) });
+  act(() => { cleanup = renderShow2D({ model, el } as never) as (() => void) | undefined; });
+  await settle();
+  for (let i = 0; i < 6; i++) await paintFrame();
+  expect(rgbPaints.length).toBeGreaterThan(0);
+  const expected = Uint8ClampedArray.from({ length: 4 * SIZE * SIZE }, (_, k) => (
+    k % 4 === 3 ? 255 : [0, 64, 128, 255, 0, 255, 0][(3 * Math.floor(k / 4) + (k % 4)) % 7]
+  ));
+  expect(Array.from(rgbPaints.at(-1)!.pixels)).toEqual(Array.from(expected));
+  expect(canvasDraws.some(draw => draw.source === rgbPaints.at(-1)!.bitmap)).toBe(true);
 });

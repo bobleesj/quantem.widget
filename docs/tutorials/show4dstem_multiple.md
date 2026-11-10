@@ -48,7 +48,7 @@ scientific quantity you intend to inspect.
 List the masters in the desired order:
 
 ```bash
-quantem show4dstem \
+quantem-widget show4dstem \
   /data/tilts/sample_m6deg_master.h5 \
   /data/tilts/sample_m4deg_master.h5 \
   /data/tilts/sample_m2deg_master.h5 \
@@ -63,7 +63,7 @@ If a folder contains only the compatible masters you want to compare, the
 short form is:
 
 ```bash
-quantem show4dstem /data/tilts --backend webgpu --html
+quantem-widget show4dstem /data/tilts --backend webgpu --html
 ```
 
 Both commands keep native detector sampling and use the compact browser browse

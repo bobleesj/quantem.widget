@@ -20,7 +20,7 @@ counts exactly and is still much smaller than `float32`.
 Use `uint8` only when you want a lightweight preview or tutorial copy. It is
 fast and small, but it can saturate real counts above 255. `load` always keeps
 the detector's own dtype; `uint8` appears only where you choose it, such as
-`export_html(dtype="uint8")` or `quantem show4dstem ... --html --dtype uint8`.
+`export_html(dtype="uint8")` or `quantem-widget show4dstem ... --html --dtype uint8`.
 
 ## Size estimates
 

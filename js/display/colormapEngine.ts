@@ -44,7 +44,8 @@ export type GPUSlot = {
   width: number;
   height: number;
   directOnly: boolean;
-  dataKind: "f32" | "u8";
+  // rgb: interleaved true-color floats, 3 per pixel (count = 3 * width * height).
+  dataKind: "f32" | "u8" | "rgb";
 };
 
 // A pooled canvas's context and format, so a transfer can hand the canvas back to its pool.
@@ -194,11 +195,13 @@ export class GPUColormapEngine {
 
     while (this.slots.length <= idx) this.slots.push(null as never);
     let target = this.slots[idx];
+    if (!sources.every(slot => slot.dataKind === first.dataKind)) return false;
     if (
-      !target || target.count !== first.count ||
+      !target || target.count !== first.count || target.dataKind !== first.dataKind ||
       target.width !== first.width || target.height !== first.height
     ) {
-      this.uploadData(idx, new Float32Array(first.count), first.width, first.height, first.rgbaCapacity);
+      if (first.dataKind === "rgb") this.uploadRgbData(idx, new Float32Array(first.count), first.width, first.height);
+      else this.uploadData(idx, new Float32Array(first.count), first.width, first.height, first.rgbaCapacity);
       target = this.slots[idx];
     }
 
@@ -272,7 +275,7 @@ export class GPUColormapEngine {
    * structs, the 32-byte scaled colormap struct and the 64-byte direct grid struct.
    */
   private createSlot(
-    dataBuffer: GPUBuffer, dataOwnership: GPUBufferOwnership, dataKind: "f32" | "u8",
+    dataBuffer: GPUBuffer, dataOwnership: GPUBufferOwnership, dataKind: GPUSlot["dataKind"],
     count: number, width: number, height: number, rgbaCapacity: number, readBytes: number, directOnly: boolean,
   ): GPUSlot {
     return {
@@ -324,6 +327,30 @@ export class GPUColormapEngine {
     });
     this.device.queue.writeBuffer(dataBuffer, 0, data.buffer as ArrayBuffer, data.byteOffset, data.byteLength);
     this.slots[idx] = this.createSlot(dataBuffer, "owned", "f32", data.length, width, height, rgbaCapacity, rgbaCapacity * 4, directOnly);
+  }
+
+  /**
+   * Upload a width x height true-color frame for slot `idx`: interleaved RGB
+   * floats in [0, 1], 3 per pixel. The slot draws only through the direct RGB
+   * pass (renderRgbPanelRegionsDirectToCanvas); the colormap passes refuse it.
+   */
+  uploadRgbData(idx: number, data: Float32Array, width: number, height: number): void {
+    if (width < 1 || height < 1 || width * height * 3 !== data.length) {
+      throw new Error(`RGB display dimensions ${width}x${height}x3 do not match ${data.length} values`);
+    }
+    while (this.slots.length <= idx) this.slots.push(null as never);
+    const existing = this.slots[idx];
+    if (existing && existing.dataOwnership === "owned" && existing.dataKind === "rgb" && existing.count === data.length && existing.width === width && existing.height === height) {
+      this.device.queue.writeBuffer(existing.dataBuffer, 0, data.buffer as ArrayBuffer, data.byteOffset, data.byteLength);
+      return;
+    }
+    if (existing) this.destroySlot(existing);
+    const dataBuffer = this.device.createBuffer({
+      size: data.byteLength,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+    });
+    this.device.queue.writeBuffer(dataBuffer, 0, data.buffer as ArrayBuffer, data.byteOffset, data.byteLength);
+    this.slots[idx] = this.createSlot(dataBuffer, "owned", "rgb", data.length, width, height, 1, 4, true);
   }
 
   /** Upload one native uint8 image without expanding it to float32. */
@@ -574,6 +601,26 @@ export class GPUColormapEngine {
    * color slot fits where the 128 MB default would have silently failed.
    */
   renderRgbToImageBitmap(rgb: Float32Array, width: number, height: number): ImageBitmap | null {
+    const canvas = this.encodeRgbToOffscreen(rgb, width, height);
+    return canvas ? this.transferOffscreen(canvas) : null;
+  }
+
+  /**
+   * Queue-safe twin of renderRgbToImageBitmap: waits for the pack and blit to
+   * finish before snapshotting, as renderSlotsToImageBitmapAsync does, so a
+   * busy queue can never hand back the render pass's clear color. Each call
+   * draws into its own OffscreenCanvas and the queue runs the shared RGB
+   * buffers' writes in order, so calls may overlap.
+   */
+  async renderRgbToImageBitmapAsync(rgb: Float32Array, width: number, height: number): Promise<ImageBitmap | null> {
+    const canvas = this.encodeRgbToOffscreen(rgb, width, height);
+    if (!canvas) return null;
+    await this.device.queue.onSubmittedWorkDone();
+    return this.transferOffscreen(canvas);
+  }
+
+  /** Encode and submit the RGB pack and its blit into a pooled OffscreenCanvas (hand it back with transferOffscreen), or null. */
+  private encodeRgbToOffscreen(rgb: Float32Array, width: number, height: number): OffscreenCanvas | null {
     if (width <= 0 || height <= 0) return null;
     const count = width * height;
     if (rgb.length < count * 3) return null;
@@ -627,7 +674,7 @@ export class GPUColormapEngine {
       const blit = this.encodeBlitToOffscreen(encoder, this.rgbRgbaBuffer, width, height, format);
       if (!blit) return null;
       this.device.queue.submit([encoder.finish()]);
-      return this.transferOffscreen(blit.canvas);
+      return blit.canvas;
     } catch {
       return null;
     }
@@ -704,6 +751,8 @@ export class GPUColormapEngine {
   renderSlotDirectWithGpuRangeToCanvas(...args: Parameters<DirectRenderer["renderSlotDirectWithGpuRangeToCanvas"]>) { return this.direct.renderSlotDirectWithGpuRangeToCanvas(...args); }
   renderSlotsDirectWithGpuRangeToCanvases(...args: Parameters<DirectRenderer["renderSlotsDirectWithGpuRangeToCanvases"]>) { return this.direct.renderSlotsDirectWithGpuRangeToCanvases(...args); }
   renderCombinedPanelRegionsDirectToCanvas(...args: Parameters<DirectRenderer["renderCombinedPanelRegionsDirectToCanvas"]>) { return this.direct.renderCombinedPanelRegionsDirectToCanvas(...args); }
+  renderRgbPanelRegionsDirectToCanvas(...args: Parameters<DirectRenderer["renderRgbPanelRegionsDirectToCanvas"]>) { return this.direct.renderRgbPanelRegionsDirectToCanvas(...args); }
+  renderRgbPanelRegionsToImageBitmapAsync(...args: Parameters<DirectRenderer["renderRgbPanelRegionsToImageBitmapAsync"]>) { return this.direct.renderRgbPanelRegionsToImageBitmapAsync(...args); }
   renderCombinedPanelRegionsToImageBitmapAsync(...args: Parameters<DirectRenderer["renderCombinedPanelRegionsToImageBitmapAsync"]>) { return this.direct.renderCombinedPanelRegionsToImageBitmapAsync(...args); }
 
   /**

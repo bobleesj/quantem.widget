@@ -353,3 +353,35 @@ def test_paged_input_of_any_array_type_opens_as_pages():
     widget = Show3D(cupy.asarray(pages))
     assert (widget.n_pages, widget.panels_per_page, widget.n_panels) == (2, 3, 6)
     widget.free()
+
+
+def test_thumbnails_follow_mode_stream_and_explicit_keywords(tmp_path):
+    import json
+
+    stack = np.random.default_rng(0).random((6, 16, 16)).astype(np.float32)
+    assert Show3D(stack, verbose=False).thumbnails is False
+    assert Show3D(stack, mode="stream", verbose=False).thumbnails is True
+    assert Show3D(stack, mode="stream", thumbnails=False, verbose=False).thumbnails is False
+    assert Show3D.stream(stack).thumbnails is True
+    widget = Show3D(stack, thumbnails=True, thumbnail_columns=3, title="Strip", verbose=False)
+    assert widget.state_dict()["thumbnails"] is True and widget.state_dict()["thumbnail_columns"] == 3
+    restored = Show3D(stack, verbose=False)
+    restored.load_state_dict(widget.state_dict())
+    assert (restored.thumbnails, restored.thumbnail_columns) == (True, 3)
+    page = widget.export_html(tmp_path / "strip.html").read_text(encoding="utf-8")
+    start = page.index('widget-state+json">') + len('widget-state+json">')
+    states = [model["state"] for model in json.loads(page[start:page.index("</script>", start)])["state"].values()]
+    exported = next(state for state in states if state.get("title") == "Strip")
+    assert (exported["thumbnails"], exported["thumbnail_columns"]) == (True, 3)
+
+
+@pytest.mark.parametrize("columns", [0, 4, 2.5, True])
+def test_thumbnail_columns_accepts_one_to_three_only(columns):
+    stack = np.zeros((3, 8, 8), np.float32)
+    with pytest.raises(Exception, match="thumbnail_columns"):
+        Show3D(stack, thumbnail_columns=columns, verbose=False)
+
+
+def test_mode_names_stream_among_the_presets():
+    with pytest.raises(ValueError, match="'stream'"):
+        Show3D(np.zeros((3, 8, 8), np.float32), mode="bogus", verbose=False)

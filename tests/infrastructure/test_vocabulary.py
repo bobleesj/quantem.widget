@@ -55,7 +55,7 @@ BANNED = {
 EXCEPTIONS = {
     "pixel_size": "a display calibration whose unit is the separate pixel_unit trait (nm, A, mrad, 1/A), so no suffix names it",
     "binned": "ScanControl's Arina 2x2 setting, read by arina-stream-gpu's scan runner; renamed with the runner, which needs the Arina PC",
-    "backend": "quantem show4dstem --backend picks the browser viewer (auto or webgpu), not where data is computed",
+    "backend": "quantem-widget show4dstem --backend picks the browser viewer (auto or webgpu), not where data is computed",
 }
 
 

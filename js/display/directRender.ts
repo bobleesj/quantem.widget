@@ -2,7 +2,7 @@
 // offscreen bitmap at display size (scaled, shared-grid, per-panel and
 // combined-region layouts), so a repaint never reads pixels back to the CPU.
 import type { GPUColormapEngine, GPUSlot } from "./colormapEngine";
-import { DIRECT_GRID_COLORMAP_SHADER, DIRECT_SLOT_COLORMAP_SHADER, DIRECT_SLOT_GPU_RANGE_SHADER, PACKED_PANEL_TRANSFORM_SHADER } from "./displayShaders";
+import { DIRECT_GRID_COLORMAP_SHADER, DIRECT_SLOT_COLORMAP_SHADER, DIRECT_SLOT_GPU_RANGE_SHADER, DIRECT_SLOT_RGB_SHADER, PACKED_PANEL_TRANSFORM_SHADER } from "./displayShaders";
 import type { GPURanges } from "./gpuRange";
 import { computePipeline, renderPipeline } from "./pipelines";
 
@@ -82,6 +82,7 @@ export class DirectRenderer {
   private directGridPipeline: GPURenderPipeline | null = null;
   private directSlotPipeline: GPURenderPipeline | null = null;
   private directSlotGpuRangePipeline: GPURenderPipeline | null = null;
+  private directSlotRgbPipeline: GPURenderPipeline | null = null;
   private packedPanelTransformPipeline: GPUComputePipeline | null = null;
   private directGridParams = new ArrayBuffer(64);
   private directGridParamsU32 = new Uint32Array(this.directGridParams);
@@ -252,7 +253,7 @@ export class DirectRenderer {
   ): boolean {
     if (!this.engine.lutBuffer) return false;
     const slot = this.engine.slots[idx];
-    if (!slot) return false;
+    if (!slot || slot.dataKind === "rgb") return false;
     const outW = Math.max(1, Math.round(opts.width));
     const outH = Math.max(1, Math.round(opts.height));
     const format = navigator.gpu.getPreferredCanvasFormat();
@@ -678,7 +679,7 @@ export class DirectRenderer {
   ): boolean {
     if (!this.engine.lutBuffer) return false;
     const slot = this.engine.slots[slotIdx];
-    if (!slot) return false;
+    if (!slot || slot.dataKind === "rgb") return false;
     const hasActiveTransform = (opts.transforms || []).some((transform) => (
       Math.abs((transform?.zoom ?? 1) - 1) > 1e-6 ||
       Math.abs(transform?.panX ?? 0) > 1e-3 ||
@@ -793,5 +794,97 @@ export class DirectRenderer {
     slotIdx: number, range: DisplayRange | DisplayRange[], logScale: boolean | boolean[], opts: PanelRegionOptions,
   ): Promise<ImageBitmap | null> {
     return this.durableFrame(opts.width, opts.height, (context) => this.renderCombinedPanelRegionsDirectToCanvas(slotIdx, range, logScale, context, opts));
+  }
+
+  /**
+   * True-color twin of renderCombinedPanelRegionsDirectToCanvas: each grid
+   * panel draws a column region of an RGB slot (uploadRgbData) through its own
+   * viewport, with the panel's zoom and pan, straight into `ctx`. No colormap,
+   * range or log applies; the channels are drawn as stored.
+   */
+  renderRgbPanelRegionsDirectToCanvas(slotIdx: number, ctx: GPUCanvasContext, opts: PanelRegionOptions): boolean {
+    const slot = this.engine.slots[slotIdx];
+    if (!slot || slot.dataKind !== "rgb") return false;
+    const layout = gridLayout(opts);
+    if (!layout) return false;
+    const { n, panelW, panelH } = layout;
+    const format = navigator.gpu.getPreferredCanvasFormat();
+    this.directSlotRgbPipeline ??= renderPipeline(this.device, DIRECT_SLOT_RGB_SHADER, format);
+    const pipeline = this.directSlotRgbPipeline;
+    const params = this.directGridParams;
+    const paramsU32 = this.directGridParamsU32;
+    const paramsF32 = this.directGridParamsF32;
+    const sourcePanelW = Math.max(1, Math.min(slot.width, Math.round(opts.sourcePanelWidth)));
+    while (slot.directRegionParamsBuffers.length < n) {
+      slot.directRegionParamsBuffers.push(null);
+      slot.directRegionBindGroups.push(null);
+    }
+    for (let panel = 0; panel < n; panel++) {
+      let paramsBuffer = slot.directRegionParamsBuffers[panel];
+      if (!paramsBuffer) {
+        paramsBuffer = this.device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        slot.directRegionParamsBuffers[panel] = paramsBuffer;
+      }
+      const sourcePanel = Math.max(0, Math.round(opts.sourcePanelIndices?.[panel] ?? panel));
+      const srcX0 = Math.min(sourcePanel * sourcePanelW, Math.max(0, slot.width - 1));
+      const sourceWidth = Math.max(1, Math.min(sourcePanelW, slot.width - srcX0));
+      const transform = opts.transforms?.[panel];
+      const zoomValue = Math.max(1e-6, transform?.zoom ?? 1);
+      const origin = panelOrigin(layout, panel);
+      paramsU32[0] = slot.width;
+      paramsU32[1] = slot.height;
+      paramsU32[2] = srcX0;
+      paramsU32[3] = sourceWidth;
+      paramsU32[4] = Math.max(1, Math.round(panelH));
+      paramsU32[5] = Math.max(1, Math.round(panelW));
+      paramsF32[6] = origin.x;
+      paramsF32[7] = origin.y;
+      paramsU32[8] = 0;
+      paramsU32[9] = opts.bgRgb & 0xFFFFFF;
+      paramsF32[10] = zoomValue;
+      paramsU32[11] = shouldSmoothDirectSample(opts.smooth, zoomValue, sourceWidth, slot.height, panelW, panelH) ? 1 : 0;
+      paramsF32[12] = 0;
+      paramsF32[13] = 0;
+      paramsF32[14] = transform?.panX ?? 0;
+      paramsF32[15] = transform?.panY ?? 0;
+      this.device.queue.writeBuffer(paramsBuffer, 0, params);
+      // The LUT-name cache key marks this bind group as the RGB layout (no LUT binding).
+      if (!slot.directRegionBindGroups[panel] || slot.directRegionLutNames[panel] !== "rgb:direct") {
+        slot.directRegionBindGroups[panel] = this.device.createBindGroup({
+          layout: pipeline.getBindGroupLayout(0),
+          entries: [
+            { binding: 0, resource: { buffer: paramsBuffer } },
+            { binding: 1, resource: { buffer: slot.dataBuffer } },
+          ],
+        });
+        slot.directRegionLutNames[panel] = "rgb:direct";
+      }
+    }
+    const texture = ctx.getCurrentTexture();
+    const encoder = this.device.createCommandEncoder();
+    const pass = encoder.beginRenderPass({
+      colorAttachments: [{
+        view: texture.createView(),
+        loadOp: "clear" as GPULoadOp,
+        storeOp: "store" as GPUStoreOp,
+        clearValue: clearColorFromRgb(opts.bgRgb),
+      }],
+    });
+    pass.setPipeline(pipeline);
+    for (let panel = 0; panel < n; panel++) {
+      const bindGroup = slot.directRegionBindGroups[panel];
+      if (!bindGroup) continue;
+      setPanelViewport(pass, layout, panel);
+      pass.setBindGroup(0, bindGroup);
+      pass.draw(3);
+    }
+    pass.end();
+    this.device.queue.submit([encoder.finish()]);
+    return true;
+  }
+
+  /** Queue-safe durable-frame twin of renderRgbPanelRegionsDirectToCanvas. */
+  renderRgbPanelRegionsToImageBitmapAsync(slotIdx: number, opts: PanelRegionOptions): Promise<ImageBitmap | null> {
+    return this.durableFrame(opts.width, opts.height, (context) => this.renderRgbPanelRegionsDirectToCanvas(slotIdx, context, opts));
   }
 }

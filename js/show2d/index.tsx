@@ -57,8 +57,8 @@ import {
 import { COLORMAPS, COLORMAP_NAMES, displayLog, displayNormalize, GPUColormapEngine, renderToOffscreen } from "../display/colormaps";
 import { createLatestFrameQueue } from "../show4dstem/latestFrameQueue";
 import { resizeDetectorFromPointer, type DetectorResizeStart, type DetectorRoiMode } from "../show4dstem/detectorInteraction";
-import { colormapSampledPixels, createColormapEngine, createCPUColormapEngine, type DisplayColormapEngine } from "../display/cpuColormap";
-import { onGPULost } from "../display/device";
+import { colormapSampledPixels, createColormapEngine, createCPUColormapEngine, packRgbPixels, type DisplayColormapEngine } from "../display/cpuColormap";
+import { onGPULost, type RenderPath } from "../display/device";
 import { applyDisplayFilterBrowser, browserFilterSupported, filterKnobsActive, resolvePanelDenoiseKnobs } from "../display/filter";
 import { applyFrequencyFilterBrowser, frequencyFilterActive, getFrequencyFilterBackend, normalizeFrequencyFilterMode } from "../display/frequencyFilter";
 import { InfoTooltip } from "../shared/InfoTooltip";
@@ -1350,12 +1350,8 @@ function Show2D() {
   const exactHtmlSize = formatEstimatedHtmlSize(htmlPixelCount * 4);
   const quantizedHtmlSize = formatEstimatedHtmlSize(htmlPixelCount);
   const canDownloadCurrentHtml = !exportEnabled && offlineForTheme;
-  const standaloneHtmlLabel = offline
-    ? `HTML quantized uint8 (${quantizedHtmlSize})`
-    : `HTML exact float32 (${exactHtmlSize})`;
-  const unavailableStandaloneHtmlLabel = offline
-    ? "HTML exact float32 (not embedded)"
-    : "HTML quantized uint8 (requires backend)";
+  // an exported page re-downloads itself: name its packing, not an estimate of a page it already is
+  const standaloneHtmlLabel = offline ? "This page as HTML (uint8)" : "This page as HTML (exact float32)";
 
   const handleStandaloneHtmlDownload = () => {
     setExportAnchor(null);
@@ -1937,6 +1933,15 @@ function Show2D() {
   // in refs so engine start-up alone re-runs no effect; the reconcile effect
   // keyed on gpuCmapReadyVersion uploads the current frames once it is ready.
   const gpuCmapRef = React.useRef<DisplayColormapEngine | null>(null);
+  // Which path packed the true-color panels on screen; the title badge names it, so a color panel the
+  // CPU drew is never labelled WebGPU. Null while the gallery has no color panel.
+  const [rgbDrawPath, setRgbDrawPath] = React.useState<RenderPath | null>(null);
+  const rgbDrawPathRef = React.useRef<RenderPath | null>(null);
+  const noteRgbDrawPath = React.useCallback((path: RenderPath | null) => {
+    if (rgbDrawPathRef.current === path) return;
+    rgbDrawPathRef.current = path;
+    setRgbDrawPath(path);
+  }, []);
   const gpuCmapReadyRef = React.useRef(false);
 
   // Cached offscreen canvases for main image rendering (avoids per-zoom/pan recompute)
@@ -3622,25 +3627,53 @@ function Show2D() {
     const lutName = panelCmapNames[0] || cmap;
     const lut = COLORMAPS[lutName] || COLORMAPS.inferno;
 
-    // RGB panels bypass the LUT + contrast pipeline entirely: paint their
-    // display-ready (r, g, b) floats straight into the offscreen once per data
-    // change. The colormap loops below skip these panels so cmap/contrast/log
-    // changes never overwrite the color pixels.
+    // RGB panels bypass the LUT + contrast pipeline entirely: their
+    // display-ready (r, g, b) floats are packed into the offscreen once per data
+    // change, on WebGPU when the engine runs there (the engine's true-color
+    // pass), else by the Canvas2D engine. The colormap loops below skip these
+    // panels so cmap/contrast/log changes never overwrite the color pixels.
+    // The colormap branches await `rgbPacked` before they commit, so every
+    // panel of a gallery swaps in together.
+    let rgbPacked: Promise<void> = Promise.resolve();
+    if (!isRgbFlags?.some(Boolean)) noteRgbDrawPath(null);
     if (isRgbFlags && isRgbFlags.some(Boolean)) {
-      for (const i of visibleImageIndices) {
-        if (!isRgbFlags[i]) continue;
-        const rgb = rgbDataRef.current[i];
-        const offscreen = mainOffscreensRef.current[i];
+      const rgbPanels = visibleImageIndices.filter(i => isRgbFlags[i] && rgbDataRef.current[i] && mainOffscreensRef.current[i]);
+      const rgbEngine = gpuCmapRef.current;
+      const packOnCpu = (i: number) => {
         const imgData = mainImgDatasRef.current[i];
-        if (!rgb || !offscreen || !imgData) continue;
-        const pixels = imgData.data;
-        for (let k = 0, n = width * height; k < n; k++) {
-          pixels[4 * k] = Math.max(0, Math.min(255, Math.round(rgb[3 * k] * 255)));
-          pixels[4 * k + 1] = Math.max(0, Math.min(255, Math.round(rgb[3 * k + 1] * 255)));
-          pixels[4 * k + 2] = Math.max(0, Math.min(255, Math.round(rgb[3 * k + 2] * 255)));
-          pixels[4 * k + 3] = 255;
-        }
-        offscreen.getContext("2d")?.putImageData(imgData, 0, 0);
+        const rgb = rgbDataRef.current[i];
+        if (!imgData || !rgb) return;
+        imgData.data.set(packRgbPixels(rgb, width * height));
+        renderTargets[i]?.getContext("2d")?.putImageData(imgData, 0, 0);
+      };
+      // No engine yet: the panels wait for it, as the grayscale ones do (its start re-runs this effect).
+      if (rgbEngine) {
+        rgbPacked = (async () => {
+          let cpuFallback = false;
+          for (const i of rgbPanels) {
+            const rgb = rgbDataRef.current[i];
+            if (!rgb) continue;
+            const bitmap = await rgbEngine.renderRgbToImageBitmapAsync(rgb, width, height);
+            try {
+              if (!isCurrentRender()) return;
+              if (!bitmap) {
+                // The frame exceeds the device's storage-buffer limit.
+                packOnCpu(i);
+                cpuFallback = true;
+                continue;
+              }
+              const ctx = renderTargets[i]?.getContext("2d");
+              ctx?.clearRect(0, 0, width, height);
+              ctx?.drawImage(bitmap, 0, 0);
+            } finally {
+              bitmap?.close();
+            }
+          }
+          if (!isCurrentRender()) return;
+          noteRgbDrawPath(cpuFallback ? "CPU" : rgbEngine.path);
+        })().catch(error => {
+          if (isCurrentRender()) console.error("[Show2D] true-color panel paint failed", error);
+        });
       }
     }
 
@@ -3750,6 +3783,8 @@ function Show2D() {
             );
             if (!isCurrentRender()) return;
             if (panels.some((_, k) => !bitmaps[k])) return;
+            await rgbPacked;
+            if (!isCurrentRender()) return;
             let painted = !!(isRgbFlags && isRgbFlags.some(Boolean));
             for (let k = 0; k < bitmaps.length; k++) {
               const bitmap = bitmaps[k];
@@ -3792,6 +3827,11 @@ function Show2D() {
             }
             const drawn = bitmaps ?? [];
             if (indices.some((i, k) => !capturedIsRgb[i] && !drawn[k])) {
+              closeBitmaps();
+              return;
+            }
+            await rgbPacked;
+            if (!isCurrentRender()) {
               closeBitmaps();
               return;
             }
@@ -7432,7 +7472,7 @@ function Show2D() {
           {/* Title row */}
           {(showTitle || showControls) && <Typography variant="caption" sx={{ ...typography.label, color: themeColors.accent, mb: `${SPACING.XS}px`, display: "block", minHeight: 16, lineHeight: "16px", overflow: "visible" }}>
             {showTitle && <>{title || (isGallery ? "Gallery" : "Image")}</>}
-            {showTitle && <RenderPathBadge colors={themeColors} />}
+            {showTitle && <RenderPathBadge colors={themeColors} drawnBy={rgbDrawPath} />}
             {showTitle && displayBin > 1 && (
               <Box component="span" sx={{ ml: 0.5, px: 0.5, py: 0, fontSize: 9, fontWeight: 600, borderRadius: "3px", backgroundColor: themeColors.accent + "22", color: themeColors.accent, border: `1px solid ${themeColors.accent}44` }}>
                 {displayBin}× binned
@@ -7525,9 +7565,7 @@ function Show2D() {
                 <Menu anchorEl={exportAnchor} open={Boolean(exportAnchor)} onClose={() => setExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "right" }} transformOrigin={{ vertical: "top", horizontal: "right" }} {...themedTopMenuProps}>
                   {exportEnabled && <MenuItem onClick={() => handleHtmlExportSelect("full")} sx={{ fontSize: 12 }}>HTML exact float32 ({exactHtmlSize})</MenuItem>}
                   {exportEnabled && <MenuItem onClick={() => handleHtmlExportSelect("uint8")} sx={{ fontSize: 12 }}>HTML quantized uint8 ({quantizedHtmlSize})</MenuItem>}
-                  {canDownloadCurrentHtml && offline && <MenuItem disabled sx={{ fontSize: 12 }} title="This standalone export contains quantized uint8 data, not the original float32 array. Open the live widget to export exact float32.">{unavailableStandaloneHtmlLabel}</MenuItem>}
                   {canDownloadCurrentHtml && <MenuItem onClick={handleStandaloneHtmlDownload} sx={{ fontSize: 12 }}>{standaloneHtmlLabel}</MenuItem>}
-                  {canDownloadCurrentHtml && !offline && <MenuItem disabled sx={{ fontSize: 12 }} title="Quantized export requires the Python backend to repack the current float32 data.">{unavailableStandaloneHtmlLabel}</MenuItem>}
                 </Menu>
               </>
             )}
@@ -8131,9 +8169,7 @@ function Show2D() {
                 {svgExportAvailable && <MenuItem onClick={() => handleSvgExport(3)} sx={{ fontSize: 12 }}>SVG</MenuItem>}
                 {exportEnabled && <MenuItem onClick={() => handleHtmlExportSelect("full")} sx={{ fontSize: 12 }}>HTML exact float32 ({exactHtmlSize})</MenuItem>}
                 {exportEnabled && <MenuItem onClick={() => handleHtmlExportSelect("uint8")} sx={{ fontSize: 12 }}>HTML quantized uint8 ({quantizedHtmlSize})</MenuItem>}
-                {canDownloadCurrentHtml && offline && <MenuItem disabled sx={{ fontSize: 12 }} title="This standalone export contains quantized uint8 data, not the original float32 array. Open the live widget to export exact float32.">{unavailableStandaloneHtmlLabel}</MenuItem>}
                 {canDownloadCurrentHtml && <MenuItem onClick={handleStandaloneHtmlDownload} sx={{ fontSize: 12 }}>{standaloneHtmlLabel}</MenuItem>}
-                {canDownloadCurrentHtml && !offline && <MenuItem disabled sx={{ fontSize: 12 }} title="Quantized export requires the Python backend to repack the current float32 data.">{unavailableStandaloneHtmlLabel}</MenuItem>}
               </Menu>
               {(localExportStatus || exportStatus) && (
                 <Typography

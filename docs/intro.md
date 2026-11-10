@@ -43,12 +43,12 @@ virtual image. Continue with the [Show4DSTEM tutorial](tutorials/show4dstem) or
 
 ## Prefer the command line?
 
-Point the `quantem` command at a 4D-STEM master or a folder of masters when
+Point the `quantem-widget` command at a 4D-STEM master or a folder of masters when
 you want the viewer without writing a notebook:
 
 ```bash
-quantem show4dstem ./masters/           # 4D-STEM master(s) -> live viewer notebook
-quantem show4dstem ./masters/ --html    # shareable offline WebGPU HTML
+quantem-widget show4dstem ./masters/         # 4D-STEM master(s) -> live viewer notebook
+quantem-widget show4dstem ./masters/ --html  # shareable offline WebGPU HTML
 ```
 
 It saves to `~/Downloads`, opens automatically, and picks the GPU for you. Full

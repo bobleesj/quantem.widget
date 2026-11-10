@@ -194,7 +194,7 @@ evidence in the three visible sections above.
   state.
 - [ ] GitHub sharing is treated separately from live HTML: GitHub notebook
   previews should use static compressed widget pictures, never heavy live widget
-  state (`quantem github`, see [the command line](https://github.com/electronmicroscopy/quantem.widget/blob/main/docs/cli.md)).
+  state (`quantem-widget github`, see [the command line](https://github.com/electronmicroscopy/quantem.widget/blob/main/docs/cli.md)).
 
 </details>
 -->
