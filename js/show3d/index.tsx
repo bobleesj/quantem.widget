@@ -19,7 +19,7 @@ import { streamedStackExtends, useStreamFrames } from "./streamFrames";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import Stack from "@mui/material/Stack";
-import Slider from "../shared/Slider";
+import Slider, { LiveNumberSlider } from "../shared/Slider";
 import IconButton from "@mui/material/IconButton";
 import Select from "@mui/material/Select";
 import Menu from "@mui/material/Menu";
@@ -3143,6 +3143,9 @@ function Show3D() {
   const panelDataRangesRef = React.useRef(panelDataRanges);
   panelDataRangesRef.current = panelDataRanges;
   const imageHistogramPreviewPctRef = React.useRef<[number, number] | null>(null);
+  // True while a histogram handle or the moving-average slider is held: the GPU canvas answers each
+  // move, the retained 2D copy waits for release.
+  const previewGestureRef = React.useRef(false);
   const panelHistogramPreviewPctRef = React.useRef<Map<number, [number, number]>>(new Map());
   const histogramPreviewPaintRafRef = React.useRef<number | null>(null);
   // Packed panels are independent scientific domains. Always compute their
@@ -3155,6 +3158,7 @@ function Show3D() {
     minPct: number,
     maxPct: number,
     linked: boolean,
+    commit = true,
   ) => {
     const panelCount = Math.max(1, nPanels || 1);
     const stack = resolveDisplayBounds(dataMin, dataMax, traitVmin, traitVmax, logScale);
@@ -3179,6 +3183,7 @@ function Show3D() {
     panelStatesLiveRef.current = nextStates;
     vminPerPanelLiveRef.current = nextMins;
     vmaxPerPanelLiveRef.current = nextMaxs;
+    if (!commit) return;
     setPanelStates(nextStates);
     setVminPerPanel(nextMins);
     setVmaxPerPanel(nextMaxs);
@@ -4511,7 +4516,8 @@ function Show3D() {
     );
     if (!rendered) return false;
     setGpuDisplayVisible(true);
-    if (!playing) {
+    // Like the single-panel path, a live gesture draws once per input and the release keeps the copy.
+    if (!playing && !sliderScrubbingRef.current && !previewGestureRef.current) {
       retainGpuDisplayFrame(
         engine.renderCombinedPanelRegionsToImageBitmapAsync(
           slotIdx,
@@ -4670,7 +4676,7 @@ function Show3D() {
     setGpuDisplayVisible(true);
     // The retained 2D copy is a second GPU render plus a readback. A live slider gesture skips it
     // (one draw per input); the gesture's release repaints once with the copy.
-    if (!playing && !sliderScrubbingRef.current) {
+    if (!playing && !sliderScrubbingRef.current && !previewGestureRef.current) {
       retainGpuDisplayFrame(engine.renderSharedGridToImageBitmapAsync(renderSlotIdx, { vmin, vmax }, settings.logScale, gridOpts));
     }
     playbackIdxRef.current = normalized;
@@ -5833,6 +5839,7 @@ function Show3D() {
   // state once on release. Setting state on every sample re-rendered the whole widget and re-ran
   // the display effect per pointer move (~14 ms a move on a 4x slower CPU).
   const previewImageHistogramRange = (min: number, max: number) => {
+    previewGestureRef.current = true;
     imageHistogramPreviewPctRef.current = [min, max];
     const live = playRef.current;
     live.imageVminPct = min;
@@ -5840,8 +5847,43 @@ function Show3D() {
     live.autoContrast = false;
     scheduleHistogramPreviewPaint();
   };
+  // The moving-average slider averages the window on the GPU per move (renderGpuTemporalAverageSliceDirect)
+  // and writes avg_window once on release; the trait drives the stats, histogram and FFT effects,
+  // which re-ran a CPU average of the window on every move.
+  const avgWindowLabelRef = React.useRef<HTMLSpanElement | null>(null);
+  const previewAvgWindow = (value: number) => {
+    previewGestureRef.current = true;
+    playRef.current.avgWindow = value;
+    if (avgWindowLabelRef.current) avgWindowLabelRef.current.textContent = String(Math.round(value || 1));
+    scheduleHistogramPreviewPaint();
+  };
+  const commitAvgWindow = (value: number) => {
+    previewGestureRef.current = false;
+    playRef.current.avgWindow = value;
+    setAvgWindow(value);
+    scheduleHistogramPreviewPaint();
+  };
+
+  // Per-panel twin of the image histogram: a drag paints from the live refs on the GPU and
+  // commits panel state once on release, so the display effect and its CPU paths stay idle.
+  const changePanelHistogramRange = (panel: number, min: number, max: number, commit: boolean) => {
+    previewGestureRef.current = !commit;
+    panelHistogramPreviewPctRef.current.set(panel, [min, max]);
+    setPanelRangePercentages(panel, min, max, linkContrast, commit);
+    if (commit && autoContrast) {
+      manualImageRangeBeforeAutoRef.current = null;
+      setAutoContrast(false);
+    }
+    const live = playRef.current;
+    live.autoContrast = false;
+    live.panelStates = panelStatesLiveRef.current;
+    live.vminPerPanel = vminPerPanelLiveRef.current;
+    live.vmaxPerPanel = vmaxPerPanelLiveRef.current;
+    scheduleHistogramPreviewPaint();
+  };
   const commitImageHistogramRange = (min: number, max: number) => {
     previewImageHistogramRange(min, max);
+    previewGestureRef.current = false;
     setImageVminPct(min);
     setImageVmaxPct(max);
     if (autoContrast) {
@@ -11826,18 +11868,17 @@ function Show3D() {
                     sx={{ display: "flex", alignItems: "center", gap: isMobileViewport ? "4px" : `${SPACING.SM}px`, flexShrink: 0 }}
                   >
                     <Typography sx={{ ...typography.label, color: themeColors.textMuted, fontSize: isMobileViewport ? 10 : typography.label.fontSize, flexShrink: 0 }}>avg</Typography>
-                    <Slider
+                    <LiveNumberSlider
                       value={avgWindow}
                       min={1}
                       max={15}
                       step={1}
-                      onChange={(_, v) => setAvgWindow(v as number)}
-                      size="small"
+                      onLiveChange={previewAvgWindow}
+                      onCommit={commitAvgWindow}
                       sx={{ ...sliderStyles.small, width: isMobileViewport ? 40 : 44, mx: isMobileViewport ? "3px" : 0, flexShrink: 0 }}
-                      aria-label="Moving average window"
-                      valueLabelDisplay="auto"
+                      ariaLabel="Moving average window"
                     />
-                    <Typography sx={{ ...typography.label, color: themeColors.textMuted, fontSize: isMobileViewport ? 10 : typography.label.fontSize, minWidth: 16, flexShrink: 0 }}>{Math.round(avgWindow || 1)}</Typography>
+                    <Typography ref={avgWindowLabelRef} sx={{ ...typography.label, color: themeColors.textMuted, fontSize: isMobileViewport ? 10 : typography.label.fontSize, minWidth: 16, flexShrink: 0 }}>{Math.round(avgWindow || 1)}</Typography>
                   </Box>
                   <Box sx={{ display: "flex", alignItems: "center", gap: isMobileViewport ? "4px" : `${SPACING.SM}px`, flexShrink: 0 }}>
                     <Typography sx={{ ...typography.label, color: themeColors.textMuted, fontSize: isMobileViewport ? 10 : typography.label.fontSize, flexShrink: 0 }}>Loop</Typography>
@@ -11882,20 +11923,9 @@ function Show3D() {
                             bins={panelHistogramBins[panel] ?? null}
                             vminPct={vminPct}
                             vmaxPct={vmaxPct}
-                            onRangeChange={(min, max) => {
-                              panelHistogramPreviewPctRef.current.set(panel, [min, max]);
-                              setPanelRangePercentages(panel, min, max, linkContrast);
-                              if (autoContrast) {
-                                manualImageRangeBeforeAutoRef.current = null;
-                                setAutoContrast(false);
-                              }
-                              const live = playRef.current;
-                              live.autoContrast = false;
-                              live.panelStates = panelStatesLiveRef.current;
-                              live.vminPerPanel = vminPerPanelLiveRef.current;
-                              live.vmaxPerPanel = vmaxPerPanelLiveRef.current;
-                              scheduleHistogramPreviewPaint();
-                            }}
+                            onRangeChange={(min, max) => changePanelHistogramRange(panel, min, max, true)}
+                            onRangePreview={(min, max) => changePanelHistogramRange(panel, min, max, false)}
+                            onRangeCommit={(min, max) => changePanelHistogramRange(panel, min, max, true)}
                             width={110}
                             height={58}
                             valueDecimals={2}

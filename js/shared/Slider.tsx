@@ -20,3 +20,51 @@ const Slider = React.forwardRef<HTMLSpanElement, SliderProps>(function Slider({ 
 
 export default Slider;
 export type { SliderProps };
+
+interface LiveNumberSliderProps {
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  /** Every pointer move: paint from refs on the GPU, no widget state. */
+  onLiveChange: (value: number) => void;
+  /** Release: commit the value to widget state and model traits once. */
+  onCommit: (value: number) => void;
+  size?: "small" | "medium";
+  valueLabelDisplay?: "auto" | "on" | "off";
+  sx?: SliderProps["sx"];
+  ariaLabel: string;
+}
+
+/**
+ * A slider that keeps its own position while it is dragged, so a move re-renders only the slider
+ * and the widget commits once on release.
+ */
+export const LiveNumberSlider = React.memo(function LiveNumberSlider({
+  value, min, max, step, onLiveChange, onCommit, size = "small", valueLabelDisplay = "auto", sx, ariaLabel,
+}: LiveNumberSliderProps) {
+  const [liveValue, setLiveValue] = React.useState(value);
+  React.useEffect(() => { setLiveValue(value); }, [value]);
+  return (
+    <Slider
+      value={liveValue}
+      min={min}
+      max={max}
+      step={step}
+      onChange={(_, sliderValue) => {
+        const next = sliderValue as number;
+        setLiveValue(next);
+        onLiveChange(next);
+      }}
+      onChangeCommitted={(_, sliderValue) => {
+        const next = sliderValue as number;
+        setLiveValue(next);
+        onCommit(next);
+      }}
+      size={size}
+      valueLabelDisplay={valueLabelDisplay}
+      sx={sx}
+      aria-label={ariaLabel}
+    />
+  );
+});
