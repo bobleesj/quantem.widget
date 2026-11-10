@@ -1,6 +1,6 @@
 """One dataset type per machine, and the same numbers from every widget for every input type.
 
-The rule (Bob, 2026-10-08): a 4D-STEM file loads as quantem.gpu's ``Dataset4dstem`` when
+The rule (maintainer, 2026-10-08): a 4D-STEM file loads as quantem.gpu's ``Dataset4dstem`` when
 quantem.gpu is installed and a GPU works, else as quantem core's ``Dataset4dstem``; images and
 stacks load as quantem core ``Dataset2d`` and ``Dataset3d``. Where quantem core cannot install
 (an Intel Mac, Windows on ARM) the widget's stand-in carries the same surface. The machine state
