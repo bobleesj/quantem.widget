@@ -144,7 +144,7 @@ DISTRIBUTION = {"PIL": "pillow", "IPython": "ipython"}
 OPTIONAL = {
     "quantem": "quantem.gpu, and quantem core where it installs, guarded at the top of their adapter modules",
     "ipyfilechooser": "FolderPicker, used by quantem.live",
-    "playwright": "quantem github widget screenshots",
+    "playwright": "quantem-widget github widget screenshots",
     "tqdm": "progress bars when it is installed",
 }
 # Declared without a Python import: a tifffile codec plugin and the JupyterLab widget manager.

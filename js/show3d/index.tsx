@@ -55,6 +55,8 @@ import { MetadataSection } from "../widgetInfo";
 import { applyFrequencyFilterBrowser, frequencyFilterActive, getFrequencyFilterBackend, normalizeFrequencyFilterMode } from "../display/frequencyFilter";
 import { encodeIndexedGif, quantizeRgbaForBrowserGif } from "./gif";
 import { missingDisplayStackStatus } from "./displayStack";
+import { ThumbnailStrip } from "./ThumbnailStrip";
+import { ThumbnailRenderer } from "../display/thumbnails";
 import {
   MAX_PLAYBACK_FPS,
   MAX_EXPORT_FPS,
@@ -198,6 +200,8 @@ const SHOW3D_STANDALONE_VIEW_STATE_KEYS = [
   "roi_list",
   "roi_selected_idx",
   "rotation_scope",
+  "thumbnail_columns",
+  "thumbnails",
   "show_scale_bar",
   "selected_panels",
   "show_controls",
@@ -1374,6 +1378,8 @@ function Show3D() {
   const [panelGapPxState] = useModelState<number>("panel_gap_px");
   const [linkContrast, setLinkContrast] = useModelState<boolean>("link_contrast");
   const [cmap, setCmap] = useModelState<string>("cmap");
+  const [thumbnails, setThumbnails] = useModelState<boolean>("thumbnails");
+  const [thumbnailColumns, setThumbnailColumns] = useModelState<number>("thumbnail_columns");
   // The model-backed setter can emit its React update after another synced
   // trait in the same control event. Direct WebGPU repaint paths must use the
   // palette selected by this event, not the palette from the previous render.
@@ -9842,6 +9848,71 @@ function Show3D() {
     if (commitLater) scheduleScrubModelCommit(next);
   };
   const commitSlice = (idx: number) => setAllSliceIdx(clampSlice(idx));
+  // Thumbnail strip: drawn on the GPU from the resident frame slots, so it adds only thumbnail-sized buffers.
+  const thumbnailRendererRef = React.useRef<ThumbnailRenderer | null>(null);
+  React.useEffect(() => () => { thumbnailRendererRef.current?.destroy(); thumbnailRendererRef.current = null; }, []);
+  const thumbnailHoverOriginRef = React.useRef<number | null>(null);
+  // The strip is exactly as tall as the viewer as drawn (the canvas box can render shorter than canvasH).
+  const [viewerBoxHeight, setViewerBoxHeight] = React.useState(0);
+  React.useEffect(() => {
+    const box = canvasContainerRef.current;
+    if (!thumbnails || !box || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => setViewerBoxHeight(box.getBoundingClientRect().height));
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [thumbnails]);
+  const thumbnailDataVersionRef = React.useRef(0);
+  const thumbnailDataVersion = React.useMemo(() => ++thumbnailDataVersionRef.current, [offlineFloatStack, offlineStack]);
+  const drawThumbnail = React.useCallback((canvas: HTMLCanvasElement, frame: number): boolean => {
+    const engine = gpuCmapRef.current;
+    if (!engine || !gpuCmapReadyRef.current || isRgb || !gpuFrameCacheUploadedRef.current.has(frame)) return false;
+    if (!thumbnailRendererRef.current) thumbnailRendererRef.current = new ThumbnailRenderer(engine);
+    const context = canvas.getContext("webgpu") as GPUCanvasContext | null;
+    if (!context) return false;
+    // One square thumbnail per frame: the first shown panel (with several panels, the others follow it).
+    const panels = Math.max(1, nPanels || 1);
+    const panelSourceWidth = sharedPanelSource ? Math.max(1, numPanelCols || width) : Math.max(1, numPanelCols || Math.round(width / panels));
+    const firstPanel = sharedPanelSource ? 0 : Math.max(0, Math.min(panels - 1, visiblePanelIndices[0] ?? 0));
+    const liveCmap = cmapLiveRef.current || cmap || "inferno";
+    return thumbnailRendererRef.current.draw(context, frame, {
+      panels: 1,
+      panelSourceWidth,
+      panelOffset: firstPanel * panelSourceWidth,
+      sharedSource: !!sharedPanelSource,
+      thumbWidth: canvas.width,
+      thumbHeight: canvas.height,
+      gap: 0,
+      bgRgb: packedRgbFromHex(interPanelGapColor),
+      logScale: !!logScale,
+      lutName: liveCmap,
+      lut: COLORMAPS[liveCmap] || COLORMAPS.inferno,
+    });
+  }, [isRgb, nPanels, sharedPanelSource, numPanelCols, width, cmap, logScale, interPanelGapColor, visiblePanelIndices]);
+  const releaseThumbnail = React.useCallback((canvas: HTMLCanvasElement) => {
+    const context = canvas.getContext("webgpu") as GPUCanvasContext | null;
+    if (context) thumbnailRendererRef.current?.release(context);
+  }, []);
+  const thumbnailUnavailableReason = isRgb
+    ? "Thumbnails for color stacks are not drawn yet."
+    : gpuResidency.stage === "fallback" || gpuResidency.stage === "missing"
+      ? `Thumbnails need the WebGPU display${gpuResidency.error ? `: ${gpuResidency.error}` : "."}`
+      : null;
+  const handleThumbnailHover = (frame: number | null) => {
+    if (playing) return;
+    if (frame === null) {
+      const origin = thumbnailHoverOriginRef.current;
+      thumbnailHoverOriginRef.current = null;
+      if (origin !== null) scrubToSlice(origin, false);
+      return;
+    }
+    if (thumbnailHoverOriginRef.current === null) thumbnailHoverOriginRef.current = clampSlice(sliceIdx ?? 0);
+    scrubToSlice(frame, false);
+  };
+  const handleThumbnailSelect = (frame: number) => {
+    thumbnailHoverOriginRef.current = null;
+    scrubToSlice(frame, false);
+    commitSlice(frame);
+  };
   const handleLoopSliderPointerDownCapture = (e: React.PointerEvent<HTMLSpanElement>) => {
     if (e.button !== 0) return;
     sliderGestureCleanupRef.current?.();
@@ -11023,6 +11094,26 @@ function Show3D() {
             </Box>
           </Box>
           )}
+          <Box sx={thumbnails && nSlices > 1 ? { display: "flex", alignItems: "flex-start", gap: 1.5 } : { display: "contents" }}>
+          {thumbnails && nSlices > 1 && (
+            <ThumbnailStrip
+              frames={nSlices}
+              currentFrame={playing ? playbackUiSliceIdx : (sliceIdx ?? 0)}
+              labels={labels}
+              columns={thumbnailColumns || 2}
+              onColumnsChange={setThumbnailColumns}
+              onHide={() => setThumbnails(false)}
+              onHover={handleThumbnailHover}
+              onSelect={handleThumbnailSelect}
+              height={viewerBoxHeight || canvasH}
+              imageAspect={(sharedPanelSource ? Math.max(1, numPanelCols || width) : Math.max(1, numPanelCols || Math.round(width / Math.max(1, nPanels || 1)))) / Math.max(1, height)}
+              draw={drawThumbnail}
+              release={releaseThumbnail}
+              drawKey={`${thumbnailDataVersion}|${gpuResidency.ready}|${cmap}|${logScale}|${width}x${height}|${nPanels}|${nSlices}|${themeColors.bg}|${visiblePanelIndices[0] ?? 0}`}
+              unavailableReason={thumbnailUnavailableReason}
+              colors={{ text: themeColors.text, textMuted: themeColors.textMuted, border: themeColors.border, accent: themeColors.accent, controlBg: themeColors.controlBg }}
+            />
+          )}
           <Box
             ref={canvasContainerRef}
             sx={{
@@ -11030,6 +11121,8 @@ function Show3D() {
               bgcolor: compareMode !== "off" ? (compareBackground === "light" ? "#f7f7f7" : "#050505") : container.imageBox.bgcolor,
               width: "100%",
               maxWidth: canvasW,
+              // beside the thumbnail strip the viewer keeps its own width; the row grows instead
+              ...(thumbnails && nSlices > 1 ? { width: canvasW, flex: "0 0 auto" } : {}),
               boxSizing: "content-box",
               aspectRatio: mainPanelAspectRatio,
               height: "auto",
@@ -11617,6 +11710,7 @@ function Show3D() {
                 );
               });
             })()}
+          </Box>
           </Box>
           {/* Statistics bar - right below the image. Multi-panel = one row per panel. */}
           {showStats && (

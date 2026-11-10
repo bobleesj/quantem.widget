@@ -29,6 +29,7 @@ four columns; `rows=1` puts every panel in one row.
 | Control | Trait | Expected effect |
 | --- | --- | --- |
 | Slice slider, arrow keys | `slice_idx` | Canvas shows that frame |
+| Frame thumbnails | `thumbnails`, `thumbnail_columns`; on with `mode="stream"` | A scrollable strip of square thumbnails left of the viewer, as tall as the image. Hovering one shows that frame; clicking it moves the slider there; the header switches 1, 2 or 3 across. The highlight follows playback |
 | Play / pause, reverse, boomerang | `playing`, `reverse`, `boomerang` | Auto-advances at `fps`, flips direction, ping-pongs at the ends |
 | FPS field | `fps` | Playback rate, capped at 60 fps |
 | Loop range, bookmarks, custom path | `loop`, `loop_start`, `loop_end`, `bookmarked_frames`, `playback_path` | Playback confined to a range or an explicit frame order |
@@ -53,6 +54,32 @@ four columns; `rows=1` puts every panel in one row.
 | More menu: Sub-pixel align, Kymograph | `subpixel_align_enabled`, `subpixel_align_reference`, `show_kymograph` | Browser-side drift alignment and a space-time view of the drawn profile |
 | ROI and line profile | `roi_active`, `roi_list`, `roi_selected_idx`, `profile_line`, `profile_width` | Single-panel ROI with a per-frame mean plot; line profile across the frame |
 | Export button | `export_request`, `export_status` | Writes standalone HTML or GIF from the live widget |
+
+## Frame thumbnails
+
+To see a whole recording at a glance, open the strip of frame thumbnails beside
+the viewer:
+
+```python
+from quantem.widget import Show3D
+
+Show3D([images, images.cumsum(axis=0)], panel_titles=["frame", "sum so far"],
+       title="HAADF", link_contrast=False, mode="stream")
+```
+
+`mode="stream"` is the interactive layout plus the strip, and
+`Show3D.stream()` opens in it. Any other mode takes `thumbnails=True`, and
+`thumbnail_columns=1`, `2` (default) or `3` sets how many go across.
+`thumbnails=False` turns the strip off in stream mode.
+
+The thumbnails are drawn on the GPU from the frames the viewer already holds
+there, so a large stack gets no second full-size copy: each visible thumbnail
+needs about a third of a megabyte, and thumbnails scrolled far out of view give
+their memory back. Each thumbnail shows the first visible panel, averaged down
+from every source pixel and stretched to its own mean ± 3 standard deviations,
+so a few bright pixels do not flatten the rest. The viewer and the data keep
+their native pixels. A thumbnail needs the WebGPU display; without it, the strip
+says why instead of drawing on the CPU.
 
 ## Large stacks
 

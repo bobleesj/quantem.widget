@@ -1350,12 +1350,8 @@ function Show2D() {
   const exactHtmlSize = formatEstimatedHtmlSize(htmlPixelCount * 4);
   const quantizedHtmlSize = formatEstimatedHtmlSize(htmlPixelCount);
   const canDownloadCurrentHtml = !exportEnabled && offlineForTheme;
-  const standaloneHtmlLabel = offline
-    ? `HTML quantized uint8 (${quantizedHtmlSize})`
-    : `HTML exact float32 (${exactHtmlSize})`;
-  const unavailableStandaloneHtmlLabel = offline
-    ? "HTML exact float32 (not embedded)"
-    : "HTML quantized uint8 (requires backend)";
+  // an exported page re-downloads itself: name its packing, not an estimate of a page it already is
+  const standaloneHtmlLabel = offline ? "This page as HTML (uint8)" : "This page as HTML (exact float32)";
 
   const handleStandaloneHtmlDownload = () => {
     setExportAnchor(null);
@@ -7525,9 +7521,7 @@ function Show2D() {
                 <Menu anchorEl={exportAnchor} open={Boolean(exportAnchor)} onClose={() => setExportAnchor(null)} anchorOrigin={{ vertical: "bottom", horizontal: "right" }} transformOrigin={{ vertical: "top", horizontal: "right" }} {...themedTopMenuProps}>
                   {exportEnabled && <MenuItem onClick={() => handleHtmlExportSelect("full")} sx={{ fontSize: 12 }}>HTML exact float32 ({exactHtmlSize})</MenuItem>}
                   {exportEnabled && <MenuItem onClick={() => handleHtmlExportSelect("uint8")} sx={{ fontSize: 12 }}>HTML quantized uint8 ({quantizedHtmlSize})</MenuItem>}
-                  {canDownloadCurrentHtml && offline && <MenuItem disabled sx={{ fontSize: 12 }} title="This standalone export contains quantized uint8 data, not the original float32 array. Open the live widget to export exact float32.">{unavailableStandaloneHtmlLabel}</MenuItem>}
                   {canDownloadCurrentHtml && <MenuItem onClick={handleStandaloneHtmlDownload} sx={{ fontSize: 12 }}>{standaloneHtmlLabel}</MenuItem>}
-                  {canDownloadCurrentHtml && !offline && <MenuItem disabled sx={{ fontSize: 12 }} title="Quantized export requires the Python backend to repack the current float32 data.">{unavailableStandaloneHtmlLabel}</MenuItem>}
                 </Menu>
               </>
             )}
@@ -8131,9 +8125,7 @@ function Show2D() {
                 {svgExportAvailable && <MenuItem onClick={() => handleSvgExport(3)} sx={{ fontSize: 12 }}>SVG</MenuItem>}
                 {exportEnabled && <MenuItem onClick={() => handleHtmlExportSelect("full")} sx={{ fontSize: 12 }}>HTML exact float32 ({exactHtmlSize})</MenuItem>}
                 {exportEnabled && <MenuItem onClick={() => handleHtmlExportSelect("uint8")} sx={{ fontSize: 12 }}>HTML quantized uint8 ({quantizedHtmlSize})</MenuItem>}
-                {canDownloadCurrentHtml && offline && <MenuItem disabled sx={{ fontSize: 12 }} title="This standalone export contains quantized uint8 data, not the original float32 array. Open the live widget to export exact float32.">{unavailableStandaloneHtmlLabel}</MenuItem>}
                 {canDownloadCurrentHtml && <MenuItem onClick={handleStandaloneHtmlDownload} sx={{ fontSize: 12 }}>{standaloneHtmlLabel}</MenuItem>}
-                {canDownloadCurrentHtml && !offline && <MenuItem disabled sx={{ fontSize: 12 }} title="Quantized export requires the Python backend to repack the current float32 data.">{unavailableStandaloneHtmlLabel}</MenuItem>}
               </Menu>
               {(localExportStatus || exportStatus) && (
                 <Typography

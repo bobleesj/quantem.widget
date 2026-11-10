@@ -55,6 +55,8 @@ class Show3DStream:
         if display_bin != 1:
             raise ValueError("Show3D.stream shows native pixels; remove display_bin= or pass display_bin=1.")
         viewer_kwargs.setdefault("verbose", False)
+        # a recording is watched with the frame thumbnail strip; mode= or thumbnails= say otherwise
+        viewer_kwargs.setdefault("mode", "stream")
         if data is None:
             if labels:
                 raise ValueError("labels= needs data=; label appended frames with append(image, label=...).")

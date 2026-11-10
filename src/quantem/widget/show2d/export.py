@@ -30,6 +30,8 @@ class Show2DExport:
             n_values = sum(stack.size for stack in self._display_panel_stacks)
         else:
             n_values = self._display_data.size
+        # a color panel embeds its three channels next to the luminance plane
+        n_values += 3 * sum(frame.size // 3 for frame, rgb in zip(self._display_rgb, self.is_rgb) if rgb and frame is not None)
         n_values //= image_bin**2
         bytes_per_value = 1 if quantized else 4
         payload_mb = n_values * bytes_per_value * (4.0 / 3.0) / (1024 * 1024)
@@ -71,21 +73,19 @@ class Show2DExport:
         pathlib.Path
             The written file path.
         """
-        self._require_grayscale_gallery("export_html")
-        return self._write_export_and_report(path, title=title, max_mb=max_mb, **self._html_export_choice(encoding, image_bin))
+        options = self._html_export_choice(encoding, image_bin)
+        self._require_color_export_supported(options["quantized"])
+        return self._write_export_and_report(path, title=title, max_mb=max_mb, **options)
 
-    def _require_grayscale_gallery(self, action: str) -> None:
-        """Refuse an HTML export of a gallery with RGB panels.
+    def _require_color_export_supported(self, quantized: bool) -> None:
+        """Refuse the export packings a gallery with color panels cannot carry.
 
-        The export clone rebuilds from the grayscale luminance stack, so an
-        RGB panel would silently come out gray. ``action`` names the entry
-        point in the error.
+        Color panels travel as their true-color float32 frames; the uint8 pack
+        quantizes only grayscale planes and would drop the color.
         """
-        if any(self.is_rgb):
-            raise NotImplementedError(
-                f"{action} is not supported when the gallery contains RGB panels; "
-                "the export clone rebuilds from the grayscale stack and would drop the color channels."
-            )
+        if quantized and any(self.is_rgb):
+            raise ValueError("a gallery with color panels exports only with the full encoding (true color); "
+                             "the uint8 encoding holds grayscale panels only")
 
     def _export_stem(self) -> str:
         """``<title>_<shape>`` file-name stem shared by the SVG and HTML exports, so one figure's files sort together."""
@@ -105,7 +105,7 @@ class Show2DExport:
         own copy of what is on screen, paints on a light background, and with
         ``quantized`` packs the pixels as uint8 per panel.
         """
-        self._require_grayscale_gallery("HTML export")
+        self._require_color_export_supported(quantized)
 
         def binned_frames(stack: np.ndarray) -> np.ndarray:
             """A ``(F, H, W)`` stack mean-binned frame by frame by ``image_bin``; the pixel size below scales to match."""
@@ -119,6 +119,15 @@ class Show2DExport:
             export_data = [
                 binned_frames(stack) if stack.shape[0] > 1 else binned_frames(stack)[0]
                 for stack in self._display_panel_stacks
+            ]
+        elif any(self.is_rgb):
+            # color panels go in as their (H, W, 3) frames so the page keeps true color
+            from quantem.widget.show2d.widget import _binned_rgb
+
+            export_data = [
+                (_binned_rgb([self._display_rgb[i]], image_bin)[0] if image_bin > 1 else self._display_rgb[i])
+                if self.is_rgb[i] else binned_frames(self._display_data[i:i + 1])[0]
+                for i in range(self.n_images)
             ]
         else:
             export_data = binned_frames(self._display_data)

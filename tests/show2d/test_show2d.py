@@ -129,11 +129,27 @@ def test_rgb_panels_bypass_colormap_and_feed_luminance_to_stats():
     gray = _frame(4, (32, 40))
     widget = Show2D([rgb, gray], verbose=False)
     assert widget.is_rgb == [True, False]
-    assert widget.export_enabled is False
+    assert widget.export_enabled is True  # color panels export as true color with encoding="full"
     np.testing.assert_allclose(widget.stats_mean[0], 0.2126, rtol=1e-5)  # Rec. 709 red weight
     assert len(widget.frame_bytes) - 1 == (3 + 1) * 32 * 40 * 4  # padded to a multiple of 3 for unpadded base64
     with pytest.raises(NotImplementedError):
         Show2D([rgb], offline=True, verbose=False)
+
+
+def test_color_panels_export_true_color_and_refuse_uint8(tmp_path):
+    import json
+
+    rgb = np.zeros((32, 40, 3), dtype=np.float32)
+    rgb[..., 0] = 1.0  # pure red
+    widget = Show2D([rgb, _frame(4, (32, 40))], title="Color export", verbose=False)
+    page = widget.export_html(tmp_path / "color.html")
+    text = page.read_text(encoding="utf-8")
+    start = text.index("widget-state+json\">") + len("widget-state+json\">")
+    states = [model["state"] for model in json.loads(text[start:text.index("</script>", start)])["state"].values()]
+    viewer = next(state for state in states if state.get("title") == "Color export")
+    assert viewer["is_rgb"] == [True, False]
+    with pytest.raises(ValueError, match="color panels exports only with the full encoding"):
+        widget.export_html(tmp_path / "color_uint8.html", encoding="uint8")
 
 
 def test_set_image_replaces_the_stack_in_place():

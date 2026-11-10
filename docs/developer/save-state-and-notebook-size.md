@@ -68,7 +68,7 @@ state capture during the docs build can leave blank or static-only tutorials.
 
 For a separate static GitHub preview, make a copy outside `docs/tutorials/` and
 follow [GitHub preview copy](../cli.md#github-preview-copy). Never run
-`quantem github` in place on canonical documentation notebooks.
+`quantem-widget github` in place on canonical documentation notebooks.
 
 For a local execution that deliberately needs only static previews, copy the
 notebook first. Clear any existing `metadata.widgets` from that copy before
