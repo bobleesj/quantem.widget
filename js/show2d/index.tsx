@@ -410,6 +410,10 @@ function quarterTurns(rotation: number): number {
   return ((Math.round(rotation) % 4) + 4) % 4;
 }
 
+// Source pixels a contrast drag may colormap on WebGPU per tick: a 147-panel sheet of 256 px
+// frames (9.6 M) or four 1.7k images. Larger previews (a single 4096^2 frame) recolor only the
+// canvas pixels on screen instead of allocating a full-resolution bitmap per tick.
+const GPU_PREVIEW_MAX_SOURCE_PIXELS = 12_000_000;
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 20;
 const DPR = window.devicePixelRatio || 1;
@@ -1651,7 +1655,13 @@ function Show2D() {
         // Paint as the settled render does: every panel in its own colormap,
         // and packed uint8 frames through the scaled pass at canvas size.
         const cmapNames = Array.from({ length: nImages }, (_, i) => panelCmapForRef.current(i));
-        if (paintSampledPreviewRef.current(previewIndices, bitmapRanges, previewLogScale, cmapNames)) return;
+        // WebGPU colormaps the dragged window: the CPU sampled preview recolored every visible
+        // canvas pixel per tick (a 48-panel sheet took ~46 ms a tick and dropped half the moves).
+        // Only a source too large to colormap per tick (a few 4k panels) keeps the sampled path,
+        // which touches canvas pixels instead of source pixels.
+        const previewSourcePixels = previewIndices.length * width * height;
+        const gpuColormapsPreview = engine instanceof GPUColormapEngine && previewSourcePixels <= GPU_PREVIEW_MAX_SOURCE_PIXELS;
+        if (!gpuColormapsPreview && paintSampledPreviewRef.current(previewIndices, bitmapRanges, previewLogScale, cmapNames)) return;
         const bitmaps = uint8FolderPreviewModeRef.current || cmapNames.some(name => name !== cmapNames[0])
           ? await renderScaledPanelBitmaps(engine, previewIndices, bitmapRanges, previewLogScale, cmapNames, mainOffscreensRef.current)
           : await engine.renderSlotsToImageBitmapAsync(previewIndices, bitmapRanges, previewLogScale, cmapNames[0], COLORMAPS[cmapNames[0]] || COLORMAPS.inferno);
