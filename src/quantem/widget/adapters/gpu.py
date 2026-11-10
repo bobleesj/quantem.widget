@@ -233,6 +233,19 @@ def _finite_or_none(value) -> float | None:
     return float(value) if value is not None and math.isfinite(float(value)) else None
 
 
+def _library_options(options: dict) -> dict:
+    """Translate this widget's option names to quantem.gpu's current keywords."""
+    renamed = {"upsample": "upsample", "phase_damping": "phase_damp",
+               "amplitude_damping": "amplitude_damp"}
+    out = {renamed.get(key, key): value for key, value in options.items()}
+    if out.get("method") == "ssb":
+        out["method"] = "phase_of_mean"
+    estimator = out.pop("phase_estimator", None)
+    if estimator is not None:
+        out.setdefault("method", "phase_of_mean" if estimator in ("mean_phase", "phase_of_mean") else estimator)
+    return out
+
+
 class DirectSession:
     """A ``quantem.gpu.DirectPtycho`` session as the SSB widgets read and drive it.
 
@@ -321,15 +334,15 @@ class DirectSession:
             tuple(int(value) for value in scan_region), aberrations=dict(aberrations),
             scan_detector_rotation_deg=float(scan_detector_rotation_deg)))
 
-    def crop_native(self, phase, bounds, upsampling: int) -> np.ndarray:
+    def crop_native(self, phase, bounds, upsample: int) -> np.ndarray:
         """A host copy of ``bounds`` (native scan positions) from a full-scan ``phase``.
 
-        ``phase`` covers the padded grid at ``upsampling``; the bounds are
+        ``phase`` covers the padded grid at ``upsample``; the bounds are
         shifted by ``scan_offset`` so a region never shows padding.
         """
         row_offset, col_offset = self.scan_offset
         row_start, row_stop, col_start, col_stop = (
-            int(value) * upsampling for value in (
+            int(value) * upsample for value in (
                 bounds[0] + row_offset, bounds[1] + row_offset,
                 bounds[2] + col_offset, bounds[3] + col_offset))
         crop = phase[row_start:row_stop, col_start:col_stop]
@@ -351,7 +364,7 @@ class DirectSession:
             "voltage_kV": ssb.voltage_kV, "semiangle_mrad": ssb.semiangle_mrad, "scan_sampling_A": list(ssb.scan_sampling_A),
             "detector_sampling_mrad": None if ssb.detector_sampling_mrad is None else list(ssb.detector_sampling_mrad),
             "scan_detector_rotation_deg": ssb.scan_detector_rotation_deg, "scan_detector_rotation_flipped": ssb.scan_detector_rotation_flipped,
-            "aberrations": dict(ssb.aberrations),
+            "aberrations": dict(ssb.known_aberrations),
             "loss": float(ssb.best_loss) if math.isfinite(ssb.best_loss) else None,
             "bright_field_radius_px": ssb.bright_field_radius_px,
             "bright_field_intensity_threshold": ssb.bright_field_intensity_threshold,
@@ -457,7 +470,7 @@ class DirectSession:
 
         aberrations = validate_aberrations(saved["aberrations"], higher_order=True)
         self.set_scan_detector_rotation(saved["scan_detector_rotation_deg"])
-        self.ssb.aberrations = aberrations  # the saved model replaces every term, higher orders included
+        self.ssb.known_aberrations = aberrations  # the saved model replaces every term, higher orders included
         self.store(aberrations, saved["loss"], sample=(
             {"sample_tilt_mrad": saved["sample_tilt_mrad"],
              "depth_spread_nm": saved["depth_spread_nm"]}
@@ -487,7 +500,7 @@ class DirectSession:
         aberrations: an in-place update left an unfitted session to fit again
         on ``reconstruct()``, discarding the reviewed values.
         """
-        self.ssb.aberrations = {**self.ssb.aberrations, **aberrations}
+        self.ssb.known_aberrations = {**self.ssb.known_aberrations, **aberrations}
         self.ssb.sample_tilt_mrad = None if sample is None else tuple(sample["sample_tilt_mrad"])
         self.ssb.depth_spread_nm = None if sample is None else float(sample["depth_spread_nm"])
         if loss is not None:
@@ -504,7 +517,7 @@ class DirectSession:
         float32, so a panel left at zero changed the last bits of most pixels of
         the two-term phase.
         """
-        return self.ssb.preview(_named_orders(aberrations), **options)
+        return self.ssb.preview(_named_orders(aberrations), **_library_options(options))
 
     @property
     def drag_windows(self) -> bool:
@@ -536,16 +549,17 @@ class DirectSession:
 
         return direct_workflow.advance(self.ssb)
 
-    def _drag_inputs(self, aberrations: dict, *, upsampling, method: str = "ssb", sample_tilt_mrad=(0.0, 0.0),
+    def _drag_inputs(self, aberrations: dict, *, upsample, method: str = "ssb", sample_tilt_mrad=(0.0, 0.0),
                      depth_spread_nm: float = 0.0, **strengths):
         """``preview``'s options as ``direct_workflow``'s (aberrations, tilt, depth, factor, policy)."""
         from quantem.gpu.direct_ptycho import direct_workflow
         from quantem.gpu.direct_ptycho.units import validate_aberrations
 
+        method = "phase_of_mean" if method in (None, "ssb") else method
         policy = direct_workflow.settings(method, *(strengths.get(name) for name in (
             "phase_damping", "amplitude_damping", "smoothness_inv_A", "detector_weighting")))
         return (validate_aberrations(_named_orders(aberrations), higher_order=True), tuple(sample_tilt_mrad),
-                float(depth_spread_nm), self.ssb._resolve_upsampling(upsampling), policy)
+                float(depth_spread_nm), self.ssb._resolve_upsample(upsample), policy)
 
     def browser_state(self) -> dict:
         """The compact state a browser SSB engine rebuilds its reducers from.
@@ -595,7 +609,7 @@ class DirectSession:
         return self.result(self.ssb.fit_aberrations(**options))
 
     def fit_regions(self, regions: list[dict], parameters: dict, *,
-                    upsampling: int,
+                    upsample: int,
                     num_trials: int = 200,
                     progress: Callable[[dict], None] | None = None) -> dict:
         """Jointly fit regional models and crop their full-scan reconstructions.
@@ -622,7 +636,7 @@ class DirectSession:
         started = time.perf_counter()
         fits, images = [], {}
         from quantem.gpu.direct_ptycho import DEPTH_SPREAD_RANGE_NM as depth_range_nm  # the joint fit's own depth search range
-        factor = int(upsampling)
+        factor = int(upsample)
         geometry = {
             "backend": ssb.backend, "voltage_kV": ssb.voltage_kV,
             "semiangle_mrad": ssb.semiangle_mrad,
@@ -672,7 +686,7 @@ class DirectSession:
             phase, _ = self.preview(
                 fit["aberrations"], sample_tilt_mrad=fit["sample_tilt_mrad"],
                 depth_spread_nm=fit["depth_spread_nm"],
-                upsampling=factor, compute_loss=False)
+                upsample=factor, compute_loss=False)
             if tuple(phase.shape) != tuple(size * factor for size in ssb.scan_shape):
                 raise ValueError("Local correction requires a full-scan reconstruction before cropping.")
             images[f"{region['label']} · SSB"] = self.crop_native(phase, bounds, factor)
@@ -695,7 +709,7 @@ class DirectSession:
                 "reconstruction": {
                     "scan_shape": list(ssb.scan_shape), "scan_offset": list(self.scan_offset),
                     "scan_region": None,
-                    "display_bounds": list(bounds), "upsampling": factor,
+                    "display_bounds": list(bounds), "upsample": factor,
                     "num_bright_field_pixels": self.num_bright_field_pixels,
                 },
             })

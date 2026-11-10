@@ -56,7 +56,7 @@ def read_calibration(path: Path, identity: dict | None, scan_region: tuple[int, 
         if reconstruction.setdefault("detector_weighting", "uniform") not in ("uniform", "inverse_mean"):
             raise ValueError("the saved detector weighting is not supported")
     saved["reconstruction"] = reconstruction
-    if saved["upsampling_mode"] not in ("auto", "explicit") or saved["upsampling"] not in (1, 2, 3, 4, 8):
+    if saved["upsample_mode"] not in ("auto", "explicit") or saved["upsample"] not in (1, 2, 3, 4, 8):
         raise ValueError("the saved output sampling is not supported")
     aberrations = saved["aberrations"]
     numbers = [aberrations[name] for name in ("C10_nm", "C12_nm", "phi12_deg")]
