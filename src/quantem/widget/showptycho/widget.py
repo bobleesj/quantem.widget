@@ -65,7 +65,7 @@ def session_note() -> str:
     """
     if gpu_adapter.available():
         return (
-            "Aberration tuning (C10, C12, rotation, Save) needs an SSB session: "
+            "Aberration tuning (C10, C12, rotation, Save) needs a DirectPtycho session: "
             'data = quantem.gpu.io.load("scan_master.h5"), set data.calibration (voltage_kV, semiangle_mrad, scan_sampling_A), '
             "then ptycho = quantem.gpu.DirectPtycho(data), ptycho.run(), ptycho.show()."
         )

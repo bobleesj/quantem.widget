@@ -54,7 +54,7 @@ def test_a_phase_array_is_shown_as_given_with_the_session_controls_explained():
     np.testing.assert_array_equal(_shown(widget), phase)
     assert widget.amplitude_bytes == b"" and (widget.phase_height, widget.phase_width) == (96, 80)
     assert widget.object_sampling_A == pytest.approx([0.5, 0.5])            # 0.05 nm drawn in Angstrom
-    assert not widget.ssb_session and "needs an SSB session" in widget.session_note
+    assert not widget.ssb_session and "needs a DirectPtycho session" in widget.session_note
     assert repr(widget) == "ShowPtycho(phase 96x80, 0.5 Å/px)"
     assert ShowPtycho(phase, sampling=(0.4, 0.5)).object_sampling_A == [0.4, 0.5]  # [row, col]; the column step sets the scale bar
     with pytest.raises(ValueError, match="export"):
