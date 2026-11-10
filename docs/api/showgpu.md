@@ -19,7 +19,7 @@ monitor
 
 All arguments are optional: `ShowGPU()` uses these defaults.
 
-### Scan inventory during acquisition
+## Scan inventory during acquisition
 
 Attach the existing monitor to a started recording or acquisition controller.
 This starts no detector or receiver and does not copy diffraction data:
@@ -74,7 +74,7 @@ The driver can identify processes on the notebook server, but cannot enumerate
 the scientific datasets inside an arbitrary process. The scan inventory covers
 the owner explicitly attached in this notebook.
 
-### Process controls
+## Process controls
 
 **Terminate** requests SIGTERM after confirming the displayed PID and name.
 It ends all work in that process and may discard unsaved data. Only processes
@@ -85,7 +85,7 @@ signalling to reject a stale selection. No process is stopped by sampling.
 exit; disappearance from the GPU list alone does not establish process exit.
 The monitor never escalates a termination request to a forced kill.
 
-### Python controls
+## Python controls
 
 Change the existing monitor without creating another sampler:
 

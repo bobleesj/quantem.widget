@@ -1842,13 +1842,15 @@ class ShowPDF(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidget.A
         curve files; only the mask (mask mode) is saved as ``mask.npy``, since a
         scan-shaped boolean CSV is unwieldy.
 
-        Layout (always present):
+        Layout (always present)::
+
             README.txt
             metadata.txt
             curves_k.csv         k, I(k), B(k), F(k) (selected region)
             curves_r.csv         r, G(r), g(r) (g(r) only if density_value is set)
 
-        Extra files by mode:
+        Extra files by mode::
+
             mask mode:       mask.npy
             line scan:       linescan_position.csv, linescan_Ik.csv,
                              linescan_Ik_bg.csv, linescan_Fk.csv,

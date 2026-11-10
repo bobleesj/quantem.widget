@@ -224,7 +224,7 @@ methods. SSB remains the default. The optional CUDA methods are experimental:
 more damping can suppress unstable contrast but can also suppress real
 fine detail, so compare against SSB and retain the fitted model.
 
-```{code-cell} ipython3
+```python
 # Optional on CUDA: uncomment to compare with the conventional result.
 # phase = ptycho.reconstruct(method="phase", phase_damping=0.03,
 #                    upsampling="auto")
