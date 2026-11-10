@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import ts from "typescript";
-import { comparisonPanelKey, interactionContext, selectStreamFrame } from "./streamSelection";
+import { comparisonImageView, comparisonPanelKey, interactionContext, selectStreamFrame } from "./streamSelection";
 import { detectorChannel } from "./detectorChannel";
 // @ts-expect-error Vitest raw source import is not part of the widget bundle.
 import source from "./index.tsx?raw";
@@ -80,4 +80,29 @@ test("a rejected position releases the optimistic cursor so the identical pixel 
   expect(local).toEqual([0, 0]);
   channel.request(1, 2);
   expect(sent.map(request => request.center)).toEqual([[1, 2], [1, 2]]);
+});
+
+
+test("FFT reads the selected current comparison panel, not the single-image stream placeholder", () => {
+  const declaration = findNode((node): node is ts.VariableDeclaration => ts.isVariableDeclaration(node)
+    && node.name.getText(tree) === "displayedVirtualImageBytes");
+  const memo = declaration.initializer as ts.CallExpression;
+  const factory = memo.arguments[0] as ts.ArrowFunction;
+  const select = new Function("comparisonImageView", "compareMode", "displayedCompareVirtualImageBytes",
+    "comparePanelIndices", "frameIdx", "shapeRows", "shapeCols", "frontendVirtualImageBytes",
+    "virtualImageBytes", "activeViSource", `return (${factory.getText(tree)})();`);
+  const placeholder = new DataView(new Float32Array([NaN, NaN]).buffer);
+  const original = new DataView(new Float32Array([99, 3, 4, 1, 2, 99]).buffer, 4, 16);
+  const read = (stack: DataView, indices: number[], frame: number, multiple = true) => select(
+    comparisonImageView, multiple, stack, indices, frame, 1, 2, null, placeholder, "roi",
+  ) as DataView;
+  const selected = read(original, [1, 0], 0);
+  expect([...new Float32Array(selected.buffer, selected.byteOffset, 2)]).toEqual([1, 2]);
+  expect(selected.buffer).toBe(original.buffer);
+  const updated = new DataView(new Float32Array([5, 6, 7, 8]).buffer);
+  const next = read(updated, [0, 1], 0);
+  expect([...new Float32Array(next.buffer, next.byteOffset, 2)]).toEqual([5, 6]);
+  expect(read(updated, [0, 1], 0, false)).toBe(placeholder);
+  expect(comparisonImageView(updated, [0, 1], 2, 1, 2)).toBeNull();
+  expect(comparisonImageView(new DataView(new ArrayBuffer(0)), [0], 0, 1, 2)).toBeNull();
 });

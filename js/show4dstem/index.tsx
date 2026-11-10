@@ -56,7 +56,7 @@ import type { Uint32ImageView } from "../display/borrowedImage";
 import { latestRegion } from "./latestRegion";
 import { detectorChannel, detectorViewId } from "./detectorChannel";
 import { connectStreamDisplay, initialStreamPanels, streamPanelChanges } from "./streamDisplay";
-import { comparisonPanelKey, interactionContext, selectStreamFrame } from "./streamSelection";
+import { comparisonImageView, comparisonPanelKey, interactionContext, selectStreamFrame } from "./streamSelection";
 import { drawScaleBarHiDPI, drawColorbar, roundToNiceValue } from "../figure";
 import { angstromsPerUnit, unitSymbol } from "../units";
 import { findDataRange, sliderRange, computeStats, percentileClip } from "../display/stats";
@@ -4479,22 +4479,6 @@ function Show4DSTEM() {
   }, [setVirtualImageBytes]);
   const frontendVirtualImageBytes = frontendVirtualImage && frontendVirtualImage.over === (virtualImageBytes ?? null)
     ? frontendVirtualImage.bytes : null;
-  const displayedVirtualImageBytes = React.useMemo(() => {
-    const roiBytes = frontendVirtualImageBytes ?? virtualImageBytes;
-    if (activeViSource === "roi") return roiBytes;
-    return viProductFrameView(model, shapeRows, shapeCols, activeViSource) ?? roiBytes;
-  }, [
-    activeViSource,
-    frontendVirtualImageBytes,
-    frameIdx,
-    model,
-    shapeCols,
-    shapeRows,
-    viProductLabels,
-    viProductMapFrames,
-    viProductMapsBytes,
-    virtualImageBytes,
-  ]);
   const compareAllGroups = String(compareGroupMode || "paged") === "all";
   const activeComparePageCount = Math.max(1, Math.round(Number(comparePageCount || 1)));
   const activeComparePageIdx = Math.max(0, Math.min(activeComparePageCount - 1, Math.round(Number(comparePageIdx || 0))));
@@ -4514,6 +4498,31 @@ function Show4DSTEM() {
     viProductLabels,
     viProductMapFrames,
     viProductMapsBytes,
+  ]);
+  const displayedVirtualImageBytes = React.useMemo(() => {
+    // Multiple-mode streaming sends the current image stack, while the single
+    // image trait can still contain its initial NaN placeholder. FFT and line
+    // profiles must read the selected displayed panel, including live patches.
+    const panel = compareMode ? comparisonImageView(
+      displayedCompareVirtualImageBytes, comparePanelIndices, frameIdx, shapeRows, shapeCols,
+    ) : null;
+    const roiBytes = panel ?? frontendVirtualImageBytes ?? virtualImageBytes;
+    if (activeViSource === "roi") return roiBytes;
+    return viProductFrameView(model, shapeRows, shapeCols, activeViSource) ?? roiBytes;
+  }, [
+    activeViSource,
+    compareMode,
+    comparePanelIndices,
+    displayedCompareVirtualImageBytes,
+    frontendVirtualImageBytes,
+    frameIdx,
+    model,
+    shapeCols,
+    shapeRows,
+    viProductLabels,
+    viProductMapFrames,
+    viProductMapsBytes,
+    virtualImageBytes,
   ]);
   const comparePageButtonItems = React.useMemo<(number | "gap")[]>(() => {
     if (activeComparePageCount <= 8) {

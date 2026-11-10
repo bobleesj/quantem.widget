@@ -18,3 +18,13 @@ export function interactionContext(model: Pick<Model, "get">, keys: string) {
 export function comparisonPanelKey(frame: number, identities: string[]) {
   return identities[frame] ?? frame;
 }
+
+/** View the selected displayed image without duplicating a multi-scan buffer. */
+export function comparisonImageView(
+  images: DataView | null | undefined, indices: number[], frame: number, rows: number, cols: number,
+): DataView | null {
+  const slot = indices.indexOf(frame);
+  const bytes = rows * cols * Float32Array.BYTES_PER_ELEMENT;
+  if (!images || slot < 0 || bytes <= 0 || (slot + 1) * bytes > images.byteLength) return null;
+  return new DataView(images.buffer, images.byteOffset + slot * bytes, bytes);
+}
