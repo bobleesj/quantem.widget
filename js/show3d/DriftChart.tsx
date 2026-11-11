@@ -78,7 +78,7 @@ export function DriftChart(props: {
       </Typography>
       <Typography sx={{ fontSize: 10, color: colors.textMuted, px: "5px", lineHeight: 1.35 }}>
         <span style={{ color: ROW }}>row {short(slope[0])}</span> · <span style={{ color: COL }}>col {short(slope[1])}</span> {per}
-        {" · "}R² {drift.fit_r2[0].toFixed(2)}/{drift.fit_r2[1].toFixed(2)} · {drift.frames.length} frames · {drift.backend === "webgpu" ? "WebGPU" : "CPU"}
+        {" · "}R² {drift.fit_r2[0].toFixed(2)}/{drift.fit_r2[1].toFixed(2)} · {drift.frames.length} frames · {drift.backend === "webgpu" ? "WebGPU" : drift.backend === "cpu" ? "CPU" : drift.backend}
       </Typography>
       <svg width={width} height={HEIGHT} role="img" aria-label={`Drift against time: ${short(speed)} ${per}`}>
         <line x1={PAD.left} x2={width - PAD.right} y1={y(0)} y2={y(0)} stroke={colors.border} strokeWidth={1} />
