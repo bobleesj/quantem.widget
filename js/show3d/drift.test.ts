@@ -55,6 +55,29 @@ describe("Find drift", () => {
     expect(drift.velocity_unit).toBe("px/frame");
   }, 60000);
 
+  it("fits frames taken unevenly against their own times (frame_times_s)", async () => {
+    // a steady drift in time, scans taken 23 to 56 s apart as a recorded series was
+    const times = [0, 23.4, 56.6, 88.2, 128.1, 184.3];
+    const perSecond: [number, number] = [0.012, -0.007];   // px per second
+    const uneven = times.map((t) => specimen(size, perSecond[0] * t, perSecond[1] * t));
+    const drift = await findDrift((i) => uneven[i], [0, 1, 2, 3, 4, 5], size, size, null,
+      { pixelSize: 0.5, pixelUnit: "nm", frameSampling: 1, frameUnit: "", frameTimesS: times });
+    expect(drift.times_s).toEqual(times);
+    expect(Math.abs(drift.velocity_px_per_s![0] / perSecond[0] - 1)).toBeLessThan(0.05);
+    expect(Math.abs(drift.velocity_px_per_s![1] / perSecond[1] - 1)).toBeLessThan(0.05);
+    expect(drift.velocity_unit).toBe("nm/s");
+    expect(Math.abs(drift.velocity![0] / (perSecond[0] * 0.5) - 1)).toBeLessThan(0.05);
+    expect(Math.min(...drift.fit_r2)).toBeGreaterThan(0.99);   // a line in time, though not in frame index
+    expect(drift.frame_interval_s).toBeCloseTo(184.3 / 5, 6);
+    // picked frames are timed from the first picked one
+    const later = await findDrift((i) => uneven[i], [2, 4, 5], size, size, null,
+      { pixelSize: 0.5, pixelUnit: "nm", frameSampling: 1, frameUnit: "", frameTimesS: times });
+    expect(later.times_s!.map((t) => +t.toFixed(6))).toEqual([0, 71.5, 127.7]);
+    await expect(findDrift((i) => uneven[i], [0, 1], size, size, null,
+      { pixelSize: 0, pixelUnit: "px", frameSampling: 1, frameUnit: "", frameTimesS: [0, 0, 1, 2, 3, 4] }))
+      .rejects.toThrow("must increase");
+  }, 60000);
+
   it("needs two frames", async () => {
     await expect(findDrift((i) => stack[i], [3], size, size, null,
       { pixelSize: 0, pixelUnit: "px", frameSampling: 1, frameUnit: "" })).rejects.toThrow("at least two frames");

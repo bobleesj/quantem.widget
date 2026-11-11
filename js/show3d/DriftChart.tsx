@@ -6,6 +6,8 @@ export type DriftReadout = {
   frames: number[];
   shift_px: [number, number][];
   velocity_px_per_frame: [number, number];
+  times_s?: number[] | null;
+  velocity_px_per_s?: [number, number] | null;
   fit_r2: [number, number];
   shift: [number, number][] | null;
   velocity: [number, number] | null;
@@ -30,7 +32,8 @@ function short(value: number): string {
 
 /**
  * Drift against time, rows and columns, with the fitted lines, and the velocity in words above it.
- * Physical units when the viewer knows its pixel size and frame interval, else pixels per frame.
+ * Against each frame's own time when the frames have times (frame_times_s or a time frame axis); in
+ * physical units when the viewer also knows its pixel size, else pixels; without times, per frame.
  */
 export function DriftChart(props: {
   drift: DriftReadout | null;
@@ -46,11 +49,12 @@ export function DriftChart(props: {
       </Box>
     );
   }
-  const physical = !!drift.shift && drift.frame_interval_s !== null;
+  const timed = Array.isArray(drift.times_s) && drift.times_s.length === drift.frames.length && !!drift.velocity_px_per_s;
+  const physical = timed && !!drift.shift && !!drift.velocity;
   const unit = physical ? drift.pixel_unit : "px";
-  const times = drift.frames.map((frame) => (physical ? (frame - drift.frames[0]) * drift.frame_interval_s! : frame - drift.frames[0]));
-  const values = (drift.shift ?? drift.shift_px);
-  const slope: [number, number] = physical ? drift.velocity! : drift.velocity_px_per_frame;
+  const times = timed ? drift.times_s! : drift.frames.map((frame) => frame - drift.frames[0]);
+  const values = physical ? drift.shift! : drift.shift_px;
+  const slope: [number, number] = physical ? drift.velocity! : timed ? drift.velocity_px_per_s! : drift.velocity_px_per_frame;
   const speed = Math.hypot(slope[0], slope[1]);
   const all = values.flat().concat([0]);
   const low = Math.min(...all), high = Math.max(...all);
@@ -66,7 +70,7 @@ export function DriftChart(props: {
     const at = (t: number) => mean + slope[axis] * (t - meanT);
     return `M${x(0)},${y(at(0))} L${x(tMax)},${y(at(tMax))}`;
   };
-  const per = physical ? `${unit}/s` : "px/frame";
+  const per = timed ? `${unit}/s` : "px/frame";
   return (
     <Box data-testid="show3d-drift-chart" sx={{ flex: "0 0 auto", borderTop: `1px solid ${colors.border}`, px: "1px", pt: "3px" }}>
       <Typography sx={{ fontSize: 11, fontWeight: 600, color: colors.text, px: "5px" }}>
@@ -82,7 +86,7 @@ export function DriftChart(props: {
         <text x={PAD.left - 3} y={PAD.top + plotH} fontSize={9} fill={colors.textMuted} textAnchor="end">{short(low)}</text>
         <text x={PAD.left - 3} y={PAD.top + plotH / 2 + 3} fontSize={9} fill={colors.textMuted} textAnchor="end">{unit}</text>
         <text x={width - PAD.right} y={HEIGHT - 3} fontSize={9} fill={colors.textMuted} textAnchor="end">
-          {physical ? `${short(tMax)} s` : `${short(tMax)} frames`}
+          {timed ? `${short(tMax)} s` : `${short(tMax)} frames`}
         </text>
         {([0, 1] as const).map((axis) => (
           <g key={axis}>

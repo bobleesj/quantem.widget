@@ -1,11 +1,13 @@
 """Find drift in a live notebook, on the hardware WebGPU device and on the CPU path.
 
-Six frames of a smooth random specimen move by a known (0.37, -0.23) px per frame,
-shifted in Fourier space so the motion is exact and subpixel. With WebGPU the user
+Six frames of a smooth random specimen move at a known (0.185, -0.115) px/s, taken
+unevenly (`frame_times_s`, 2 to 5 s apart) and shifted in Fourier space so the motion
+is exact and subpixel. With WebGPU the user
 ⌘/Ctrl-clicks frame 2 and Shift-clicks frame 6 in the thumbnail strip; without it the
 strip is not drawn, so the notebook picks the same frames with `viewer.drift_frames`.
 Then Find drift: the chart names the backend that ran, Python receives `viewer.drift`
-with the picked frames and the velocity in nm/s, and the drift-corrected panel appears
+with the picked frames and the velocity in nm/s fitted against each frame's own time,
+and the drift-corrected panel appears
 beside the frames. WebGPU and the CPU path agree to a few thousandths of a pixel.
 """
 
@@ -17,8 +19,9 @@ import pytest
 pytestmark = pytest.mark.browser
 
 SIZE, FRAMES = 256, 6
-VELOCITY_PX = (0.37, -0.23)                 # (row, col) px per frame, the specimen's motion
-PIXEL_NM, FRAME_S = 0.5, 2.0
+VELOCITY_PX_S = (0.185, -0.115)             # (row, col) px per second, the specimen's motion
+TIMES_S = [0.0, 2.0, 5.0, 7.0, 12.0, 14.0]  # when each frame was taken: unevenly spaced
+PIXEL_NM = 0.5
 PICKED = [1, 2, 3, 4, 5]                    # frames 2 to 6, as the strip numbers them
 
 NOTEBOOK = f"""import numpy as np
@@ -28,10 +31,10 @@ rows = np.fft.fftfreq({SIZE})[:, None]
 cols = np.fft.fftfreq({SIZE})[None, :]
 # a smooth specimen, as a HAADF frame is; a Fourier shift moves it exactly, also by a fraction of a pixel
 spectrum = np.fft.fft2(np.random.default_rng(0).random(({SIZE}, {SIZE}))) * np.exp(-(rows**2 + cols**2) * 200)
-stack = np.stack([np.fft.ifft2(spectrum * np.exp(-2j * np.pi * (rows * {VELOCITY_PX[0]} + cols * {VELOCITY_PX[1]}) * frame)).real
-                  for frame in range({FRAMES})]).astype(np.float32)
-viewer = Show3D(stack, sampling={PIXEL_NM}, units="nm", thumbnails=True, panel_width_px=320)
-viewer.dim_sampling, viewer.dim_unit = {FRAME_S}, "s"
+stack = np.stack([np.fft.ifft2(spectrum * np.exp(-2j * np.pi * (rows * {VELOCITY_PX_S[0]} + cols * {VELOCITY_PX_S[1]}) * at)).real
+                  for at in {TIMES_S}]).astype(np.float32)
+viewer = Show3D(stack, sampling={PIXEL_NM}, units="nm", thumbnails=True, panel_width_px=320, frame_times_s={TIMES_S})
+viewer.dim_unit = "s"
 viewer"""
 
 READ_DRIFT = """import json
@@ -80,9 +83,11 @@ def test_find_drift_in_a_notebook_on_webgpu_matches_the_cpu_path_and_the_known_d
         assert drift["backend"] == ("webgpu" if webgpu else "cpu"), drift["backend"]
         assert ("WebGPU" if webgpu else "CPU") in held["chart"], held["chart"]
         assert drift["frames"] == PICKED
-        np.testing.assert_allclose(drift["velocity_px_per_frame"], VELOCITY_PX, atol=0.01)
-        np.testing.assert_allclose(drift["velocity"], np.array(VELOCITY_PX) * PIXEL_NM / FRAME_S, atol=0.01 * PIXEL_NM / FRAME_S)
-        assert drift["velocity_unit"] == "nm/s" and drift["frame_interval_s"] == FRAME_S
+        np.testing.assert_allclose(drift["times_s"], np.array(TIMES_S)[PICKED] - TIMES_S[PICKED[0]])
+        np.testing.assert_allclose(drift["velocity_px_per_s"], VELOCITY_PX_S, atol=0.002)
+        np.testing.assert_allclose(drift["velocity"], np.array(VELOCITY_PX_S) * PIXEL_NM, atol=0.002 * PIXEL_NM)
+        assert drift["velocity_unit"] == "nm/s"
+        assert drift["frame_interval_s"] == pytest.approx((TIMES_S[PICKED[-1]] - TIMES_S[PICKED[0]]) / (len(PICKED) - 1))
         assert min(drift["fit_r2"]) > 0.999, drift["fit_r2"]
         assert held["n_panels"] == 2 and held["panels"] == ["frames", "drift corrected"], held
     np.testing.assert_allclose(found[True]["drift"]["shift_px"], found[False]["drift"]["shift_px"], atol=0.005)

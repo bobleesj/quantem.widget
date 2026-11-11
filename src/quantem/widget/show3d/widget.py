@@ -117,24 +117,32 @@ def _validated_float32(stack: np.ndarray, panel_name: str) -> np.ndarray:
     return stack_f32
 
 
-def drift_corrected(stack: np.ndarray, drift: Mapping) -> np.ndarray:
+def drift_corrected(stack: np.ndarray, drift: Mapping, *, frame_times_s: Sequence[float] | None = None) -> np.ndarray:
     """``stack`` with every frame moved back onto the first frame Find drift picked.
 
-    The picked frames move back by their measured ``shift_px``; the others by the fitted velocity.
+    The picked frames move back by their measured ``shift_px``; the others by the fitted velocity,
+    at their own time when ``frame_times_s`` gives one per frame, else at their frame index.
     A Fourier shift: sub-pixel, and the edges wrap around.
 
     Examples
     --------
-    >>> corrected = drift_corrected(frames, viewer.drift)  # doctest: +SKIP
+    >>> corrected = drift_corrected(frames, viewer.drift, frame_times_s=viewer.frame_times_s)  # doctest: +SKIP
     """
     frames = [int(frame) for frame in drift["frames"]]
     measured = {frame: shift for frame, shift in zip(frames, drift["shift_px"])}
     velocity = np.asarray(drift.get("velocity_px_per_frame", (0.0, 0.0)), dtype=np.float64)
+    per_second = drift.get("velocity_px_per_s")
+    timed = frame_times_s is not None and len(frame_times_s) == stack.shape[0] and per_second is not None
     rows = np.fft.fftfreq(stack.shape[1])[:, None]
     cols = np.fft.fftfreq(stack.shape[2])[None, :]
     out = np.empty(stack.shape, dtype=np.float32)
     for frame in range(stack.shape[0]):
-        shift = np.asarray(measured.get(frame, velocity * (frame - frames[0])), dtype=np.float64)
+        if frame in measured:
+            shift = np.asarray(measured[frame], dtype=np.float64)
+        elif timed:
+            shift = np.asarray(per_second, dtype=np.float64) * (frame_times_s[frame] - frame_times_s[frames[0]])
+        else:
+            shift = velocity * (frame - frames[0])
         # the specimen moved by shift; f(r + shift) <-> F(k) exp(+2 pi i k . shift)
         phase = np.exp(2j * np.pi * (rows * shift[0] + cols * shift[1]))
         out[frame] = np.fft.ifft2(np.fft.fft2(stack[frame]) * phase).real
@@ -236,6 +244,10 @@ class Show3D(
         Gap between panels in CSS pixels.
     dim_label : str
         Name of the frame axis in the controls ("Frame", "Slice", ...).
+    frame_times_s : sequence of float, optional
+        When each frame was taken, in seconds, one per frame, increasing. Find drift fits the drift
+        against these times, so unevenly spaced scans give their true velocity; without them it uses
+        frame index x ``dim_sampling`` when ``dim_unit`` is a time.
     display_bin : int
         Spatial mean bin of the browser display stack. The default 1 shows
         native pixels; a larger factor shrinks the payload of a large stack
@@ -294,6 +306,8 @@ class Show3D(
     # axis, shift and velocity (pixel_unit, per second). A result adds a "drift corrected" panel.
     drift_frames = traitlets.List(traitlets.Int()).tag(sync=True)
     drift = traitlets.Dict().tag(sync=True)
+    # When each frame was taken (s, one per frame); empty: frame index x dim_sampling.
+    frame_times_s = traitlets.List(traitlets.Float()).tag(sync=True)
     is_rgb = traitlets.Bool(False).tag(sync=True)
     # Bumped on every stack replacement so the frontend re-fires its render
     # effects even when a Bytes trait compares identical.
@@ -681,6 +695,18 @@ class Show3D(
         self.panel_annotations = _normalize_panel_annotations(panel_annotations, n_items=n_panels, labels=list(self.panel_titles))
         self.panel_overlays = _normalize_panel_overlays(panel_overlays, n_items=n_panels, labels=list(self.panel_titles))
 
+    @traitlets.validate("frame_times_s")
+    def _validate_frame_times_s(self, proposal: dict) -> list:
+        """One finite time per frame, increasing; empty clears them."""
+        times = [float(time) for time in proposal["value"]]
+        if not times:
+            return times
+        if len(times) != int(self.n_slices):
+            raise traitlets.TraitError(f"frame_times_s needs one time per frame: {int(self.n_slices)}, got {len(times)}")
+        if not all(np.isfinite(times)) or any(later <= earlier for earlier, later in zip(times, times[1:])):
+            raise traitlets.TraitError("frame_times_s must be finite and increase frame by frame")
+        return times
+
     @traitlets.observe("drift")
     def _show_drift_corrected(self, change: dict) -> None:
         """Show the frames moved back by a Find drift result as a "drift corrected" panel on the right."""
@@ -697,7 +723,7 @@ class Show3D(
             title = given if given and not (self.n_panels == 1 and given == "Panel 1") else "frames"
             self._drift_source = (np.ascontiguousarray(source, dtype=np.float32), title)
         source, title = self._drift_source
-        corrected = drift_corrected(source, drift)
+        corrected = drift_corrected(source, drift, frame_times_s=self.frame_times_s or None)
         kept = (self.dim_sampling, self.dim_unit, self.slice_idx, list(self.labels))
         display_bin = max(1, int(self.display_bin))
         with self.hold_sync():
@@ -770,6 +796,7 @@ class Show3D(
         rows: int | None = None,
         panel_gap_px: int = 0,
         dim_label: str = "Frame",
+        frame_times_s: Sequence[float] | None = None,
         display_bin: int = 1,
         save_state: bool = False,
         notebook_preview_format: str | None = "jpeg",
@@ -867,6 +894,8 @@ class Show3D(
             self.fft_overlay_zoom = fft_overlay_zoom
             self.panel_width_px = panel_width_px
             self.dim_label = str(dim_label)
+            if frame_times_s is not None:
+                self.frame_times_s = [float(time) for time in frame_times_s]
             self._reset_panel_settings(panel_annotations, panel_overlays)
             self._refresh_auto_contrast_ranges()
             self._pack_exact_offline_stack()
@@ -1211,11 +1240,11 @@ class Show3D(
         "frequency_filter_enabled", "frequency_filter_cutoff", "frequency_filter_cutoffs",
         "frequency_filter_center", "frequency_filter_centers", "frequency_filter_width",
         "frequency_filter_widths", "frequency_filter_scope", "show_frequency_filter",
-        "subpixel_align_enabled", "subpixel_align_reference", "dim_label", "dim_sampling", "dim_unit",
+        "subpixel_align_enabled", "subpixel_align_reference", "dim_label", "dim_sampling", "dim_unit", "frame_times_s",
         "labels", "panel_titles", "panel_title_spans",
     )
     # Keys whose length is tied to the stack; dropped on load when the sizes differ.
-    _FRAME_LENGTH_KEYS = ("labels", "frame_rotations")
+    _FRAME_LENGTH_KEYS = ("labels", "frame_rotations", "frame_times_s")
     _PANEL_LENGTH_KEYS = ("starred", "panel_titles", "panel_title_spans", "panel_cmaps", "vmin_per_panel", "vmax_per_panel", "panel_order")
 
     def state_dict(self) -> dict:

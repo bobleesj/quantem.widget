@@ -418,3 +418,37 @@ def test_find_drift_result_adds_a_drift_corrected_panel_that_undoes_the_shift():
         np.testing.assert_allclose(corrected[frame], base, atol=1e-4)
     widget.drift = dict(widget.drift)   # a second result corrects the original frames again, not the panels
     assert widget.n_panels == 2
+
+
+def test_frame_times_s_are_one_increasing_time_per_frame_and_time_the_corrected_frames():
+    """Unevenly taken frames: the corrected panel moves an unpicked frame by the velocity at its own time."""
+    from quantem.widget.show3d.widget import drift_corrected
+
+    rng = np.random.default_rng(0)
+    rows = np.fft.fftfreq(64)[:, None]
+    cols = np.fft.fftfreq(64)[None, :]
+    base = np.fft.ifft2(np.fft.fft2(rng.random((64, 64))) * np.exp(-(rows**2 + cols**2) * 200)).real
+    times = [0.0, 10.0, 15.0, 40.0]
+    per_second = (0.04, -0.03)
+
+    def moved(t):
+        return np.fft.ifft2(np.fft.fft2(base) * np.exp(-2j * np.pi * (rows * per_second[0] * t + cols * per_second[1] * t))).real
+
+    stack = np.stack([moved(t) for t in times]).astype(np.float32)
+    with pytest.raises(Exception, match="one time per frame"):
+        Show3D(stack, frame_times_s=[0, 1, 2], verbose=False)
+    with pytest.raises(Exception, match="increase"):
+        Show3D(stack, frame_times_s=[0, 2, 1, 3], verbose=False)
+    widget = Show3D(stack, sampling=0.5, units="nm", frame_times_s=times, verbose=False)
+    assert widget.frame_times_s == times
+    # Find drift on frames 1, 2 and 4 (stack 0, 1, 3): frame 3 (stack 2) is placed by its time, 15 s
+    drift = {"frames": [0, 1, 3], "shift_px": [[0, 0], [0.4, -0.3], [1.6, -1.2]],
+             "velocity_px_per_frame": [0.53, -0.4], "velocity_px_per_s": list(per_second), "fit_r2": [1, 1],
+             "times_s": [0, 10, 40]}
+    corrected = drift_corrected(stack, drift, frame_times_s=times)
+    for frame in range(4):
+        np.testing.assert_allclose(corrected[frame], base, atol=1e-4)
+    by_index = drift_corrected(stack, drift)          # without times the velocity per frame index misplaces it
+    assert np.abs(by_index[2] - base).max() > 1e-2
+    widget.drift = drift
+    assert widget.n_panels == 2 and widget.frame_times_s == times   # the corrected panel keeps the times

@@ -1597,6 +1597,7 @@ function Show3D() {
   // Find drift: frames picked in the thumbnail strip, the result Python reads, and the run's state
   const [drift, setDrift] = useModelState<Record<string, unknown>>("drift");
   const [driftFrames, setDriftFrames] = useModelState<number[]>("drift_frames");
+  const [frameTimesS] = useModelState<number[]>("frame_times_s");
   const [driftBusy, setDriftBusy] = React.useState(false);
   const [driftStatus, setDriftStatus] = React.useState("");
   const [subpixelAlignReference, setSubpixelAlignReference] = useModelState<number>("subpixel_align_reference");
@@ -2924,6 +2925,7 @@ function Show3D() {
       const device = await getHardwareGPUDevice();
       const result = await findDrift(frameOf, frames, panelWidth, height, device, {
         pixelSize: pixelSize || 0, pixelUnit: pixelUnit || "px", frameSampling: dimSampling || 1, frameUnit: dimUnit || "",
+        frameTimesS: frameTimesS && frameTimesS.length ? frameTimesS : null,
       });
       setDrift(JSON.parse(JSON.stringify(result)));
       setDriftStatus("");
@@ -2933,7 +2935,7 @@ function Show3D() {
       setDriftBusy(false);
     }
   }, [isRgb, nSlices, driftFrames, sharedPanelSource, nPanels, numPanelCols, width, height, getOfflineFrame,
-      pixelSize, pixelUnit, dimSampling, dimUnit, setDrift]);
+      pixelSize, pixelUnit, dimSampling, dimUnit, frameTimesS, setDrift]);
 
   const computeSubpixelAlignment = React.useCallback(async () => {
     const serial = ++subpixelAlignSerialRef.current;
