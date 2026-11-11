@@ -1,8 +1,14 @@
 """Chrome fixtures for the opt-in browser tier (WebGPU on and off).
 
-Run on a Mac: WebGPU uses the Apple GPU through Metal, headless too, so no window opens:
+Run on a Mac: WebGPU uses the Apple GPU through Metal, headless too, so the tier runs headless
+there by default and no window opens:
 
-    QUANTEM_WIDGET_BROWSER=1 QUANTEM_WIDGET_HEADLESS=1 python -m pytest tests/browser -s
+    QUANTEM_WIDGET_BROWSER=1 python -m pytest tests/browser -s
+
+A headed window on a Mac becomes the key window when it opens, so typing meant for another
+app lands in the test page: a space starts Show3D playback, ". " and Return search the
+omnibox. QUANTEM_WIDGET_HEADLESS=0 still opens windows, for watching a run with hands off
+the keyboard.
 
 On Linux, run headed on a display with an NVIDIA GPU (headless Chrome there falls back to
 its CPU renderer, which `hardware_adapter` rejects):
@@ -86,6 +92,16 @@ def stale_bundles() -> list[str]:
     return [bundle.name for bundle in bundles if bundle.stat().st_mtime < newest]
 
 
+def headless() -> bool:
+    """Headless on a Mac (Metal WebGPU either way, and no window to catch the desktop's typing); headed elsewhere.
+
+    QUANTEM_WIDGET_HEADLESS=1 or 0 overrides. Linux stays headed: headless Chrome there falls back to its
+    CPU renderer, which ``hardware_adapter`` rejects.
+    """
+    choice = os.environ.get("QUANTEM_WIDGET_HEADLESS")
+    return choice == "1" if choice in ("0", "1") else sys.platform == "darwin"
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "browser: headed Chrome with WebGPU on and off (opt-in)")
 
@@ -124,7 +140,7 @@ def chrome():
         env["VK_ICD_FILENAMES"] = NVIDIA_ICD
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
-            channel="chrome", headless=os.environ.get("QUANTEM_WIDGET_HEADLESS") == "1",
+            channel="chrome", headless=headless(),
             args=CHROME_ARGS, env=env,
         )
         yield browser
