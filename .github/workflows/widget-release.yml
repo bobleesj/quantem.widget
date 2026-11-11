@@ -199,6 +199,8 @@ jobs:
         env:
           QUANTEM_WIDGET_BROWSER: "1"
           QUANTEM_WIDGET_HEADLESS: "1"
+          # the installed wheel's bundles are the release under test, not a stale build of this checkout
+          QUANTEM_WIDGET_ALLOW_STALE_BUNDLE: "1"
           QUANTEM_SSB_RELEASE: "1"
           QUANTEM_SSB_RELEASE_BACKEND: ${{ matrix.backend }}
           QUANTEM_SSB_RELEASE_CALIBRATION: '{"semiangle_mrad":30,"scan_sampling_A":0.5,"detector_sampling_mrad":0.46}'
