@@ -5519,6 +5519,8 @@ function Show3D() {
         }
         setPanelHistogramBins(nextBins);
         setPanelDataRanges(nextRanges);
+        // the linked colorbar reads the stack range: without it a multi-panel colorbar was labelled 0 to 1
+        setImageDataRange(stackBounds);
         setImageHistogramBins(null);
         return;
       }
@@ -9987,7 +9989,14 @@ function Show3D() {
     return () => observer.disconnect();
   }, [thumbnails]);
   const thumbnailDataVersionRef = React.useRef(0);
-  const thumbnailDataVersion = React.useMemo(() => ++thumbnailDataVersionRef.current, [offlineFloatStack, offlineStack]);
+  // A new stack redraws every thumbnail; a streamed append only draws the new frames' thumbnails.
+  const thumbnailStackRef = React.useRef<DataView | null>(null);
+  const thumbnailDataVersion = React.useMemo(() => {
+    const previous = thumbnailStackRef.current;
+    thumbnailStackRef.current = offlineFloatStack ?? null;
+    if (streamedStackExtends(previous, offlineFloatStack) !== null) return thumbnailDataVersionRef.current;
+    return ++thumbnailDataVersionRef.current;
+  }, [offlineFloatStack, offlineStack]);
   const drawThumbnail = React.useCallback((canvas: HTMLCanvasElement, frame: number): boolean => {
     const engine = gpuCmapRef.current;
     if (!engine || !gpuCmapReadyRef.current || isRgb || !gpuFrameCacheUploadedRef.current.has(frame)) return false;
@@ -10168,7 +10177,12 @@ function Show3D() {
       ? "uint8 (decoded once for WebGPU)"
       : "float32";
   const displayBinLabel = resolvedDisplayBin === 1 ? "native" : `${resolvedDisplayBin}× mean-binned`;
-  const gpuStatusText = gpuResidency.stage === "uploading"
+  // An empty stream (Show3D.stream() before its first append) has no stack to describe yet; its
+  // "Waiting for the first frame" panel says so, and the banner returns with the first frame.
+  const awaitingFirstFrame = !nSlices;
+  const gpuStatusText = awaitingFirstFrame
+    ? ""
+    : gpuResidency.stage === "uploading"
     ? `Uploading ${displayBinLabel} ${displayPayloadLabel} display to WebGPU · ${gpuResidency.ready}/${Math.max(1, nSlices)} frames`
     : gpuResidency.stage === "ready"
       ? `${displayBinLabel} ${displayPayloadLabel} display · WebGPU resident · ${gpuResidency.ready}/${Math.max(1, nSlices)} frames`
@@ -10673,6 +10687,10 @@ function Show3D() {
               <MenuItem dense onClick={() => setShowStats(!showStats)} sx={{ fontSize: 12, gap: 1, color: showStats ? themeColors.accent : themeColors.text }}>
                 <Typography sx={{ flex: 1, fontSize: 12, color: "inherit" }} title="Mean / min / max / std readout under the image.">Stats</Typography>
                 <Switch checked={showStats} onClick={(e) => e.stopPropagation()} onChange={(e) => setShowStats(e.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Toggle statistics readout" } }} />
+              </MenuItem>
+              <MenuItem dense onClick={() => setThumbnails(!thumbnails)} sx={{ fontSize: 12, gap: 1, color: thumbnails ? themeColors.accent : themeColors.text }}>
+                <Typography sx={{ flex: 1, fontSize: 12, color: "inherit" }} title="Frame thumbnails beside the viewer: hover to preview a frame, click to go to it.">Thumbnails</Typography>
+                <Switch checked={Boolean(thumbnails)} onClick={(e) => e.stopPropagation()} onChange={(e) => setThumbnails(e.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Toggle frame thumbnails" } }} />
               </MenuItem>
               {hasPanelOverlays && (
                 <MenuItem dense onClick={() => setOverlayEditMode(!overlayEditMode)} sx={{ fontSize: 12, gap: 1, color: overlayEditMode ? themeColors.accent : themeColors.text }}>
@@ -11222,8 +11240,8 @@ function Show3D() {
             </Box>
           </Box>
           )}
-          <Box sx={thumbnails && nSlices > 1 ? { display: "flex", alignItems: "flex-start", gap: 1.5 } : { display: "contents" }}>
-          {thumbnails && nSlices > 1 && (
+          <Box sx={thumbnails && nSlices >= 1 ? { display: "flex", alignItems: "flex-start", gap: 1.5 } : { display: "contents" }}>
+          {thumbnails && nSlices >= 1 && (
             <ThumbnailStrip
               frames={nSlices}
               currentFrame={playing ? playbackUiSliceIdx : (sliceIdx ?? 0)}
@@ -11237,7 +11255,8 @@ function Show3D() {
               imageAspect={(sharedPanelSource ? Math.max(1, numPanelCols || width) : Math.max(1, numPanelCols || Math.round(width / Math.max(1, nPanels || 1)))) / Math.max(1, height)}
               draw={drawThumbnail}
               release={releaseThumbnail}
-              drawKey={`${thumbnailDataVersion}|${gpuResidency.ready}|${cmap}|${logScale}|${width}x${height}|${nPanels}|${nSlices}|${themeColors.bg}|${visiblePanelIndices[0] ?? 0}`}
+              drawKey={`${thumbnailDataVersion}|${cmap}|${logScale}|${width}x${height}|${nPanels}|${themeColors.bg}|${visiblePanelIndices[0] ?? 0}`}
+              retryKey={gpuResidency.ready}
               unavailableReason={thumbnailUnavailableReason}
               colors={{ text: themeColors.text, textMuted: themeColors.textMuted, border: themeColors.border, accent: themeColors.accent, controlBg: themeColors.controlBg }}
               chosen={driftFrames || []}
@@ -11256,7 +11275,7 @@ function Show3D() {
               width: "100%",
               maxWidth: canvasW,
               // beside the thumbnail strip the viewer keeps its own width; the row grows instead
-              ...(thumbnails && nSlices > 1 ? { width: canvasW, flex: "0 0 auto" } : {}),
+              ...(thumbnails && nSlices >= 1 ? { width: canvasW, flex: "0 0 auto" } : {}),
               boxSizing: "content-box",
               aspectRatio: mainPanelAspectRatio,
               height: "auto",
@@ -11413,8 +11432,8 @@ function Show3D() {
                   }}
                 >
                   {panelTitleContent(panel)}{frameLabel ? ` · ${frameLabel}` : ""}{" "}
-                  <span data-show3d-panel-frame-count="true" data-real-frame-count={total}>
-                    {shown}/{total}
+                  <span key={`${shown}/${total}`} data-show3d-panel-frame-count="true" data-real-frame-count={total}>
+                    {`${shown}/${total}`}
                   </span>
                 </Box>
               );
@@ -12035,6 +12054,9 @@ function Show3D() {
                     <Slider ref={playbackSliderRef} value={visibleSliceIdx} onPointerDownCapture={handleLoopSliderPointerDownCapture} onChange={(_, v) => scrubToSlice(v as number)} onChangeCommitted={(_, v) => commitSlice(v as number)} min={0} max={nSlices - 1} size="small" valueLabelDisplay="auto" valueLabelFormat={(v) => formatFrameValueLabel(v)} marks={bookmarkedFrameMarks} aria-label={`Current ${dimLabel.toLowerCase()} (${visibleSliceIdx + 1} of ${nSlices})`} sx={{ ...sliderStyles.small, width: 150, flex: "0 1 150px", minWidth: 90, "& .MuiSlider-mark": { bgcolor: "#ffc107", width: 5, height: 5, borderRadius: "50%", top: "50%", transform: "translate(-50%, -50%)" }, "& .MuiSlider-valueLabel": { maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }} />
                   )}
                   <span
+                    // writeLiveFrameControls replaces this text node during a gesture; the key remounts the span whenever React's
+                    // own text changes, so a streamed append (new total) or a kernel-side frame change always reaches the screen
+                    key={`${visibleSliceIdx}/${nSlices}`}
                     ref={playbackLiveCountRef}
                     data-show3d-playback-count="true"
                     style={{

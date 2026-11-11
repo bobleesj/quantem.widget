@@ -219,6 +219,8 @@ def test_export_clone_carries_view_state_and_embeds_pixels():
     assert (clone.n_slices, clone.height, clone.width) == (6, 8, 8)
     assert clone.pixel_size == pytest.approx(widget.pixel_size * 4)
     assert clone.playing is True and clone.cmap == "inferno" and clone._save_state is True
+    # the page header names the 128 x 128 source and the 16x mean bin (display 4 x export 4), not 8 x 8 as the original
+    assert (clone.source_height, clone.source_panel_width, clone.display_bin) == (128, 128, 16)
     state = clone.get_state()
     assert len(state["_offline_stack"]) == 6 * 8 * 8 and state["_offline_float_stack"] == b""
     clone.free()

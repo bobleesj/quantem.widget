@@ -305,7 +305,8 @@ class Session:
              "--disable-background-timer-throttling", "--window-size=1512,1100",
              # On the main display: a second display refreshing at another rate changes every
              # animation-frame-paced number (input coalescing, display-capped rates).
-             "--window-position=40,40", "about:blank"],
+             # QUANTEM_WIDGET_WINDOW_POSITION moves it, e.g. off a screen someone is working on.
+             f"--window-position={os.environ.get('QUANTEM_WIDGET_WINDOW_POSITION', '40,40')}", "about:blank"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True))
         for _ in range(120):
             try:

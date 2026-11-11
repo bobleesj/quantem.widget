@@ -34,8 +34,10 @@ export type ThumbnailStripProps = {
   draw: (canvas: HTMLCanvasElement, frame: number) => boolean;
   /** Free the GPU textures of a thumbnail scrolled far out of view; it is drawn again on return. */
   release: (canvas: HTMLCanvasElement) => void;
-  /** Changes whenever every thumbnail must be drawn again (data, colormap, scale, residency). */
+  /** Changes whenever every thumbnail must be drawn again (a new stack, colormap, scale). */
   drawKey: string;
+  /** Changes when more frames become drawable (resident on the GPU): thumbnails not yet drawn try again. */
+  retryKey: number | string;
   /** Why no thumbnail can be drawn (no WebGPU, a color stack); null when they can. */
   unavailableReason: string | null;
   colors: ThumbnailStripColors;
@@ -56,7 +58,7 @@ export type ThumbnailStripProps = {
  * drawn, once per `drawKey`. Hover previews a frame, click selects it; the header sets 1, 2 or 3 across.
  */
 export function ThumbnailStrip(props: ThumbnailStripProps) {
-  const { frames, currentFrame, labels, columns, height, imageAspect, draw, drawKey, colors } = props;
+  const { frames, currentFrame, labels, columns, height, imageAspect, draw, drawKey, retryKey, colors } = props;
   const chosen = React.useMemo(() => new Set(props.chosen ?? []), [props.chosen]);
   const lastChosen = React.useRef<number | null>(null);
   /** ⌘/Ctrl-click toggles a frame for Find drift; Shift-click adds the range from the last one; a plain click selects. */
@@ -132,7 +134,7 @@ export function ThumbnailStrip(props: ThumbnailStripProps) {
       if (canvas.height !== deviceHeight) canvas.height = deviceHeight;
       if (draw(canvas, frame)) drawnKeys.current.set(frame, drawKey);
     }
-  }, [visible, drawKey, deviceWidth, deviceHeight, draw, props.unavailableReason]);
+  }, [visible, drawKey, retryKey, frames, deviceWidth, deviceHeight, draw, props.unavailableReason]);
 
   // Keep the selected frame in view (playback, slider) unless the pointer is browsing the strip.
   React.useEffect(() => {
@@ -190,7 +192,7 @@ export function ThumbnailStrip(props: ThumbnailStripProps) {
           <Box sx={{
             // columns share the strip's last pixels, so no white sliver is left at the right edge
             display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gridAutoRows: `${cell}px`, gap: `${GAP}px`,
-            width: "100%", bgcolor: "#000",
+            width: "100%",
           }}>
           {Array.from({ length: frames }, (_, frame) => {
             const selected = frame === currentFrame;
@@ -206,10 +208,12 @@ export function ThumbnailStrip(props: ThumbnailStripProps) {
                   outline: selected ? `2px solid ${colors.accent}` : "none", outlineOffset: -2,
                   "&:hover": selected ? {} : { outline: "1px solid rgba(255,255,255,0.7)", outlineOffset: -1 },
                 }}>
+                {/* A 1fr column is a fraction of a pixel wider than the whole-pixel row: "contain" would letterbox that
+                    fraction and show the cell background as a seam, so an image that fills its cell covers it. */}
                 <canvas
                   ref={(el) => { if (el) canvasRefs.current.set(frame, el); else canvasRefs.current.delete(frame); }}
                   aria-label={`Frame ${frame + 1} thumbnail`}
-                  style={{ display: "block", width: imageWidth >= cell ? "100%" : imageWidth, height: imageHeight >= cell ? "100%" : imageHeight, objectFit: "contain" }}
+                  style={{ display: "block", width: imageWidth >= cell ? "100%" : imageWidth, height: imageHeight >= cell ? "100%" : imageHeight, objectFit: imageWidth >= cell && imageHeight >= cell ? "cover" : "contain" }}
                 />
                 <Box sx={{
                   position: "absolute", left: 3, bottom: 3, px: 0.5, maxWidth: cell - 6,

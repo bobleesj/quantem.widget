@@ -149,6 +149,11 @@ class Show3DExport:
             clone._pack_offline_u8_stack()
         else:
             clone._pack_exact_offline_stack()
+        # The page header names the original stack and the mean bin between it and these pixels
+        # (the live display bin times the export's image bin), not the binned stack as if it were the source.
+        clone.source_height = int(self.source_height or self.height)
+        clone.source_panel_width = int(self.source_panel_width or self.num_panel_cols or self.width)
+        clone.display_bin = max(1, int(self.display_bin)) * image_bin
         clone.playing = bool(self.playing)
         clone.export_enabled = False
         clone.export_status = ""

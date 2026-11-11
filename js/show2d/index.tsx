@@ -8960,7 +8960,7 @@ function Show2D() {
                   <Box sx={{ ...controlRow, ...mobileControlRowSx, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
                     <Box sx={controlPairSx}>
                       <Typography sx={compactLabelSx}>Scale</Typography>
-                      <Select value={logScale ? "log" : "linear"} onChange={(e) => setLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45 }} MenuProps={themedMenuProps}>
+                      <Select value={logScale ? "log" : "linear"} onChange={(e) => setLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45 }} MenuProps={themedMenuProps} inputProps={{ "aria-label": "Intensity scale (linear or logarithmic)" }}>
                         <MenuItem value="linear">Lin</MenuItem>
                         <MenuItem value="log">Log</MenuItem>
                       </Select>
@@ -9065,7 +9065,7 @@ function Show2D() {
                     <Box sx={{ ...controlRow, ...mobileControlRowSx, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
                       <Box sx={controlPairSx}>
                         <Typography sx={compactLabelSx} title="Poisson (Anscombe): count-respecting smoothing for sparse EDS/counting data - recommended with Bin 2, sigma 6-10. Gaussian: simple smooth for decent-dose images. None: raw counts (use for anything quantitative).">Denoise</Typography>
-                        <Select size="small" value={denoiseBaseMode} onChange={(e) => { const mode = e.target.value; setDisplayFilter(mode); mirrorFilterKnobEdit("mode", mode); if (mode !== "none" || (spatialBin || 1) > 1) setDenoiseEnabled(true); }} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 88 }}>
+                        <Select size="small" inputProps={{ "aria-label": "Denoise mode" }} value={denoiseBaseMode} onChange={(e) => { const mode = e.target.value; setDisplayFilter(mode); mirrorFilterKnobEdit("mode", mode); if (mode !== "none" || (spatialBin || 1) > 1) setDenoiseEnabled(true); }} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 88 }}>
                           {[["none", "None"], ["gaussian", "Gaussian"], ["anscombe", "Poisson (Anscombe)"]].map(([mode, label]) => (
                             <MenuItem key={mode} value={mode}>{label}</MenuItem>
                           ))}
@@ -9073,7 +9073,7 @@ function Show2D() {
                       </Box>
                       <Box sx={controlPairSx}>
                         <Typography sx={{ ...compactLabelSx, minWidth: 40, display: "inline-block" }}>σ {(sigmaDraft ?? Number(displaySigma ?? 4)).toFixed(1)}</Typography>
-                        <Slider
+                        <Slider aria-label="Denoise sigma (px)"
                           value={sigmaDraft ?? Number(displaySigma ?? 4)}
                           min={0} max={20} step={0.5}
                           onChange={(_, value) => { if (denoiseBaseMode === "none") { setDisplayFilter("gaussian"); mirrorFilterKnobEdit("mode", "gaussian"); } setSigmaDraftDuringDrag(value as number); }}
@@ -9083,7 +9083,7 @@ function Show2D() {
                       </Box>
                       <Box sx={controlPairSx}>
                         <Typography sx={compactLabelSx} title="Display-side 2x bin passes for SNR, combined with the denoise method. 1 is lossless.">Bin</Typography>
-                        <Select size="small" value={String(spatialBin || 1)} onChange={(e) => { const bin = parseInt(e.target.value, 10); setSpatialBin(bin); mirrorFilterKnobEdit("bin", bin); if (bin > 1 || denoiseBaseMode !== "none") setDenoiseEnabled(true); }} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 40 }}>
+                        <Select size="small" inputProps={{ "aria-label": "Denoise spatial bin" }} value={String(spatialBin || 1)} onChange={(e) => { const bin = parseInt(e.target.value, 10); setSpatialBin(bin); mirrorFilterKnobEdit("bin", bin); if (bin > 1 || denoiseBaseMode !== "none") setDenoiseEnabled(true); }} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 40 }}>
                           {[1, 2, 4].map((bin) => (<MenuItem key={bin} value={String(bin)}>{bin}</MenuItem>))}
                         </Select>
                       </Box>
@@ -9093,7 +9093,7 @@ function Show2D() {
                     <Box sx={{ ...controlRow, ...mobileControlRowSx, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
                       <Box sx={controlPairSx}>
                         <Typography sx={compactLabelSx} title="Low-pass removes fine detail; High-pass removes slow background; Band-pass isolates a periodicity.">Filter</Typography>
-                        <Select size="small" value={frequencyUiKnobs.mode} onChange={(event) => { const mode = String(event.target.value); setFrequencyFilter(mode); mirrorFrequencyKnobEdit("mode", mode); if (mode !== "none") setFrequencyFilterEnabled(true); }} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 84 }}>
+                        <Select size="small" inputProps={{ "aria-label": "Frequency filter mode" }} value={frequencyUiKnobs.mode} onChange={(event) => { const mode = String(event.target.value); setFrequencyFilter(mode); mirrorFrequencyKnobEdit("mode", mode); if (mode !== "none") setFrequencyFilterEnabled(true); }} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 84 }}>
                           <MenuItem value="none">None</MenuItem>
                           <MenuItem value="lowpass">Low-pass</MenuItem>
                           <MenuItem value="highpass">High-pass</MenuItem>
@@ -9167,7 +9167,7 @@ function Show2D() {
                       size="small"
                       value={newRoiShape}
                       onChange={(e) => setNewRoiShape(e.target.value as "circle" | "square" | "rectangle" | "annular")}
-                      MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 85, fontSize: 10 }}
+                      inputProps={{ "aria-label": "New ROI shape" }} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 85, fontSize: 10 }}
                     >
                       {(["square", "rectangle", "circle", "annular"] as const).map((shape) => (<MenuItem key={shape} value={shape}>{shape.charAt(0).toUpperCase() + shape.slice(1)}</MenuItem>))}
                     </Select>
@@ -9189,30 +9189,30 @@ function Show2D() {
                         size="small"
                         value={selectedRoi.shape || "circle"}
                         onChange={(e) => updateSelectedRoi({ shape: e.target.value })}
-                        MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 85, fontSize: 10 }}
+                        inputProps={{ "aria-label": "Selected ROI shape" }} MenuProps={themedMenuProps} sx={{ ...themedSelect, minWidth: 85, fontSize: 10 }}
                       >
                         {(["square", "rectangle", "circle", "annular"] as const).map((shape) => (<MenuItem key={shape} value={shape}>{shape.charAt(0).toUpperCase() + shape.slice(1)}</MenuItem>))}
                       </Select>
                       {selectedRoi.shape === "rectangle" && (
                         <>
                           <Typography sx={{ ...typography.label, fontSize: 10 }}>W</Typography>
-                          <Slider value={selectedRoi.width} min={5} max={width} onChange={(_, value) => updateSelectedRoi({ width: value as number })} size="small" sx={{ ...sliderStyles.small, width: 40 }} />
+                          <Slider aria-label="ROI width (px)" value={selectedRoi.width} min={5} max={width} onChange={(_, value) => updateSelectedRoi({ width: value as number })} size="small" sx={{ ...sliderStyles.small, width: 40 }} />
                           <Typography sx={{ ...typography.label, fontSize: 10 }}>H</Typography>
-                          <Slider value={selectedRoi.height} min={5} max={height} onChange={(_, value) => updateSelectedRoi({ height: value as number })} size="small" sx={{ ...sliderStyles.small, width: 40 }} />
+                          <Slider aria-label="ROI height (px)" value={selectedRoi.height} min={5} max={height} onChange={(_, value) => updateSelectedRoi({ height: value as number })} size="small" sx={{ ...sliderStyles.small, width: 40 }} />
                         </>
                       )}
                       {selectedRoi.shape === "annular" && (
                         <>
                           <Typography sx={{ ...typography.label, fontSize: 10 }}>Inner</Typography>
-                          <Slider value={selectedRoi.radius_inner} min={1} max={selectedRoi.radius - 1} onChange={(_, value) => updateSelectedRoi({ radius_inner: value as number })} size="small" sx={{ ...sliderStyles.small, width: 40 }} />
+                          <Slider aria-label="ROI inner radius (px)" value={selectedRoi.radius_inner} min={1} max={selectedRoi.radius - 1} onChange={(_, value) => updateSelectedRoi({ radius_inner: value as number })} size="small" sx={{ ...sliderStyles.small, width: 40 }} />
                           <Typography sx={{ ...typography.label, fontSize: 10 }}>Outer</Typography>
-                          <Slider value={selectedRoi.radius} min={selectedRoi.radius_inner + 1} max={Math.max(width, height)} onChange={(_, value) => updateSelectedRoi({ radius: value as number })} size="small" sx={{ ...sliderStyles.small, width: 40 }} />
+                          <Slider aria-label="ROI outer radius (px)" value={selectedRoi.radius} min={selectedRoi.radius_inner + 1} max={Math.max(width, height)} onChange={(_, value) => updateSelectedRoi({ radius: value as number })} size="small" sx={{ ...sliderStyles.small, width: 40 }} />
                         </>
                       )}
                       {selectedRoi.shape !== "rectangle" && selectedRoi.shape !== "annular" && (
                         <>
                           <Typography sx={{ ...typography.label, fontSize: 10 }}>Size</Typography>
-                          <Slider value={selectedRoi.radius} min={5} max={Math.max(width, height)} onChange={(_, value) => updateSelectedRoi({ radius: value as number })} size="small" sx={{ ...sliderStyles.small, width: 50 }} />
+                          <Slider aria-label="ROI radius (px)" value={selectedRoi.radius} min={5} max={Math.max(width, height)} onChange={(_, value) => updateSelectedRoi({ radius: value as number })} size="small" sx={{ ...sliderStyles.small, width: 50 }} />
                         </>
                       )}
                       <Box sx={{ display: "flex", gap: "2px" }}>
@@ -9221,7 +9221,7 @@ function Show2D() {
                         ))}
                       </Box>
                       <Typography sx={{ ...typography.label, fontSize: 10 }}>Border</Typography>
-                      <Slider value={selectedRoi.line_width} min={1} max={6} step={1} onChange={(_, value) => updateSelectedRoi({ line_width: value as number })} size="small" sx={{ ...sliderStyles.small, width: 30 }} />
+                      <Slider aria-label="ROI line width (px)" value={selectedRoi.line_width} min={1} max={6} step={1} onChange={(_, value) => updateSelectedRoi({ line_width: value as number })} size="small" sx={{ ...sliderStyles.small, width: 30 }} />
                       <Box
                         onClick={() => updateSelectedRoi({ highlight: !selectedRoi.highlight })}
                         sx={{ cursor: "pointer", fontSize: 10, color: selectedRoi.highlight ? themeColors.accentGreen : themeColors.textMuted, "&:hover": { opacity: 0.8 } }}
@@ -9274,7 +9274,7 @@ function Show2D() {
               <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: "1 1 260px", minWidth: 0, justifyContent: "flex-start" }}>
                 <Box sx={{ ...controlRow, ...mobileControlRowSx, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
                   <Typography sx={{ ...typography.label, fontSize: 10 }}>FFT Scale</Typography>
-                  <Select value={fftScaleMode} onChange={(e) => setFftScaleMode(e.target.value as "linear" | "log")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
+                  <Select value={fftScaleMode} onChange={(e) => setFftScaleMode(e.target.value as "linear" | "log")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps} inputProps={{ "aria-label": "FFT intensity scale (linear or logarithmic)" }}>
                     <MenuItem value="linear">Lin</MenuItem>
                     <MenuItem value="log">Log</MenuItem>
                   </Select>
@@ -9285,7 +9285,7 @@ function Show2D() {
                     </>
                   )}
                   <Typography sx={{ ...typography.label, fontSize: 10 }}>Color</Typography>
-                  <Select value={fftColormap} onChange={(e) => setFftColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
+                  <Select value={fftColormap} onChange={(e) => setFftColormap(String(e.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps} inputProps={{ "aria-label": "FFT colormap" }}>
                     {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name}>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
                   </Select>
                 </Box>
@@ -9489,7 +9489,7 @@ function Show2D() {
                   {/* Row 1: Scale + Color + Colorbar */}
                   <Box sx={{ ...controlRow, ...mobileControlRowSx, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
                     <Typography sx={{ ...typography.label, fontSize: 10 }}>Scale</Typography>
-                    <Select value={fftScaleMode} onChange={(e) => setFftScaleMode(e.target.value as "linear" | "log")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
+                    <Select value={fftScaleMode} onChange={(e) => setFftScaleMode(e.target.value as "linear" | "log")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps} inputProps={{ "aria-label": "FFT intensity scale (linear or logarithmic)" }}>
                       <MenuItem value="linear">Lin</MenuItem>
                       <MenuItem value="log">Log</MenuItem>
                     </Select>

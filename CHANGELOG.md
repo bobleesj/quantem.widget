@@ -93,6 +93,16 @@ the renamed names and keep their versions.
 
 ### Fixed
 
+- Show3D with Link contrast labelled the colorbar 0 to 1 on a multi-panel stack; it shows the stack's range.
+- Show3D thumbnail strip: no seam between cells and no black empty slots; More > Thumbnails brings back a strip
+  closed with its x.
+- Show3D frame counter kept the old total while frames streamed in and the view stayed on an earlier frame; it now
+  updates with every append.
+- A binned Show3D HTML export called its binned pixels "Original"; the header names the original stack and the mean
+  bin (for example 4096x4096, 4x4 mean bin to 1024x1024).
+- An empty `Show3D.stream()` showed "Original: 1 frames x 1x1"; it shows only its waiting panel until the first frame.
+- `io.download(verbose=False)` printed the Hugging Face progress bars; they are hidden for that call.
+- Show2D scale, denoise mode, sigma, bin, ROI size and FFT controls had no accessible names; each has one.
 - Show3D's magnifier lens indexed the colormap with rounding where the image truncates, so it could show the next
   color entry; it now uses the display shader's float32 normalize and truncation.
 - Show4DSTEM ignored `fft_window` on the full-image FFT (it applied only to an ROI crop); the Hann window now applies
