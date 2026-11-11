@@ -23,6 +23,7 @@ warnings.filterwarnings("ignore", message=r"(?s).*HF_TOKEN.*")
 warnings.filterwarnings("ignore", message=r"anywidget: Live-reloading feature is disabled")
 
 _LAZY_EXPORTS: dict[str, tuple[str, str | None]] = {
+    "DiffractionSim": ("quantem.widget.diffraction_sim", "DiffractionSim"),
     "ScanControl": ("quantem.widget.scan_control", "ScanControl"),
     "ShowGPU": ("quantem.widget.showgpu", "ShowGPU"),
     "Show1D": ("quantem.widget.show1d", "Show1D"),
@@ -121,6 +122,7 @@ def release_cached_memory(verbose: bool = True) -> float:
 
 
 __all__ = [
+    "DiffractionSim",
     "ScanControl",
     "ShowGPU",
     "Show1D",

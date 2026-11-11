@@ -74,6 +74,7 @@ parts:
           - file: api/showptycho
           - file: api/showpdf
           - file: api/scan-control
+          - file: api/diffractionsim
           - file: api/html-export
           - file: api/io
       - file: developer/widget-creation

@@ -91,6 +91,12 @@ the renamed names and keep their versions.
   Show4DSTEM `stream_follow`; ShowPtycho `calibration_image_path`, `local_tilt_can_reconstruct`) are plain Python
   traits now.
 
+### Added
+
+- DiffractionSim coordination polyhedra: in a compound, centres bond only to the most numerous species and get a polyhedron for 4 to 8 ligands, so SrTiO3 shows TiO6 octahedra instead of a cube of Sr around each Ti. An elemental crystal gets polyhedra on one set of a two-set neighbour network, which gives Si four SiSi4 tetrahedra inside the cell instead of interpenetrating tetrahedra on all eight atoms, and fcc, bcc and hcp metals get none.
+- Add `DiffractionSim`: rotate a unit cell and see its nanobeam, CBED or Kikuchi pattern update live, with kinematical or Bloch wave intensities computed in the browser, state save/load, and HTML export. It needs quantem 0.1.10 or later (`quantem.diffraction.Crystal` and `bloch`).
+- Add `quantem.diffsim`, a separate PyPI package with no dependencies, built from `packages/quantem.diffsim`: the browser build of DiffractionSim (`npm run build:web`) for web pages and Dash apps, with `settings()` and `save_html()` for pymatgen, ASE or CIF structures and `quantem.diffsim.dash` for Dash. A page can pass its structure as CIF text, which replaces the structure menu, and shows a "Powered by quantEM" link to the quantEM documentation. CIFs loaded in the browser now get the absorptive Weickenmeier-Kohl couplings with a Debye-Waller factor, ported from quantem, instead of an absorption fixed at 8 % of the elastic coupling, which was up to 5 times too strong for the low-order reflections of light elements and up to 4 times too weak for the high-order reflections of gold.
+
 ### Fixed
 
 - Show3D with Link contrast labelled the colorbar 0 to 1 on a multi-panel stack; it shows the stack's range.

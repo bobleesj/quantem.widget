@@ -135,6 +135,7 @@ The guide includes setup and browser requirements.
 | `ShowPtycho` | Interactive direct phase and aberration review | [API](https://electronmicroscopy.github.io/quantem.widget/api/showptycho.html) |
 | `ShowPDF` | Pair distribution function analysis of 4D-STEM data by scan region | [API](https://electronmicroscopy.github.io/quantem.widget/api/showpdf.html) |
 | `ScanControl` | Connect, set up and run scans; detector files | [API](docs/api/scan-control.md) |
+| `DiffractionSim` | Rotate a crystal and see its nanobeam, CBED, or Kikuchi pattern, computed in the browser | [API](docs/api/diffractionsim.md) |
 
 ## Documentation
 

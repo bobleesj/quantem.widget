@@ -146,6 +146,7 @@ OPTIONAL = {
     "ipyfilechooser": "FolderPicker, used by quantem.live",
     "playwright": "quantem-widget github widget screenshots",
     "tqdm": "progress bars when it is installed",
+    "ase": "DiffractionSim crystals; ASE arrives with quantem core, imported inside the functions that need it",
 }
 # Declared without a Python import: a tifffile codec plugin and the JupyterLab widget manager.
 NOT_IMPORTED = {"imagecodecs", "jupyterlab_widgets"}
@@ -160,6 +161,10 @@ def test_every_import_is_declared_or_optional_and_every_dependency_is_imported()
         tree = ast.parse(path.read_text(encoding="utf-8"))
         in_function = {id(inner) for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
                        for inner in ast.walk(node)}
+        # `if TYPE_CHECKING:` imports never run; they only name types for annotations
+        in_function |= {id(inner) for node in ast.walk(tree)
+                        if isinstance(node, ast.If) and isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING"
+                        for inner in ast.walk(node)}
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 names = [alias.name for alias in node.names]

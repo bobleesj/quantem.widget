@@ -50,5 +50,6 @@ readers and test agents.
 | [ShowPtycho](showptycho) | `quantem.widget.ShowPtycho` | ptychography state JSON, WebGPU folder export with BF-indexed `G(k)` payload |
 | [ShowPDF](showpdf) | `quantem.widget.showpdf.ShowPDF` | state JSON, results zip (CSV), PNG/PDF/TIFF curves, interactive HTML (`encoding="full"` / `encoding="uint8"`) |
 | [ScanControl](scan-control) | `quantem.widget.ScanControl` | Live acquisition control only |
+| [DiffractionSim](diffractionsim) | `quantem.widget.DiffractionSim` | state JSON, PNG, interactive HTML |
 
 All widget-level HTML exports follow the [HTML export](html-export) protocol.

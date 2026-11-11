@@ -198,7 +198,21 @@ def test_stream_updates_while_notebook_waits():
             viewer.close()
         assert not viewer._stream_thread.is_alive()
 
-    asyncio.run(notebook())
+    # A notebook thread of its own: a browser test earlier in the run (Playwright) leaves an event
+    # loop running on this one, where asyncio.run() refuses to start.
+    errors = []
+
+    def kernel():
+        try:
+            asyncio.run(notebook())
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=kernel)
+    thread.start()
+    thread.join()
+    if errors:
+        raise errors[0]
 
 
 def test_stream_coalesces_until_browser_receipt_and_delivers_final_counts(recording, monkeypatch):
