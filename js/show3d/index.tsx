@@ -3321,14 +3321,27 @@ function Show3D() {
     state: PanelState,
     stackBounds: { min: number; max: number },
   ): (Pick<PanelState, "imageVminPct" | "imageVmaxPct"> & { vmin: number; vmax: number }) | null => {
-    const panelRaw = panelHistogramData[panel];
-    if (!panelRaw || panelRaw.length === 0) return null;
-    // panelHistogramData is already in the active display domain; in log mode
-    // refreshHistogram populated it from extractPanelSlice(..., logScale).
     const panelRange = panelDataRanges[panel];
     const range = (panelRange && panelRange.max > panelRange.min) ? panelRange : stackBounds;
     const span = range.max - range.min;
     if (span <= 0) return null;
+    // The handles show the range the image is drawn with (resolvePanelRenderRange): the stack-wide
+    // Auto range when it applies, else this panel's percentile clip of the frame shown.
+    const stable = stablePanelAutoRange(panel, percentileLow, percentileHigh);
+    if (stable) {
+      return {
+        vmin: stable.vmin,
+        vmax: Math.max(stable.vmin, stable.vmax),
+        imageVminPct: valueToPct(stable.vmin, range.min, range.max, state.imageVminPct),
+        imageVmaxPct: valueToPct(stable.vmax, range.min, range.max, state.imageVmaxPct),
+      };
+    }
+    // panelHistogramData is in the active display domain (extractPanelSlice(..., logScale)). A histogram
+    // binned on WebGPU leaves it empty, so take the panel from the frame shown.
+    const shown = displayFrameRef.current;
+    const panelRaw = panelHistogramData[panel]
+      ?? (shown && shown.length > 0 ? extractPanelSlice(shown, panel, logScale) : null);
+    if (!panelRaw || panelRaw.length === 0) return null;
     let clipped: { vmin: number; vmax: number } = percentileClip(panelRaw, percentileLow, percentileHigh);
     if (
       !Number.isFinite(clipped.vmin) ||
@@ -5613,7 +5626,7 @@ function Show3D() {
       });
       return out;
     });
-  }, [perPanelHistogramEnabled, autoContrast, panelHistogramData, panelDataRanges, dataMin, dataMax, traitVmin, traitVmax, logScale, percentileLow, percentileHigh]);
+  }, [perPanelHistogramEnabled, autoContrast, panelHistogramData, panelDataRanges, dataMin, dataMax, traitVmin, traitVmax, logScale, percentileLow, percentileHigh, autoVminsPerPanel, autoVmaxsPerPanel]);
 
   React.useEffect(() => {
     if (!perPanelHistogramEnabled || autoContrast || panelDataRanges.length === 0) return;
