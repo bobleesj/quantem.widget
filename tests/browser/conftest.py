@@ -1,8 +1,13 @@
-"""Headed-Chrome fixtures for the opt-in browser tier (WebGPU on and off).
+"""Chrome fixtures for the opt-in browser tier (WebGPU on and off).
 
-Run on a machine with a display and a GPU:
+Run on a Mac: WebGPU uses the Apple GPU through Metal, headless too, so no window opens:
 
-    QUANTEM_WIDGET_BROWSER=1 DISPLAY=:0 python -m pytest tests/browser -s
+    QUANTEM_WIDGET_BROWSER=1 QUANTEM_WIDGET_HEADLESS=1 python -m pytest tests/browser -s
+
+On Linux, run headed on a display with an NVIDIA GPU (headless Chrome there falls back to
+its CPU renderer, which `hardware_adapter` rejects):
+
+    QUANTEM_WIDGET_BROWSER=1 DISPLAY=:1 python -m pytest tests/browser -s
 
 Chrome is pointed at the NVIDIA Vulkan driver when it exists, so WebGPU runs
 on the hardware adapter instead of Chrome's bundled CPU renderer.

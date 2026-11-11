@@ -2,7 +2,7 @@
 
 Six frames of a smooth random specimen move by a known (0.37, -0.23) px per frame,
 shifted in Fourier space so the motion is exact and subpixel. With WebGPU the user
-Ctrl-clicks frame 2 and Shift-clicks frame 6 in the thumbnail strip; without it the
+⌘/Ctrl-clicks frame 2 and Shift-clicks frame 6 in the thumbnail strip; without it the
 strip is not drawn, so the notebook picks the same frames with `viewer.drift_frames`.
 Then Find drift: the chart names the backend that ran, Python receives `viewer.drift`
 with the picked frames and the velocity in nm/s, and the drift-corrected panel appears
@@ -49,7 +49,7 @@ def find_drift(jupyter, open_page, hardware_adapter, browser_out, webgpu: bool) 
     adapter = page.adapter() if webgpu else None
     if webgpu:
         hardware_adapter(adapter)
-        page.get_by_label("Frame 2 thumbnail").click(modifiers=["Control"])
+        page.get_by_label("Frame 2 thumbnail").click(modifiers=["ControlOrMeta"])   # ⌘-click on a Mac: Ctrl-click there is a right click
         page.get_by_label("Frame 6 thumbnail").click(modifiers=["Shift"])
         for frame in range(1, FRAMES + 1):
             picked = page.get_by_label(f"Frame {frame} picked for Find drift")
