@@ -10,7 +10,9 @@ its CPU renderer, which `hardware_adapter` rejects):
     QUANTEM_WIDGET_BROWSER=1 DISPLAY=:1 python -m pytest tests/browser -s
 
 Chrome is pointed at the NVIDIA Vulkan driver when it exists, so WebGPU runs
-on the hardware adapter instead of Chrome's bundled CPU renderer.
+on the hardware adapter instead of Chrome's bundled CPU renderer. The tier
+refuses to start on a stale frontend: a widget bundle older than the js/
+sources, or a quantem.widget imported from outside this checkout.
 """
 
 import functools
@@ -53,6 +55,33 @@ async () => {
 }
 """
 RENDER_PATHS = "() => Array.from(document.querySelectorAll('[data-render-path]')).map(e => e.dataset.renderPath)"
+JS_SOURCES = Path(__file__).resolve().parents[2] / "js"
+
+
+def stale_bundles() -> list[str]:
+    """Widget bundles older than the newest frontend source, in the quantem.widget the tests import.
+
+    The tests must import this checkout's quantem.widget: another checkout's or an installed copy's
+    bundles were built from other sources. A bundle built before a pull or merge still loads and
+    draws through the code it was built from, so a headed run would test old frontend code against
+    new tests. Git gives every file a checkout changes the current time, so a changed source is
+    newer than a bundle built before it.
+    """
+    import quantem.widget
+
+    package = Path(quantem.widget.__file__).resolve().parent
+    if not package.is_relative_to(JS_SOURCES.parent / "src"):
+        return [f"quantem.widget is imported from {package}, not this checkout's src/ (set PYTHONPATH=src)"]
+    static = package / "static"
+    sources = [path for path in JS_SOURCES.rglob("*") if path.suffix in (".ts", ".tsx")
+               and ".test." not in path.name and ".generated" not in path.parts]
+    if not sources:
+        return []
+    newest = max(path.stat().st_mtime for path in sources)
+    bundles = sorted(static.glob("*.js"))
+    if not bundles:
+        return [f"no bundles in {static.name}/"]
+    return [bundle.name for bundle in bundles if bundle.stat().st_mtime < newest]
 
 
 def pytest_configure(config):
@@ -79,6 +108,14 @@ def browser_out(tmp_path_factory) -> Path:
 @pytest.fixture(scope="session")
 def chrome():
     from playwright.sync_api import sync_playwright
+
+    stale = stale_bundles()
+    if stale and os.environ.get("QUANTEM_WIDGET_ALLOW_STALE_BUNDLE") != "1":
+        pytest.fail(
+            f"Stale frontend: {', '.join(stale)}. Rebuild (npm run build, see CONTRIBUTING.md) "
+            "so the browser runs this checkout's frontend; QUANTEM_WIDGET_ALLOW_STALE_BUNDLE=1 skips this check "
+            "(an installed-wheel run)."
+        )
 
     env = dict(os.environ)
     if os.path.exists(NVIDIA_ICD):
