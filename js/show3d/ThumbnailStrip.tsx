@@ -1,6 +1,7 @@
 import * as React from "react";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
+import { DriftChart, type DriftReadout } from "./DriftChart";
 
 /** CSS width of the strip. The thumbnails are square and share it: 1, 2 or 3 across. */
 export const THUMBNAIL_STRIP_WIDTH = 264;
@@ -38,6 +39,16 @@ export type ThumbnailStripProps = {
   /** Why no thumbnail can be drawn (no WebGPU, a color stack); null when they can. */
   unavailableReason: string | null;
   colors: ThumbnailStripColors;
+  /** Frames picked for Find drift (stack indices); ⌘/Ctrl-click toggles one, Shift-click picks a range. */
+  chosen?: number[];
+  onChoose?: (frames: number[]) => void;
+  /** Runs Find drift on the picked frames (every frame when fewer than two are picked). */
+  onFindDrift?: () => void;
+  /** The button's words while it runs, or the last result's status. */
+  driftStatus?: string;
+  driftBusy?: boolean;
+  /** The last Find drift result, drawn as a chart under the thumbnails. */
+  drift?: DriftReadout | null;
 };
 
 /**
@@ -46,6 +57,27 @@ export type ThumbnailStripProps = {
  */
 export function ThumbnailStrip(props: ThumbnailStripProps) {
   const { frames, currentFrame, labels, columns, height, imageAspect, draw, drawKey, colors } = props;
+  const chosen = React.useMemo(() => new Set(props.chosen ?? []), [props.chosen]);
+  const lastChosen = React.useRef<number | null>(null);
+  /** ⌘/Ctrl-click toggles a frame for Find drift; Shift-click adds the range from the last one; a plain click selects. */
+  const handleClick = (event: React.MouseEvent, frame: number) => {
+    if (props.onChoose && (event.metaKey || event.ctrlKey)) {
+      const next = new Set(chosen);
+      if (next.has(frame)) next.delete(frame); else next.add(frame);
+      lastChosen.current = frame;
+      props.onChoose([...next].sort((a, b) => a - b));
+      return;
+    }
+    if (props.onChoose && event.shiftKey) {
+      const from = lastChosen.current ?? currentFrame;
+      const next = new Set(chosen);
+      for (let f = Math.min(from, frame); f <= Math.max(from, frame); f++) next.add(f);
+      lastChosen.current = frame;
+      props.onChoose([...next].sort((a, b) => a - b));
+      return;
+    }
+    props.onSelect(frame);
+  };
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const canvasRefs = React.useRef(new Map<number, HTMLCanvasElement>());
   const drawnKeys = React.useRef(new Map<number, string>());
@@ -130,7 +162,18 @@ export function ThumbnailStrip(props: ThumbnailStripProps) {
     >
       <Box sx={{ height: HEADER_HEIGHT, flex: "0 0 auto", display: "flex", alignItems: "center", gap: 0.75, px: "6px", borderBottom: `1px solid ${colors.border}` }}>
         <Typography sx={{ fontSize: 11, fontWeight: 600, color: colors.text }}>Frames</Typography>
-        <Typography sx={{ fontSize: 11, color: colors.textMuted, flex: 1 }}>{frames}</Typography>
+        <Typography sx={{ fontSize: 11, color: colors.textMuted, flex: 1 }}>{chosen.size ? `${chosen.size} of ${frames}` : frames}</Typography>
+        {props.onFindDrift && (
+          <Box role="button" aria-label="Find drift" data-testid="show3d-find-drift"
+            title={"Find drift: register the picked frames (⌘/Ctrl-click, Shift-click; all when none) on the GPU, " +
+              "to 1/100 px, and fit the drift velocity"}
+            onClick={props.driftBusy ? undefined : props.onFindDrift}
+            sx={{ px: "6px", height: 20, display: "flex", alignItems: "center", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap",
+              border: `1px solid ${colors.accent}`, color: props.driftBusy ? colors.textMuted : colors.accent,
+              cursor: props.driftBusy ? "progress" : "pointer", "&:hover": { bgcolor: props.driftBusy ? "transparent" : colors.controlBg } }}>
+            {props.driftBusy ? "Finding…" : "Find drift"}
+          </Box>
+        )}
         <Box role="group" aria-label="Thumbnails across" sx={{ display: "flex", border: `1px solid ${colors.border}` }}>
           {[1, 2, 3].map(n => (
             <Box key={n} role="button" aria-label={`${n} thumbnail column${n > 1 ? "s" : ""}`} aria-pressed={cols === n}
@@ -156,7 +199,7 @@ export function ThumbnailStrip(props: ThumbnailStripProps) {
             return (
               <Box key={frame} data-frame={frame} title={custom ? `Frame ${frame + 1}: ${custom}` : `Frame ${frame + 1}`}
                 onPointerEnter={() => props.onHover(frame)}
-                onClick={() => props.onSelect(frame)}
+                onClick={(event) => handleClick(event, frame)}
                 sx={{
                   position: "relative", height: cell, cursor: "pointer", bgcolor: "#000",
                   display: "flex", alignItems: "center", justifyContent: "center",
@@ -175,11 +218,20 @@ export function ThumbnailStrip(props: ThumbnailStripProps) {
                 }}>
                   {cols < 3 && custom ? `${frame + 1} · ${custom}` : frame + 1}
                 </Box>
+                {chosen.has(frame) && (
+                  <Box aria-label={`Frame ${frame + 1} picked for Find drift`} sx={{
+                    position: "absolute", right: 3, top: 3, width: 16, height: 16, borderRadius: "50%", fontSize: 11,
+                    lineHeight: "16px", textAlign: "center", color: "#fff", bgcolor: colors.accent, pointerEvents: "none",
+                  }}>✓</Box>
+                )}
               </Box>
             );
           })}
           </Box>
         </Box>
+      )}
+      {(props.drift || props.driftStatus) && (
+        <DriftChart drift={props.drift ?? null} status={props.driftStatus ?? ""} width={INNER_WIDTH} colors={colors} />
       )}
     </Box>
   );

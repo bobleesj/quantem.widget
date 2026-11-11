@@ -385,3 +385,34 @@ def test_thumbnail_columns_accepts_one_to_three_only(columns):
 def test_mode_names_stream_among_the_presets():
     with pytest.raises(ValueError, match="'stream'"):
         Show3D(np.zeros((3, 8, 8), np.float32), mode="bogus", verbose=False)
+
+
+def test_find_drift_result_adds_a_drift_corrected_panel_that_undoes_the_shift():
+    """The browser's Find drift writes `drift`; Python adds the frames moved back as a second panel."""
+    from quantem.widget.show3d.widget import drift_corrected
+
+    rng = np.random.default_rng(0)
+    rows = np.fft.fftfreq(64)[:, None]
+    cols = np.fft.fftfreq(64)[None, :]
+    # a smooth specimen, as a HAADF frame is: no power at Nyquist, so a fractional shift round-trips
+    base = np.fft.ifft2(np.fft.fft2(rng.random((64, 64))) * np.exp(-(rows**2 + cols**2) * 200)).real
+
+    def moved(shift):
+        return np.fft.ifft2(np.fft.fft2(base) * np.exp(-2j * np.pi * (rows * shift[0] + cols * shift[1]))).real
+
+    shifts = [(0.0, 0.0), (0.4, -0.3), (0.8, -0.6), (1.2, -0.9)]
+    stack = np.stack([moved(shift) for shift in shifts]).astype(np.float32)
+    widget = Show3D(stack, sampling=0.5, units="nm")
+    widget.dim_sampling, widget.dim_unit = 2.0, "s"
+    assert widget.drift == {} and widget.drift_frames == [] and widget.n_panels == 1
+    widget.drift = {"frames": [0, 1, 3], "shift_px": [[0, 0], list(shifts[1]), list(shifts[3])],
+                    "velocity_px_per_frame": [0.4, -0.3], "fit_r2": [1, 1]}
+    assert widget.n_panels == 2 and widget.panel_titles == ["frames", "drift corrected"]
+    assert len(widget._offline_float_stack) == 2 * stack.nbytes and widget.frame_seq >= 1   # the browser gets both panels
+    assert len(widget.denoise_modes) == 2 and widget.columns == 2
+    assert (widget.dim_sampling, widget.dim_unit) == (2.0, "s") and widget.pixel_size == pytest.approx(0.5)
+    corrected = drift_corrected(stack, widget.drift)
+    for frame in range(4):   # measured (0, 1, 3) and fitted (2): every frame back on frame 0
+        np.testing.assert_allclose(corrected[frame], base, atol=1e-4)
+    widget.drift = dict(widget.drift)   # a second result corrects the original frames again, not the panels
+    assert widget.n_panels == 2

@@ -112,7 +112,9 @@ import { Histogram } from "../shared/Histogram";
 import { applyDisplayFilterBrowser, browserFilterSupported, filterKnobsActive } from "../display/filter";
 import { COLORMAPS, COLORMAP_NAMES, applyColormap, displayNormalize, renderToOffscreen, renderToOffscreenReuse, createGPUColormapEngine, GPUColormapEngine } from "../display/colormaps";
 import { histogramBins } from "../display/cpuColormap";
-import { getGPUInfo } from "../display/device";
+import { getGPUInfo, getHardwareGPUDevice } from "../display/device";
+import { findDrift } from "./drift";
+import type { DriftReadout } from "./DriftChart";
 import { DisplayFFT, getDisplayFFT, fftshift, computeMagnitude, autoEnhanceFFT, nextPow2, applyHannWindow2D, fftClickReadout } from "../display/fft";
 import {
   cropMaskedRegionBrowser,
@@ -1592,6 +1594,11 @@ function Show3D() {
   const [frequencyFilterScope, setFrequencyFilterScope] = useModelState<string>("frequency_filter_scope");
   const [showFrequencyFilter, setShowFrequencyFilter] = useModelState<boolean>("show_frequency_filter");
   const [subpixelAlignEnabled, setSubpixelAlignEnabled] = useModelState<boolean>("subpixel_align_enabled");
+  // Find drift: frames picked in the thumbnail strip, the result Python reads, and the run's state
+  const [drift, setDrift] = useModelState<Record<string, unknown>>("drift");
+  const [driftFrames, setDriftFrames] = useModelState<number[]>("drift_frames");
+  const [driftBusy, setDriftBusy] = React.useState(false);
+  const [driftStatus, setDriftStatus] = React.useState("");
   const [subpixelAlignReference, setSubpixelAlignReference] = useModelState<number>("subpixel_align_reference");
   const [subpixelAlignStatus, setSubpixelAlignStatus] = React.useState("Off");
   const [subpixelAlignBusy, setSubpixelAlignBusy] = React.useState(false);
@@ -2897,6 +2904,36 @@ function Show3D() {
     nSlices > 1 &&
     ((!!offlineFloatStack && offlineFloatStack.byteLength >= nSlices * width * height * 4) ||
       (!!offlineStack && offlineStack.byteLength >= nSlices * width * height));
+
+  /** Find drift over the picked frames (all when fewer than two), on the first panel, on WebGPU when there is one. */
+  const handleFindDrift = React.useCallback(async () => {
+    if (isRgb) { setDriftStatus("Find drift needs a grayscale stack"); return; }
+    const frameCount = Math.max(1, nSlices || 1);
+    const frames = driftFrames && driftFrames.length >= 2 ? driftFrames : Array.from({ length: frameCount }, (_, i) => i);
+    const panelWidth = sharedPanelSource || (nPanels || 1) <= 1 ? width : Math.max(1, numPanelCols || Math.round(width / Math.max(1, nPanels)));
+    const frameOf = (index: number): Float32Array | null => {
+      const full = getOfflineFrame(index);
+      if (!full || panelWidth === width) return full;
+      const panel = new Float32Array(panelWidth * height);
+      for (let row = 0; row < height; row++) panel.set(full.subarray(row * width, row * width + panelWidth), row * panelWidth);
+      return panel;
+    };
+    setDriftBusy(true);
+    setDriftStatus(`Finding drift over ${frames.length} frames…`);
+    try {
+      const device = await getHardwareGPUDevice();
+      const result = await findDrift(frameOf, frames, panelWidth, height, device, {
+        pixelSize: pixelSize || 0, pixelUnit: pixelUnit || "px", frameSampling: dimSampling || 1, frameUnit: dimUnit || "",
+      });
+      setDrift(JSON.parse(JSON.stringify(result)));
+      setDriftStatus("");
+    } catch (error) {
+      setDriftStatus(`Find drift failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setDriftBusy(false);
+    }
+  }, [isRgb, nSlices, driftFrames, sharedPanelSource, nPanels, numPanelCols, width, height, getOfflineFrame,
+      pixelSize, pixelUnit, dimSampling, dimUnit, setDrift]);
 
   const computeSubpixelAlignment = React.useCallback(async () => {
     const serial = ++subpixelAlignSerialRef.current;
@@ -11203,6 +11240,12 @@ function Show3D() {
               drawKey={`${thumbnailDataVersion}|${gpuResidency.ready}|${cmap}|${logScale}|${width}x${height}|${nPanels}|${nSlices}|${themeColors.bg}|${visiblePanelIndices[0] ?? 0}`}
               unavailableReason={thumbnailUnavailableReason}
               colors={{ text: themeColors.text, textMuted: themeColors.textMuted, border: themeColors.border, accent: themeColors.accent, controlBg: themeColors.controlBg }}
+              chosen={driftFrames || []}
+              onChoose={setDriftFrames}
+              onFindDrift={handleFindDrift}
+              driftBusy={driftBusy}
+              driftStatus={driftStatus}
+              drift={drift && Array.isArray((drift as { shift_px?: unknown }).shift_px) ? (drift as unknown as DriftReadout) : null}
             />
           )}
           <Box

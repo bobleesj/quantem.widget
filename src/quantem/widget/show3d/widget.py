@@ -117,6 +117,30 @@ def _validated_float32(stack: np.ndarray, panel_name: str) -> np.ndarray:
     return stack_f32
 
 
+def drift_corrected(stack: np.ndarray, drift: Mapping) -> np.ndarray:
+    """``stack`` with every frame moved back onto the first frame Find drift picked.
+
+    The picked frames move back by their measured ``shift_px``; the others by the fitted velocity.
+    A Fourier shift: sub-pixel, and the edges wrap around.
+
+    Examples
+    --------
+    >>> corrected = drift_corrected(frames, viewer.drift)  # doctest: +SKIP
+    """
+    frames = [int(frame) for frame in drift["frames"]]
+    measured = {frame: shift for frame, shift in zip(frames, drift["shift_px"])}
+    velocity = np.asarray(drift.get("velocity_px_per_frame", (0.0, 0.0)), dtype=np.float64)
+    rows = np.fft.fftfreq(stack.shape[1])[:, None]
+    cols = np.fft.fftfreq(stack.shape[2])[None, :]
+    out = np.empty(stack.shape, dtype=np.float32)
+    for frame in range(stack.shape[0]):
+        shift = np.asarray(measured.get(frame, velocity * (frame - frames[0])), dtype=np.float64)
+        # the specimen moved by shift; f(r + shift) <-> F(k) exp(+2 pi i k . shift)
+        phase = np.exp(2j * np.pi * (rows * shift[0] + cols * shift[1]))
+        out[frame] = np.fft.ifft2(np.fft.fft2(stack[frame]) * phase).real
+    return out
+
+
 class Show3D(
     Show3DStream,
     Show3DFallback,
@@ -265,6 +289,11 @@ class Show3D(
     show_frequency_filter = traitlets.Bool(False).tag(sync=True)
     subpixel_align_enabled = traitlets.Bool(False).tag(sync=True)
     subpixel_align_reference = traitlets.Int(0).tag(sync=True)
+    # Find drift (thumbnail strip): the frames picked for it, and its result, which the browser writes:
+    # frames, shift_px, velocity_px_per_frame, fit_r2, quality, and with a pixel size and a time frame
+    # axis, shift and velocity (pixel_unit, per second). A result adds a "drift corrected" panel.
+    drift_frames = traitlets.List(traitlets.Int()).tag(sync=True)
+    drift = traitlets.Dict().tag(sync=True)
     is_rgb = traitlets.Bool(False).tag(sync=True)
     # Bumped on every stack replacement so the frontend re-fires its render
     # effects even when a Bytes trait compares identical.
@@ -636,6 +665,61 @@ class Show3D(
             raise traitlets.TraitError(f"denoise_bin must be 1, 2, or 4; got {value}")
         return value
 
+    def _reset_panel_settings(self, panel_annotations=None, panel_overlays=None) -> None:
+        """Per-panel denoise, frequency filter, annotations and overlays, one entry per panel."""
+        n_panels = int(self.n_panels)
+        self.denoise_scope = "all" if n_panels <= 1 else "panel"
+        self.frequency_filter_scope = "all" if n_panels <= 1 else "panel"
+        self.denoise_modes = ["none"] * n_panels
+        self.denoise_sigmas = [4.0] * n_panels
+        self.denoise_bins = [1] * n_panels
+        self.denoise_enabled = False
+        self.frequency_filter_modes = ["none"] * n_panels
+        self.frequency_filter_cutoffs = [0.15] * n_panels
+        self.frequency_filter_centers = [0.30] * n_panels
+        self.frequency_filter_widths = [0.12] * n_panels
+        self.panel_annotations = _normalize_panel_annotations(panel_annotations, n_items=n_panels, labels=list(self.panel_titles))
+        self.panel_overlays = _normalize_panel_overlays(panel_overlays, n_items=n_panels, labels=list(self.panel_titles))
+
+    @traitlets.observe("drift")
+    def _show_drift_corrected(self, change: dict) -> None:
+        """Show the frames moved back by a Find drift result as a "drift corrected" panel on the right."""
+        drift = change["new"] or {}
+        if not drift.get("shift_px") or self.is_rgb or self._data is None:
+            return
+        if self._drift_source is None:
+            if self.n_panels > 1:
+                source = self._source_panels[0] if self._source_panels is not None else self._data[:, :, : self._panel_width]
+            else:
+                source = self._data
+            given = (self.panel_titles or [""])[0]
+            # a single stack has only the placeholder "Panel 1"; call it what it is beside "drift corrected"
+            title = given if given and not (self.n_panels == 1 and given == "Panel 1") else "frames"
+            self._drift_source = (np.ascontiguousarray(source, dtype=np.float32), title)
+        source, title = self._drift_source
+        corrected = drift_corrected(source, drift)
+        kept = (self.dim_sampling, self.dim_unit, self.slice_idx, list(self.labels))
+        display_bin = max(1, int(self.display_bin))
+        with self.hold_sync():
+            self._load_stack(
+                (source, corrected),
+                labels=kept[3],
+                panel_titles=[title, "drift corrected"],
+                page_labels=None,
+                title=self.title,
+                sampling=self.pixel_size / display_bin if self.pixel_size > 0 else None,
+                units=self.pixel_unit if self.pixel_size > 0 else None,
+                display_bin=display_bin,
+            )
+            self.dim_sampling, self.dim_unit, self.slice_idx = kept[0], kept[1], kept[2]
+            self.panel_cmaps = []
+            self.columns = 2
+            self.link_contrast = True   # one quantity, before and after: the same contrast reads the correction
+            self._reset_panel_settings()
+            self._refresh_auto_contrast_ranges()
+            self._pack_exact_offline_stack()
+            self.frame_seq += 1      # the browser reloads the two-panel stack
+
     @traitlets.observe("denoise", "denoise_sigma", "denoise_bin", "denoise_enabled")
     def _on_denoise_change(self, change: dict) -> None:
         """Announce an active display reduction; the browser applies the filter."""
@@ -733,6 +817,7 @@ class Show3D(
         self._display_data = None
         self._rgb_data = None
         self._source_panels = None
+        self._drift_source = None   # the frames Find drift measured, kept when the corrected panel is added
         self._configure_static_fallback(
             notebook_preview_format=notebook_preview_format,
             notebook_preview_quality=notebook_preview_quality,
@@ -782,19 +867,7 @@ class Show3D(
             self.fft_overlay_zoom = fft_overlay_zoom
             self.panel_width_px = panel_width_px
             self.dim_label = str(dim_label)
-            n_panels = int(self.n_panels)
-            self.denoise_scope = "all" if n_panels <= 1 else "panel"
-            self.frequency_filter_scope = "all" if n_panels <= 1 else "panel"
-            self.denoise_modes = ["none"] * n_panels
-            self.denoise_sigmas = [4.0] * n_panels
-            self.denoise_bins = [1] * n_panels
-            self.denoise_enabled = False
-            self.frequency_filter_modes = ["none"] * n_panels
-            self.frequency_filter_cutoffs = [0.15] * n_panels
-            self.frequency_filter_centers = [0.30] * n_panels
-            self.frequency_filter_widths = [0.12] * n_panels
-            self.panel_annotations = _normalize_panel_annotations(panel_annotations, n_items=n_panels, labels=list(self.panel_titles))
-            self.panel_overlays = _normalize_panel_overlays(panel_overlays, n_items=n_panels, labels=list(self.panel_titles))
+            self._reset_panel_settings(panel_annotations, panel_overlays)
             self._refresh_auto_contrast_ranges()
             self._pack_exact_offline_stack()
         announce_browser_limit("Show3D", len(self._offline_float_stack), int(self.display_bin))
