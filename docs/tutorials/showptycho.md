@@ -405,7 +405,7 @@ and the model is standard direct ptychography.
 - The tilt slider is interactive on crops; at a full 512 x 512 scan each
   update takes a few hundred ms on CUDA.
 
-See the [direct ptychography API](https://bobleesj.github.io/quantem.gpu/api/ssb.html) for
+See the [direct ptychography API](https://bobleesj.github.io/quantem.gpu/api/direct.html) for
 `aberrations()` (tilt-corrected by default), `preview(sample_tilt_mrad=..., depth_spread_nm=...)` and the
 evidence behind the defaults.
 

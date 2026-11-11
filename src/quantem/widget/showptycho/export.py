@@ -24,7 +24,7 @@ BROWSER_SCAN_SIZES = (128, 256, 512, 1024)
 # Minimum resident scan-spectra budget in GiB; larger scans retain every BF pixel.
 BROWSER_GPU_MEMORY_GB = 4.5
 # every stored record names its layout (js/showptycho/engineAdapter.ts reads the same strings)
-BROWSER_CALIBRATION_SCHEMA = "quantem.ssb-browser-calibration/3"
+BROWSER_CALIBRATION_SCHEMA = "quantem.direct-browser-calibration/4"
 BROWSER_FOLDER_SCHEMA = "quantem.direct-browser-folder/4"
 SNAPSHOTS_SCHEMA = "quantem.direct-snapshots/3"
 # live-session traits the embedded page overrides; they are restored after the page is written

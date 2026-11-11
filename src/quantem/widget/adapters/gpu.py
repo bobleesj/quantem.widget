@@ -551,7 +551,7 @@ class DirectSession:
     def browser_state(self) -> dict:
         """The compact state a browser direct ptychography engine rebuilds its reducers from.
 
-        quantem.gpu's ``SSBExportState``: the bright-field pixel list
+        quantem.gpu's ``ExportState``: the bright-field pixel list
         (``bright_field_rows`` / ``_cols``), their reciprocal coordinates in the
         scan frame (``bright_field_k_row`` / ``_k_col``, quantem.gpu's ``kx_bf``
         / ``ky_bf``: its x is the scan row axis), the scan frequencies

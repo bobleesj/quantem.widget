@@ -262,7 +262,7 @@ viewer
 ```
 
 Output sampling is automatic. ShowPtycho uses QuantEM.GPU's
-`ssb_upsample_factor` rule: the smallest supported grid, capped at 4×, for the nominal
+`direct_auto_upsample` rule: the smallest supported grid, capped at 4×, for the nominal
 circular-aperture direct ptychography frequency range, `2 * semiangle / wavelength`, along both
 scan axes. This depends on calibrated voltage, convergence angle and scan step.
 Detector truncation and noise can reduce usable information; automatic sampling
@@ -381,12 +381,12 @@ angle in [0, 360), beside `scan_detector_rotation_flipped`; `scan_sampling_A` an
 `detector_sampling_mrad` are `[row, col]`. `calibration.json`,
 `showptycho_stars.json`, the exported `snapshots/cal.json` and the widget's
 messages use these names, and each file names its layout in a `schema` string
-(`quantem.ssb-calibration/8`, `quantem.direct-stars/6`,
-`quantem.ssb-browser-calibration/3`, `quantem.direct-browser-folder/4`,
-`quantem.direct-snapshots/3`). Calibration /8 and stars /5 use quantem.gpu's
+(`quantem.direct-calibration/9`, `quantem.direct-stars/6`,
+`quantem.direct-browser-calibration/4`, `quantem.direct-browser-folder/4`,
+`quantem.direct-snapshots/3`). Calibration /9 and stars /6 use quantem.gpu's
 names: `upsample`, `upsample_mode`, the method `"phase_of_mean"` and the strengths
-`phase_damp` and `amplitude_damp`. An earlier calibration (/4 to /7) or stars
-file (/1 to /4) is rewritten once with `scripts/rewrite_direct_calibration.py`. No file holds an absolute path: `calibration.json`
+`phase_damp` and `amplitude_damp`. An earlier calibration (`quantem.ssb-calibration/4` to `/8`) or stars
+file (`quantem.ssb-stars/1` to `/5`) is rewritten once with `scripts/rewrite_direct_calibration.py`. No file holds an absolute path: `calibration.json`
 and each star name the acquisition as `source`, its file name and, when the
 data lives under the save folder, its path relative to it; the session
 identity a restore compares is quantem.gpu's portable `source_identity` (file

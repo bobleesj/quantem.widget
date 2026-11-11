@@ -49,7 +49,7 @@ STARS_FILENAME = "showptycho_stars.json"
 CALIBRATION_FILENAME = "calibration.json"
 CALIBRATION_IMAGE_FILENAME = "calibration_phase.png"
 # every stored record names its layout; a reader takes the current value only
-CALIBRATION_SCHEMA = "quantem.ssb-calibration/8"
+CALIBRATION_SCHEMA = "quantem.direct-calibration/9"
 STARS_SCHEMA = "quantem.direct-stars/6"
 MIN_CROP_SPAN = 32
 # Damping strengths a slider drags: the browser sends them and shows them itself.
@@ -834,14 +834,14 @@ class ShowPtycho(anywidget.AnyWidget):
         self._calibration_identity = self._direct.calibration_identity()
         self.stars_path = str(self._stars_path.resolve())
         self.upsample_available = state["backend"] in ("cuda", "mps")
-        from quantem.gpu.optics.physics import ssb_upsample_factor, ssb_upsample_requirement
+        from quantem.gpu.optics.physics import direct_auto_upsample, direct_upsample_requirement
 
         try:
-            self.auto_upsample = ssb_upsample_factor(
+            self.auto_upsample = direct_auto_upsample(
                 voltage_kV=state["voltage_kV"], semiangle_mrad=state["semiangle_mrad"],
                 scan_sampling_A=state["scan_sampling_A"],
             )
-            required = ssb_upsample_requirement(
+            required = direct_upsample_requirement(
                 voltage_kV=state["voltage_kV"], semiangle_mrad=state["semiangle_mrad"],
                 scan_sampling_A=state["scan_sampling_A"],
             )
@@ -1508,7 +1508,7 @@ class ShowPtycho(anywidget.AnyWidget):
         }
 
     def _calibration_record(self, aberrations: dict, sample: dict | None, loss) -> dict:
-        """The one ``quantem.ssb-calibration`` record: what ``calibration()`` returns and Save writes.
+        """The one ``quantem.direct-calibration`` record: what ``calibration()`` returns and Save writes.
 
         ``_calibration``'s optics and geometry with the Sample panel beside them (``sample_tilt_mrad``
         in the scan frame, ``propagator_tilt_mrad`` along the detector axes, ``depth_spread_nm``), the

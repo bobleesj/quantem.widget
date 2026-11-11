@@ -18,7 +18,7 @@ def read_calibration(path: Path, identity: dict | None, scan_region: tuple[int, 
     found = saved.get("schema") if isinstance(saved, dict) else None
     if found != schema:
         rewrite = ("; rewrite it once with scripts/rewrite_direct_calibration.py from the quantem.widget repository"
-                   if isinstance(found, str) and found.startswith("quantem.ssb-calibration/") else "")
+                   if isinstance(found, str) and found.startswith(("quantem.ssb-calibration/", "quantem.direct-calibration/")) else "")
         raise ValueError(f"the saved calibration format {found!r} is not ShowPtycho's {schema!r}{rewrite}")
     if identity is None:
         raise ValueError("this input has no persistent acquisition identity")

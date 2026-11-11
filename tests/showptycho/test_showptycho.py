@@ -529,7 +529,7 @@ def test_save_writes_the_calibration_and_mirrors_it_onto_the_session(widget, dir
     widget.save_trigger += 1
     assert widget.calibration_path == str(tmp_path / "calibration.json") and widget.calibration_saved_at
     saved = json.loads((tmp_path / "calibration.json").read_text())
-    assert saved["schema"] == "quantem.ssb-calibration/8"
+    assert saved["schema"] == "quantem.direct-calibration/9"
     # nm and degrees under names that say so: phi12 was radians beside higher-order angles in degrees
     assert saved["aberrations"] == {"C10_nm": -4.0, "C12_nm": 0.25, "phi12_deg": 12.0}
     assert (saved["scan_detector_rotation_deg"], saved["scan_detector_rotation_flipped"], saved["display_negate_phase"]) == (10.0, False, False)
@@ -708,7 +708,7 @@ def test_export_writes_the_browser_folder_from_exact_bf_counts(widget, direct, t
     suffix = "qem" if direct.backend == "cuda" else "u8"  # all fixture counts fit uint8 exactly
     assert sorted(p.name for p in (out / "source").iterdir()) == [f"bf_columns.{suffix}"]
     cal = json.loads((out / "snapshots" / "cal.json").read_text())
-    assert cal["schema"] == "quantem.ssb-browser-calibration/3" and cal["source_path"] == "redacted_local_source"
+    assert cal["schema"] == "quantem.direct-browser-calibration/4" and cal["source_path"] == "redacted_local_source"
     assert cal["display_negate_phase"] is False and "flip_phase" not in cal
     assert cal["precision"] == {"real_dtype": "float32", "complex_dtype": "complex64"}  # the browser kernels refuse any other
     assert (cal["num_bright_field_pixels"], cal["g_shape"], cal["phase_shape"], cal["detector_shape"]) == (direct.num_bright_field_pixels, [direct.num_bright_field_pixels, SCAN, SCAN], [SCAN, SCAN], [DET, DET])
@@ -1186,9 +1186,9 @@ def test_the_rewrite_script_moves_each_last_layout_to_its_direct_ptychography_id
 
 def test_auto_sampling_matches_core_and_save_keeps_resolved_factor(widget, direct, monkeypatch):
     """Native -> Auto -> native preserves optics, physical extent and saved sampling."""
-    from quantem.gpu.optics.physics import ssb_upsample_factor
+    from quantem.gpu.optics.physics import direct_auto_upsample
 
-    factor = ssb_upsample_factor(voltage_kV=direct.voltage_kV,
+    factor = direct_auto_upsample(voltage_kV=direct.voltage_kV,
                                    semiangle_mrad=direct.semiangle_mrad,
                                    scan_sampling_A=direct.scan_sampling_A)
     widget.sample_json = json.dumps({"sample_tilt_mrad": [3.0, -4.0], "depth_spread_nm": 12.0})
@@ -1478,7 +1478,7 @@ def test_a_saved_fit_restores_after_its_data_folder_moves_and_names_no_absolute_
         viewer.close()
     saved = json.loads((folder / "calibration.json").read_text())
     stars = json.loads((folder / "showptycho_stars.json").read_text())
-    assert saved["schema"] == "quantem.ssb-calibration/8"
+    assert saved["schema"] == "quantem.direct-calibration/9"
     assert saved["source"] == stars["stars"][0]["source"] == {"file_name": "scan.npy", "relative_path": "scan.npy"}
     assert _absolute_paths(saved) == [] and _absolute_paths(stars) == []
     assert saved["session_identity"]["source"]["detector"]["file_name"] == "scan.npy"
