@@ -45,14 +45,14 @@ def test_delete_regions_keeps_other_fits_and_can_leave_an_empty_workspace():
     widget = ShowPtycho(np.zeros((64, 64)), local_tilt={
         'scan_shape': [64, 64], 'regions': regions,
         'fits': [{**region, 'sample_tilt_mrad': [1, 2]} for region in regions]})
-    widget.set_region_images({'A · SSB': phase, 'B · SSB': phase + 1}, sampling_A=.2)
+    widget.set_region_images({'A · Direct': phase, 'B · Direct': phase + 1}, sampling_A=.2)
     overview = widget.phase_bytes
     widget.local_tilt_active_region = 'a'
     widget.regions = regions[1:]
     assert widget.local_tilt_active_region == ''
     assert [fit['id'] for fit in widget.region_fits] == ['b']
-    assert list(widget.region_images) == ['B · SSB']
-    np.testing.assert_array_equal(widget.region_images['B · SSB'], phase + 1)
+    assert list(widget.region_images) == ['B · Direct']
+    np.testing.assert_array_equal(widget.region_images['B · Direct'], phase + 1)
     assert widget.local_tilt_request_json == '' and widget.phase_bytes == overview
     widget.regions = []
     assert widget.region_fits == [] and widget.region_images == {}
@@ -63,14 +63,14 @@ def test_delete_regions_keeps_other_fits_and_can_leave_an_empty_workspace():
 
 def test_pair_preserves_native_grids_and_per_image_physical_sampling():
     from quantem.widget.showptycho.local_tilt import _images
-    ssb=np.arange(32*32,dtype=np.float32).reshape(32,32)
+    direct=np.arange(32*32,dtype=np.float32).reshape(32,32)
     ptycho=np.arange(64*64,dtype=np.float32).reshape(64,64)
-    metadata,pixels=_images({'SSB':ssb,'Ptychography':ptycho},{'SSB':.26,'Ptychography':.13})
+    metadata,pixels=_images({'Direct':direct,'Ptychography':ptycho},{'Direct':.26,'Ptychography':.13})
     first,second=json.loads(metadata)
     assert first['shape']==[32,32] and second['shape']==[64,64]
     assert first['shape'][0]*first['sampling_A']==second['shape'][0]*second['sampling_A']
     decoded=np.frombuffer(pixels,np.float32)
-    np.testing.assert_array_equal(decoded[:ssb.size].reshape(ssb.shape),ssb)
+    np.testing.assert_array_equal(decoded[:direct.size].reshape(direct.shape),direct)
     np.testing.assert_array_equal(decoded[second['offset']:].reshape(ptycho.shape),ptycho)
 
 
@@ -79,7 +79,7 @@ def test_invalid_sampling_is_rejected_before_transport():
     from quantem.widget.showptycho.local_tilt import _images
     for sampling in (0,-1,float('nan'),float('inf')):
         with pytest.raises(ValueError,match='positive image sampling'):
-            _images({'SSB':np.ones((32,32))},sampling)
+            _images({'Direct':np.ones((32,32))},sampling)
 
 
 @pytest.mark.parametrize("budget", [{}, {"trials": 12}])
@@ -205,7 +205,7 @@ def _fit_padded(agreements):
 
 
 def test_regional_fit_runs_once_and_crops_measured_positions():
-    pytest.importorskip("quantem.gpu", reason="the regional fit runs quantem.gpu's SSB")
+    pytest.importorskip("quantem.gpu", reason="the regional fit runs quantem.gpu's direct ptychography")
     result = _fit_padded([0.9])
     fit, = result['fits']
     assert fit['seed'] == 42 and fit['sample_tilt_mrad'] == [4.2, 0.0]
@@ -214,14 +214,14 @@ def test_regional_fit_runs_once_and_crops_measured_positions():
     # Native bounds shift by the (16, 24) padding before scaling by the factor.
     rows, cols = np.indices((256, 256))
     full = (rows * 10000 + cols).astype(np.float32)
-    np.testing.assert_array_equal(result['images']['R · SSB'], full[(8 + 16) * 2:(40 + 16) * 2, (4 + 24) * 2:(36 + 24) * 2])
+    np.testing.assert_array_equal(result['images']['R · Direct'], full[(8 + 16) * 2:(40 + 16) * 2, (4 + 24) * 2:(36 + 24) * 2])
     assert fit['reconstruction']['scan_offset'] == [16, 24]
     with pytest.raises(ValueError, match='nonfinite fit'):
         _fit_padded([float('nan')])
 
 
 def test_regional_fit_passes_its_trial_count_and_tilt_limit_to_the_fit():
-    pytest.importorskip("quantem.gpu", reason="the regional fit runs quantem.gpu's SSB")
+    pytest.importorskip("quantem.gpu", reason="the regional fit runs quantem.gpu's direct ptychography")
     # Fit Regions hard-coded 200 trials and tested a copied 24.99 mrad tilt bound; the refinement is quantem.gpu's
     from quantem.widget.adapters.gpu import REGION_TILT_LIMIT_MRAD, DirectSession
     session = _PaddedSession([0.5])
@@ -238,7 +238,7 @@ def test_regional_fit_passes_its_trial_count_and_tilt_limit_to_the_fit():
 
 
 def test_regional_fit_flags_a_depth_at_the_end_of_quantem_gpus_search_range(monkeypatch):
-    pytest.importorskip("quantem.gpu", reason="the regional fit runs quantem.gpu's SSB")
+    pytest.importorskip("quantem.gpu", reason="the regional fit runs quantem.gpu's direct ptychography")
     from quantem.gpu.direct_ptycho import DEPTH_SPREAD_RANGE_NM
     original = _Fit.__init__
 

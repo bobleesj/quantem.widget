@@ -25,10 +25,10 @@ parts:
           - file: tutorials/show4dstem_multiple
             title: Compare datasets or tilts
       - file: tutorials/showptycho
-      - file: tutorials/ssb_workflow
-        title: End-to-end SSB workflow
+      - file: tutorials/direct_ptycho_workflow
+        title: End-to-end direct ptychography workflow
       - file: tutorials/showptycho_to_myptycho
-        title: SSB to iterative regions
+        title: Direct ptychography to iterative regions
       - file: tutorials/show1d
       - file: tutorials/plot2d
       - file: tutorials/show2d
@@ -96,7 +96,7 @@ parts:
           - file: changelog
             title: Changelog
           - file: maintainer/widget-release
-          - file: maintainer/ssb-release-check
+          - file: maintainer/direct-ptycho-release-check
             title: Release
           - file: maintainer/viewing-html-on-mobile
             title: Mobile HTML

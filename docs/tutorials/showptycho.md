@@ -1,6 +1,6 @@
 # ShowPtycho in Jupyter
 
-`ShowPtycho` is an interactive **SSB** (single-sideband) aberration explorer for
+`ShowPtycho` is an interactive **direct ptychography** aberration explorer for
 4D-STEM data. You tune defocus (C10), astigmatism (C12 / phi12), and scan-detector
 rotation and watch the reconstructed phase and its FFT update live in the notebook.
 
@@ -8,7 +8,7 @@ For local-data notebooks, see [QuantEM Tutorials: Widget](https://github.com/bob
 Choose Apple MPS or NVIDIA CUDA, with Basic and Advanced workflows. Each
 notebook browses the acquisition with Show4DSTEM and reuses it for ShowPtycho.
 
-SSB is a *direct* (non-iterative) phase retrieval: fast and interactive, but
+Direct ptychography is a *direct* (non-iterative) phase retrieval: fast and interactive, but
 lower quality than iterative multislice ptychography. Use ShowPtycho for quick
 aberration tuning and review, not as a substitute for a full iterative
 reconstruction.
@@ -47,7 +47,7 @@ For your own acquisition, pass its `.qem` file or H5 master instead.
 
 ## State the beam
 
-SSB needs the beam energy, the convergence semi-angle and the scan step. The
+Direct ptychography needs the beam energy, the convergence semi-angle and the scan step. The
 file records the energy; set the others on `data.calibration`. The scan step
 cannot be recovered from the patterns. A single number applies to both
 (row, col) axes.
@@ -63,7 +63,7 @@ The bright-field disk is the image of the probe aperture, so its edge sits at
 the convergence semi-angle: the semi-angle divided by the disk's edge radius in
 pixels is the detector step in mrad per pixel. `detector_sampling()` fits
 the disk on the mean pattern of the encoded scan and records the step, the disk
-centre and its edge radius on `data.calibration`; SSB and Show4DSTEM read them.
+centre and its edge radius on `data.calibration`; direct ptychography and Show4DSTEM read them.
 
 ```python
 fit = data.calibration.detector_sampling()
@@ -80,16 +80,16 @@ the file, overridden by you, or fitted from the bright-field disk. A calibrated
 camera length of your own wins: set `data.calibration.detector_sampling_mrad`
 before or after the fit.
 
-## SSB in quantem: model-based by default
+## Direct ptychography in quantem: model-based by default
 
 The standard workflow uses 200 initial TPE trials, then quantem.gpu's joint
 exact-gradient refinement through fifth-order aberrations with sample tilt and depth.
 `aberrations(search="broad")` adds higher-order exploration.
 
-quantem fits SSB aberrations with a physical model of the measurement, not an image-quality score. For each trial
+quantem fits direct ptychography aberrations with a physical model of the measurement, not an image-quality score. For each trial
 set of aberrations, and the sample's tilt and thickness, it predicts the double-overlap data the detector should have
 recorded, then keeps the parameters whose prediction agrees best with the measurement (least squares). This
-model-based, tilt-corrected fit is the default everywhere, and it is where SSB in quantem is heading.
+model-based, tilt-corrected fit is the default everywhere, and it is where direct ptychography in quantem is heading.
 
 | Call | Method | Use it for |
 |---|---|---|
@@ -159,7 +159,7 @@ The fitter still keeps its usual scalar history.
 Look at both branches yourself. These are the primary fits used to choose the
 rotation before fifth-order refinement. Fitting stays on the native scan grid;
 each branch's own fit is shown reconstructed at `upsample="auto"`, the
-smallest factor whose output grid holds the whole SSB bandwidth (4× for the
+smallest factor whose output grid holds the whole direct ptychography bandwidth (4× for the
 0.5 Å gold step):
 
 ```python
@@ -202,7 +202,7 @@ available through the calls in the method table above.
 ## Review in ShowPtycho
 
 ```python
-viewer = ptycho.show(local_tilt=True, show_fft=True, save_dir="ssb-results")
+viewer = ptycho.show(local_tilt=True, show_fft=True, save_dir="direct-results")
 viewer
 ```
 
@@ -220,9 +220,9 @@ returns a snapshot of current numerical settings without saving or refitting.
 ## Compare regularized direct phase on CUDA
 
 After fitting once, keep the optics fixed and compare the direct reconstruction
-methods. SSB remains the default. The optional CUDA methods are experimental:
+methods. Direct ptychography remains the default. The optional CUDA methods are experimental:
 more damping can suppress unstable contrast but can also suppress real
-fine detail, so compare against SSB and retain the fitted model.
+fine detail, so compare against direct ptychography and retain the fitted model.
 
 ```python
 # Optional on CUDA: uncomment to compare with the conventional result.
@@ -245,7 +245,7 @@ for reproducibility and the current CUDA, regional-fitting and export limits.
 
 ## View a reconstruction on any computer
 
-To look at a reconstruction you already have, from SSB or any other method,
+To look at a reconstruction you already have, from direct ptychography or any other method,
 pass the array. It needs no GPU and no quantem.gpu: a real array is the phase,
 a complex array is the object wave, shown as its phase and amplitude. NumPy
 arrays and torch tensors on any device work.
@@ -265,7 +265,7 @@ ShowPtycho(object_wave, sampling=0.25, units="Å", show_fft=True)
 The phase, amplitude (Amp), FFT, histograms and the scale bar show the array's
 own numbers; a float64 or complex128 array is drawn in float32 and the widget
 prints the largest change that causes. The aberration sliders, Save, pins and
-sweeps need an SSB session, and the widget says so in one line.
+sweeps need a direct ptychography session, and the widget says so in one line.
 
 ## No detector binning
 
@@ -295,9 +295,9 @@ regional model to initialize a separate run.
 
 ## Is your crystal tilted?
 
-**The question.** SSB treats the sample as one thin sheet. A real crystal is a
+**The question.** Direct ptychography treats the sample as one thin sheet. A real crystal is a
 few nanometres thick and rarely sits exactly on the zone axis. If it leans,
-does SSB still see a sharp lattice, and can it tell you how much it leans?
+does direct ptychography still see a sharp lattice, and can it tell you how much it leans?
 
 **Predict first.** A column tilted by 5 mrad through 10 nm of crystal: how far
 does its bottom sit from its top, compared with a 4 A lattice spacing? Does
@@ -310,7 +310,7 @@ for tilt_mrad in (1, 3, 5, 10):
 ```
 
 At 5 mrad the column walks half an angstrom, and only *along* the tilt: the
-lattice blurs in one direction and stays sharp in the other. Standard SSB has
+lattice blurs in one direction and stays sharp in the other. Standard direct ptychography has
 no depth, so it cannot express this.
 
 **The experiment.** Simulate a crystal whose tilt you know: BaTiO3 [001],
@@ -390,10 +390,10 @@ gave (-0.3, -0.1) mrad in that test. Read the table from your own run:
   ptychography object frame, ready to seed a multislice reconstruction.
 
 **The model in one line.** A slice at depth `z` sees defocus `C10 + z` and is
-shifted by `z * tilt`. Averaging over depth multiplies each SSB overlap term
+shifted by `z * tilt`. Averaging over depth multiplies each direct ptychography overlap term
 by a real `sinc` weight, which falls fastest for spatial frequencies along the
 tilt: the one-directional blur you predicted. With zero depth every weight is 1
-and the model is standard SSB.
+and the model is standard direct ptychography.
 
 **When not to trust it.**
 
@@ -405,7 +405,7 @@ and the model is standard SSB.
 - The tilt slider is interactive on crops; at a full 512 x 512 scan each
   update takes a few hundred ms on CUDA.
 
-See the [SSB API](https://bobleesj.github.io/quantem.gpu/api/ssb.html) for
+See the [direct ptychography API](https://bobleesj.github.io/quantem.gpu/api/ssb.html) for
 `aberrations()` (tilt-corrected by default), `preview(sample_tilt_mrad=..., depth_spread_nm=...)` and the
 evidence behind the defaults.
 

@@ -43,7 +43,7 @@ QUANTEM_GPU_SRC=/path/to/quantem.gpu/src PYTHON=python npm run build
 `scripts/sync-gpu-webgpu.mjs` recreates the ignored generated engine tree
 `js/.generated/engine/` from the science entries of `quantem.gpu`'s
 `webgpu/sources.json` manifest (`detector/`, `dpc/`, `formats/`, `io/` and
-`ssb/`); the `show4dstem` and `showptycho` bundles use its kernels and every
+`direct_ptycho/`); the `show4dstem` and `showptycho` bundles use its kernels and every
 display bundle its borrowed-image contract. Display kernels are widget source
 under `js/display/`. Edit the package sources, not that
 generated tree. A widget built against an

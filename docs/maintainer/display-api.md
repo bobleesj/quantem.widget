@@ -134,26 +134,26 @@ same change. Test defaults, invalid values, partial last rows and saved output. 
 a narrow viewport, and confirm display options leave scientific arrays intact.
 Keep design documentation distinct from evidence of a completed runtime change.
 
-### Detector and SSB display options
+### Detector and direct ptychography display options
 
 Use `detector_fit.show(size="medium", cmap="inferno", save="detector-fit.png")`
 for the fitted detector disk. It has one panel, so no rows/columns controls.
 Use the same keywords on `detector.show(data, columns=2)` for the detector gallery.
 
-`ssb.show("parameters", rows=2, cmap="viridis", save="fit.png")` lays out
+`ptycho.show("parameters", rows=2, cmap="viridis", save="fit.png")` lays out
 the two static fit landscapes. Focus views accept `size`, `rows`, `columns`
 and `cmap` in both Show2D/Show3D and static mode. Export with
-`ssb.show("focus", mode="static", save="focus.png")`; native image density
+`ptycho.show("focus", mode="static", save="focus.png")`; native image density
 is retained. `save` exports the figure, while ShowPtycho
-`save_dir` stores scientific calibration. Plain `ssb.show()` retains
+`save_dir` stores scientific calibration. Plain `ptycho.show()` retains
 ShowPtycho's responsive layout and its existing Color control.
 
 ## Automatic output sampling
 
 Auto chooses 1×, 2×, 3× or 4× from the acquisition calibration, with a
-maximum of 4×. Select 8× explicitly with `ssb.show(upsample=8)` or the
+maximum of 4×. Select 8× explicitly with `ptycho.show(upsample=8)` or the
 ShowPtycho Upsampling menu. For a standalone reconstruction, use
-`ssb.run(fit, upsample=8)`.
+`ptycho.run(fit, upsample=8)`.
 
 The nominal bandwidth requirement remains separate from the selected grid.
 When Auto is capped, the fit report and viewer settings identify the larger

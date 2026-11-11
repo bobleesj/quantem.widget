@@ -151,7 +151,7 @@ jobs:
           if-no-files-found: error
 
   hardware:
-    name: SSB acceptance (${{ matrix.backend }})
+    name: Direct ptychography acceptance (${{ matrix.backend }})
     needs: build
     strategy:
       fail-fast: false
@@ -175,7 +175,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          CHECK_ENV="$RUNNER_TEMP/ssb-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.backend }}"
+          CHECK_ENV="$RUNNER_TEMP/direct-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.backend }}"
           python3 -m venv "$CHECK_ENV"
           echo "$CHECK_ENV/bin" >> "$GITHUB_PATH"
           WHEEL=$(find "$PWD/candidate" -name '*.whl')
@@ -193,7 +193,7 @@ jobs:
               revision="5925e4b49b2ca28ff82d6d5a6b9a8bfea9edfb20",
               allow_patterns="4dstem/gold_512/*")
           with open(os.environ["GITHUB_ENV"], "a") as output:
-              print("QUANTEM_SSB_RELEASE_SOURCE=" + str(Path(root) / "4dstem/gold_512/gold_004_master.h5"), file=output)
+              print("QUANTEM_DIRECT_RELEASE_SOURCE=" + str(Path(root) / "4dstem/gold_512/gold_004_master.h5"), file=output)
           PYCODE
       - name: Fresh-kernel ShowPtycho drawing, refitting and restore
         shell: bash
@@ -202,18 +202,18 @@ jobs:
           QUANTEM_WIDGET_HEADLESS: "1"
           # the installed wheel's bundles are the release under test, not a stale build of this checkout
           QUANTEM_WIDGET_ALLOW_STALE_BUNDLE: "1"
-          QUANTEM_SSB_RELEASE: "1"
-          QUANTEM_SSB_RELEASE_BACKEND: ${{ matrix.backend }}
-          QUANTEM_SSB_RELEASE_CALIBRATION: '{"semiangle_mrad":30,"scan_sampling_A":0.5,"detector_sampling_mrad":0.46}'
-          QUANTEM_WIDGET_BROWSER_OUT: ${{ runner.temp }}/ssb-widget-${{ matrix.backend }}
+          QUANTEM_DIRECT_RELEASE: "1"
+          QUANTEM_DIRECT_RELEASE_BACKEND: ${{ matrix.backend }}
+          QUANTEM_DIRECT_RELEASE_CALIBRATION: '{"semiangle_mrad":30,"scan_sampling_A":0.5,"detector_sampling_mrad":0.46}'
+          QUANTEM_WIDGET_BROWSER_OUT: ${{ runner.temp }}/direct-widget-${{ matrix.backend }}
         run: python -m pytest -q -s tests/browser/test_showptycho_release.py
       - uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: ssb-widget-${{ matrix.backend }}
+          name: direct-widget-${{ matrix.backend }}
           path: |
-            ${{ runner.temp }}/ssb-widget-${{ matrix.backend }}/showptycho_release_*.png
-            ${{ runner.temp }}/ssb-widget-${{ matrix.backend }}/showptycho_release_timings.json
+            ${{ runner.temp }}/direct-widget-${{ matrix.backend }}/showptycho_release_*.png
+            ${{ runner.temp }}/direct-widget-${{ matrix.backend }}/showptycho_release_timings.json
           if-no-files-found: error
 
   testpypi:

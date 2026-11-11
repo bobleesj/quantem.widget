@@ -370,7 +370,7 @@ Current fix:
   unavailable, draw the requested frame on demand through the existing
   CPU/canvas fallback.
 - Preserve per-panel contrast during playback. Do not fall back to a global
-  packed-frame range for BF/DF/DPC/SSB/COM panels with different physical
+  packed-frame range for BF/DF/DPC/direct ptychography/COM panels with different physical
   scales.
 - Test both visible play controls: page playback (`Play pages`) and frame
   playback (`Play`, `Play forward`, or reverse controls).
@@ -524,7 +524,7 @@ Real-data stress input used for the audit:
 
 - Source: local real ptychography reconstruction arrays from an ignored lab
   data directory. Keep the exact private path out of shared documentation.
-- Show2D: eight real-derived 4096 x 4096 panels, tiled from ADF/SSB/WDD arrays
+- Show2D: eight real-derived 4096 x 4096 panels, tiled from ADF/direct ptychography/WDD arrays
   to preserve real lattice/noise structure while stressing the browser path.
 - Show3D: twelve real-derived panels, 32 frames each, 2048 x 2048 native source
   per panel.

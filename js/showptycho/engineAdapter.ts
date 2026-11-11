@@ -1,5 +1,5 @@
 /**
- * ShowPtycho's reconstruction requests to the vendored quantem.gpu WebGPU SSB engine.
+ * ShowPtycho's reconstruction requests to the vendored quantem.gpu WebGPU direct ptychography engine.
  *
  * The engine under `js/.generated/engine` is copied from quantem.gpu and shares the widget's names:
  * it reads `snapshots/cal.json` and the bright-field source exactly as ShowPtycho.export writes them
@@ -15,12 +15,12 @@ import type { WebGPUSSBBackend } from "../.generated/engine/direct_ptycho/webgpu
 import type { WebGPUReconstructionOptions } from "../.generated/engine/direct_ptycho/webgpu/protocol";
 
 /** The layout of `snapshots/snapshots.json`, written by the exported page. */
-export const SNAPSHOTS_SCHEMA = "quantem.ssb-snapshots/2";
+export const SNAPSHOTS_SCHEMA = "quantem.direct-snapshots/3";
 
 // The engine evaluates chi = (pi / lambda[A]) alpha^2 (C10 + ...), so it takes Angstrom where the vocabulary says nm.
 const ANGSTROM_PER_NM = 10;
 
-/** Thick-sample model of one reconstruction: sample tilt (scan frame) and depth spread; a depth spread of 0 is standard SSB. */
+/** Thick-sample model of one reconstruction: sample tilt (scan frame) and depth spread; a depth spread of 0 is standard direct ptychography. */
 export interface SampleValues { tiltRowMrad: number; tiltColMrad: number; depthSpreadNm: number }
 
 /** One reconstruction request in the vocabulary's quantities. */

@@ -1,8 +1,8 @@
-"""quantem.gpu acquisitions, detector sessions and SSB, whether or not quantem.gpu is installed.
+"""quantem.gpu acquisitions, detector sessions and direct ptychography, whether or not quantem.gpu is installed.
 
 quantem.gpu is optional (``quantem.widget[cuda]`` or ``quantem.widget[mps]``). This is the only
 module that imports it: encoded acquisitions from ``quantem.gpu.io.load``, their
-detector sessions, master discovery and inspection, SSB, centre of mass and the
+detector sessions, master discovery and inspection, direct ptychography, centre of mass and the
 release of cached GPU memory.
 Without quantem.gpu every name below is None, ``available()`` is False and a
 function that needs it raises ``ImportError`` with the install command; the
@@ -67,7 +67,7 @@ def is_acquisition(obj) -> bool:
     return available() and isinstance(obj, Dataset4dstem)
 
 
-def is_ssb(obj) -> bool:
+def is_direct_ptycho(obj) -> bool:
     """Whether ``obj`` is a ``quantem.gpu.DirectPtycho`` session."""
     return available() and isinstance(obj, DirectPtycho)
 
@@ -169,7 +169,7 @@ def disk_edge_radius(mean_pattern) -> float:
 def bright_field_disk(mean_pattern) -> tuple[tuple[float, float], float]:
     """Bright-field disk ``((center_row, center_col), edge_radius_px)`` of a mean pattern (``quantem.gpu.detector``).
 
-    quantem.gpu's one disk rule, the one ``data.calibration.detector_sampling()`` records and SSB reads.
+    quantem.gpu's one disk rule, the one ``data.calibration.detector_sampling()`` records and direct ptychography reads.
     """
     require("The bright-field disk fit")
     fit = gpu_bright_field_disk(np.asarray(mean_pattern, dtype=np.float64))
@@ -235,7 +235,7 @@ def _finite_or_none(value) -> float | None:
 
 
 class DirectSession:
-    """A ``quantem.gpu.DirectPtycho`` session as the SSB widgets read and drive it.
+    """A ``quantem.gpu.DirectPtycho`` session as the direct ptychography widgets read and drive it.
 
     quantem.gpu and the widgets use one name per concept
     (``scan_detector_rotation_deg``, ``detector_sampling_mrad``, ``C10_nm`` /
@@ -243,29 +243,29 @@ class DirectSession:
     ``num_bright_field_pixels``, ``sample_tilt_mrad``), so arguments reach
     quantem.gpu as given. This class collects what the widgets read from a
     session into plain dicts (``state``, ``trials``, ``browser_state``,
-    ``result``); every file and message of the SSB widgets is built from them.
+    ``result``); every file and message of the direct ptychography widgets is built from them.
     """
 
-    def __init__(self, ssb):
-        self.ssb = ssb
+    def __init__(self, direct):
+        self.direct = direct
 
     @classmethod
     def open(cls, source, **parameters):
         """A new session ``quantem.gpu.DirectPtycho(source, **parameters)``; use it as a context manager."""
-        require("Compute SSB")
+        require("Direct ptychography")
         return cls(DirectPtycho(source, **parameters))
 
     def __enter__(self):
-        self.ssb.__enter__()
+        self.direct.__enter__()
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
-        self.ssb.__exit__(exc_type, exc_value, traceback)
+        self.direct.__exit__(exc_type, exc_value, traceback)
 
     @property
     def num_bright_field_pixels(self) -> int:
         """Pixels of the detected bright-field disk; the first read prepares the session."""
-        return int(self.ssb.num_bright_field_pixels)
+        return int(self.direct.num_bright_field_pixels)
 
     @property
     def bright_field_radius_px(self) -> float:
@@ -274,31 +274,31 @@ class DirectSession:
         A radius quantem.gpu detected is read from its prepared backend
         (``browser_state``); the first read prepares the session.
         """
-        radius = self.ssb.bright_field_radius_px
+        radius = self.direct.bright_field_radius_px
         if radius is None:
-            radius = self.ssb.browser_state().brightfield.bright_field_radius_px
+            radius = self.direct.browser_state().brightfield.bright_field_radius_px
         return float(radius)
 
     @property
     def detector_sampling_mrad(self) -> list[float]:
         """The detector step ``[row, col]`` in mrad per pixel along the original detector axes, given or estimated."""
-        sampling = self.ssb.detector_sampling_mrad
+        sampling = self.direct.detector_sampling_mrad
         if sampling is None:
             # the backend holds the estimate in the axes it computes in, swapped when the rotation is flipped
-            sampling = [float(step) * 1e3 for step in self.ssb.browser_state().angular_sampling_rad]
-            if self.ssb.scan_detector_rotation_flipped:
+            sampling = [float(step) * 1e3 for step in self.direct.browser_state().angular_sampling_rad]
+            if self.direct.scan_detector_rotation_flipped:
                 sampling = sampling[::-1]
         return [float(step) for step in sampling]
 
     @property
     def bright_field_intensity_threshold(self) -> float:
         """Fraction of the mean-pattern maximum a bright-field pixel exceeds, as the session uses it."""
-        return float(self.ssb.bright_field_intensity_threshold)
+        return float(self.direct.bright_field_intensity_threshold)
 
     @property
     def scan_detector_rotation_flipped(self) -> bool:
         """Whether the session swaps the detector axes before rotating them onto the scan."""
-        return bool(self.ssb.scan_detector_rotation_flipped)
+        return bool(self.direct.scan_detector_rotation_flipped)
 
     @property
     def scan_offset(self) -> tuple[int, int]:
@@ -309,16 +309,16 @@ class DirectSession:
         ``(target - size) // 2`` from each edge. ``scan_shape`` is that padded
         grid and ``input_scan_shape`` the measured one; (0, 0) without padding.
         """
-        padded, measured = self.ssb.scan_shape, self.ssb.input_scan_shape
+        padded, measured = self.direct.scan_shape, self.direct.input_scan_shape
         return tuple(int(full - native) // 2 for full, native in zip(padded, measured))
 
     def select_region(self, scan_region, *, aberrations: dict, scan_detector_rotation_deg: float) -> "DirectSession":
         """A separately owned session over ``scan_region`` of this scan (``quantem.gpu.DirectPtycho.select_region``).
 
         ``scan_region`` is relative to this session's scan; the new session's
-        ``scan_region`` is in full-scan positions. Close it with ``.ssb.close()``.
+        ``scan_region`` is in full-scan positions. Close it with ``.direct.close()``.
         """
-        return DirectSession(self.ssb.select_region(
+        return DirectSession(self.direct.select_region(
             tuple(int(value) for value in scan_region), aberrations=dict(aberrations),
             scan_detector_rotation_deg=float(scan_detector_rotation_deg)))
 
@@ -341,25 +341,25 @@ class DirectSession:
 
         ``scan_sampling_A`` and ``detector_sampling_mrad`` are ``[row, col]``
         lists and the rotation is the physical angle in [0, 360). Every file and
-        message of the SSB widgets is built from this dict, so they cannot
+        message of the direct ptychography widgets is built from this dict, so they cannot
         disagree on a name or a unit.
         """
-        ssb = self.ssb
-        fit = getattr(ssb, "_aberration_search", None)
+        direct = self.direct
+        fit = getattr(direct, "_aberration_search", None)
         return {
-            "backend": ssb.backend, "scan_shape": tuple(int(size) for size in ssb.scan_shape), "source_path": ssb.source_path,
-            "input_scan_shape": ssb.input_scan_shape,
-            "voltage_kV": ssb.voltage_kV, "semiangle_mrad": ssb.semiangle_mrad, "scan_sampling_A": list(ssb.scan_sampling_A),
-            "detector_sampling_mrad": None if ssb.detector_sampling_mrad is None else list(ssb.detector_sampling_mrad),
-            "scan_detector_rotation_deg": ssb.scan_detector_rotation_deg, "scan_detector_rotation_flipped": ssb.scan_detector_rotation_flipped,
-            "aberrations": dict(ssb.known_aberrations),
-            "loss": float(ssb.best_loss) if math.isfinite(ssb.best_loss) else None,
-            "bright_field_radius_px": ssb.bright_field_radius_px,
-            "bright_field_intensity_threshold": ssb.bright_field_intensity_threshold,
+            "backend": direct.backend, "scan_shape": tuple(int(size) for size in direct.scan_shape), "source_path": direct.source_path,
+            "input_scan_shape": direct.input_scan_shape,
+            "voltage_kV": direct.voltage_kV, "semiangle_mrad": direct.semiangle_mrad, "scan_sampling_A": list(direct.scan_sampling_A),
+            "detector_sampling_mrad": None if direct.detector_sampling_mrad is None else list(direct.detector_sampling_mrad),
+            "scan_detector_rotation_deg": direct.scan_detector_rotation_deg, "scan_detector_rotation_flipped": direct.scan_detector_rotation_flipped,
+            "aberrations": dict(direct.known_aberrations),
+            "loss": float(direct.best_loss) if math.isfinite(direct.best_loss) else None,
+            "bright_field_radius_px": direct.bright_field_radius_px,
+            "bright_field_intensity_threshold": direct.bright_field_intensity_threshold,
             "num_bright_field_pixels": self.num_bright_field_pixels,
-            "sample_tilt_mrad": None if ssb.sample_tilt_mrad is None else list(ssb.sample_tilt_mrad),
-            "depth_spread_nm": ssb.depth_spread_nm,
-            # the kept fit's model agreement (higher is better) and its gain over standard SSB; None before a fit
+            "sample_tilt_mrad": None if direct.sample_tilt_mrad is None else list(direct.sample_tilt_mrad),
+            "depth_spread_nm": direct.depth_spread_nm,
+            # the kept fit's model agreement (higher is better) and its gain over standard direct ptychography; None before a fit
             "sample_agreement": _finite_or_none(getattr(fit, "sample_agreement", None)),
             "tilt_fit_gain": _finite_or_none(getattr(fit, "tilt_fit_gain", None)),
         }
@@ -385,7 +385,7 @@ class DirectSession:
                  # quantem.gpu tags the agreement trials "negative_thick_agreement" (the loss is its negative)
                  "objective": "phase_variance" if trial.get("objective", "phase_variance") == "phase_variance" else "agreement",
                  "loss": trial.get("loss")}
-                for trial in self.ssb.trial_history]
+                for trial in self.direct.trial_history]
 
     def calibration_identity(self) -> dict | None:
         """Identify the loaded evidence and launch geometry without copying counts or naming a path.
@@ -399,22 +399,22 @@ class DirectSession:
         """
         from quantem.gpu.direct_ptycho.persistence import json_value, source_identity
 
-        ssb = self.ssb
-        if ssb.source_kind == "array" or ssb.source_path is None:
+        direct = self.direct
+        if direct.source_kind == "array" or direct.source_path is None:
             return None
         state = self.state()  # Resolve automatic probe calibration first.
         return json_value({
             "source": source_identity(
-                ssb.source_path, scan_shape=ssb.input_scan_shape,
-                hot_pixel_correction=(ssb.source_provenance or {}).get("hot_pixel_correction"),
-                storage_path=ssb.source_storage_path,
-                calibration_path=ssb.calibration_path,
-                manifest_path=ssb.source_manifest_path,
+                direct.source_path, scan_shape=direct.input_scan_shape,
+                hot_pixel_correction=(direct.source_provenance or {}).get("hot_pixel_correction"),
+                storage_path=direct.source_storage_path,
+                calibration_path=direct.calibration_path,
+                manifest_path=direct.source_manifest_path,
             ),
-            "data": {"kind": ssb.source_kind, "dtype": ssb.source_dtype,
-                     "bytes": ssb.source_bytes, "scan_shape": ssb.scan_shape,
-                     "scan_region": ssb.scan_region,
-                     "detector_bin": ssb.source_detector_bin},
+            "data": {"kind": direct.source_kind, "dtype": direct.source_dtype,
+                     "bytes": direct.source_bytes, "scan_shape": direct.scan_shape,
+                     "scan_region": direct.scan_region,
+                     "detector_bin": direct.source_detector_bin},
             "geometry": {
                 **{name: state[name] for name in (
                     "voltage_kV", "semiangle_mrad", "scan_sampling_A",
@@ -422,7 +422,7 @@ class DirectSession:
                     "scan_detector_rotation_flipped", "bright_field_radius_px",
                     "bright_field_intensity_threshold", "num_bright_field_pixels",
                 )},
-                "bright_field_center_px": ssb.bright_field_center_px,
+                "bright_field_center_px": direct.bright_field_center_px,
             },
         })
 
@@ -451,14 +451,14 @@ class DirectSession:
     def restore_calibration(self, saved: dict) -> None:
         """Adopt a validated complete correction without running a new search.
 
-        Assigning ``ssb.known_aberrations`` states them as known (quantem.gpu), so a
+        Assigning ``direct.known_aberrations`` states them as known (quantem.gpu), so a
         later ``ptycho.run()`` applies them instead of fitting.
         """
         from quantem.gpu.direct_ptycho.units import validate_aberrations
 
         aberrations = validate_aberrations(saved["aberrations"], higher_order=True)
         self.set_scan_detector_rotation(saved["scan_detector_rotation_deg"])
-        self.ssb.known_aberrations = aberrations  # the saved model replaces every term, higher orders included
+        self.direct.known_aberrations = aberrations  # the saved model replaces every term, higher orders included
         self.store(aberrations, saved["loss"], sample=(
             {"sample_tilt_mrad": saved["sample_tilt_mrad"],
              "depth_spread_nm": saved["depth_spread_nm"]}
@@ -479,7 +479,7 @@ class DirectSession:
 
     def set_scan_detector_rotation(self, scan_detector_rotation_deg: float) -> None:
         """Set the physical scan-to-detector rotation and refresh the session's geometry."""
-        self.ssb.set_rotation(float(scan_detector_rotation_deg))
+        self.direct.set_rotation(float(scan_detector_rotation_deg))
 
     def store(self, aberrations: dict, loss: float | None, *, sample: dict | None = None) -> None:
         """Keep reviewed optics and sample correction for the next reconstruction.
@@ -488,11 +488,11 @@ class DirectSession:
         aberrations: an in-place update left an unfitted session to fit again
         on ``run()``, discarding the reviewed values.
         """
-        self.ssb.known_aberrations = {**self.ssb.known_aberrations, **aberrations}
-        self.ssb.sample_tilt_mrad = None if sample is None else tuple(sample["sample_tilt_mrad"])
-        self.ssb.depth_spread_nm = None if sample is None else float(sample["depth_spread_nm"])
+        self.direct.known_aberrations = {**self.direct.known_aberrations, **aberrations}
+        self.direct.sample_tilt_mrad = None if sample is None else tuple(sample["sample_tilt_mrad"])
+        self.direct.depth_spread_nm = None if sample is None else float(sample["depth_spread_nm"])
         if loss is not None:
-            self.ssb.best_loss = float(loss)
+            self.direct.best_loss = float(loss)
 
     def preview(self, aberrations: dict, **options):
         """Transient ``(phase, loss)`` at ``aberrations`` (``quantem.gpu.DirectPtycho.preview(aberrations, **options)``).
@@ -505,37 +505,37 @@ class DirectSession:
         float32, so a panel left at zero changed the last bits of most pixels of
         the two-term phase.
         """
-        return self.ssb.preview(_named_orders(aberrations), **options)
+        return self.direct.preview(_named_orders(aberrations), **options)
 
     @property
     def drag_windows(self) -> bool:
         """Whether ``drag`` / ``prepare`` / ``advance`` apply: quantem.gpu builds drag windows on CUDA only."""
-        return self.ssb.backend == "cuda"
+        return self.direct.backend == "cuda"
 
     def drag(self, control: str, aberrations: dict, **options):
         """Transient float32 phase while one slider ``control`` (``C10_nm``, ``phi12_deg``, ...) is dragged.
 
         ``quantem.gpu.direct_ptycho.direct_workflow.drag``: ``preview``'s image to a few
         float32 ulps, served from a Chebyshev window along that control once
-        ``advance`` has built it (1 ms phase, 3 ms complex, 7 ms SSB at 3x on a
+        ``advance`` has built it (1 ms phase, 3 ms complex, 7 ms direct ptychography at 3x on a
         512 x 512 scan with a 192 x 192 detector), exact frames until then. ``options`` are ``preview``'s
         except ``compute_loss``; committed frames use ``preview``.
         """
         from quantem.gpu.direct_ptycho import direct_workflow
 
-        return direct_workflow.drag(self.ssb, control, *self._drag_inputs(aberrations, **options)).get()
+        return direct_workflow.drag(self.direct, control, *self._drag_inputs(aberrations, **options)).get()
 
     def prepare(self, controls, aberrations: dict, **options) -> None:
         """Ask for drag windows along ``controls`` at these optics, built by ``advance`` while the sliders are idle."""
         from quantem.gpu.direct_ptycho import direct_workflow
 
-        direct_workflow.prepare(self.ssb, tuple(controls), *self._drag_inputs(aberrations, **options))
+        direct_workflow.prepare(self.direct, tuple(controls), *self._drag_inputs(aberrations, **options))
 
     def advance(self) -> bool:
         """Build one more node of a pending drag window; True when none is left."""
         from quantem.gpu.direct_ptycho import direct_workflow
 
-        return direct_workflow.advance(self.ssb)
+        return direct_workflow.advance(self.direct)
 
     def _drag_inputs(self, aberrations: dict, *, upsample, method: str = "phase_of_mean", sample_tilt_mrad=(0.0, 0.0),
                      depth_spread_nm: float = 0.0, **strengths):
@@ -546,10 +546,10 @@ class DirectSession:
         policy = direct_workflow.settings(method, *(strengths.get(name) for name in (
             "phase_damp", "amplitude_damp", "smoothness_inv_A", "detector_weighting")))
         return (validate_aberrations(_named_orders(aberrations), higher_order=True), tuple(sample_tilt_mrad),
-                float(depth_spread_nm), self.ssb._resolve_upsample(upsample), policy)
+                float(depth_spread_nm), self.direct._resolve_upsample(upsample), policy)
 
     def browser_state(self) -> dict:
-        """The compact state a browser SSB engine rebuilds its reducers from.
+        """The compact state a browser direct ptychography engine rebuilds its reducers from.
 
         quantem.gpu's ``SSBExportState``: the bright-field pixel list
         (``bright_field_rows`` / ``_cols``), their reciprocal coordinates in the
@@ -559,7 +559,7 @@ class DirectSession:
         aperture terms, with the detector step in mrad. ``ShowPtycho.export``
         writes ``snapshots/cal.json`` from this dict alone.
         """
-        state = self.ssb.browser_state()
+        state = self.direct.browser_state()
         return {
             "scan_shape": tuple(int(size) for size in state.scan_shape),
             "num_bright_field_pixels": int(state.num_bright_field_pixels),
@@ -581,17 +581,17 @@ class DirectSession:
 
     def export_bright_field(self, path) -> None:
         """Write the exact bright-field counts beside an exported page (``quantem.gpu.DirectPtycho.export_brightfield``)."""
-        self.ssb.export_brightfield(path)
+        self.direct.export_brightfield(path)
 
     def run(self, **options) -> dict:
         """Run direct reconstruction at the reviewed optics (``quantem.gpu.DirectPtycho.run``); see ``result`` for the keys."""
-        return self.result(self.ssb.run(**options))
+        return self.result(self.direct.run(**options))
 
     def aberrations(self, **options) -> dict:
         """Fit the aberrations (``quantem.gpu.DirectPtycho.aberrations(**options)``); see ``result`` for the keys."""
         options.setdefault("search", "standard")
         options.setdefault("show", False)
-        return self.result(self.ssb.aberrations(**options))
+        return self.result(self.direct.aberrations(**options))
 
     def fit_regions(self, regions: list[dict], parameters: dict, *,
                     upsample: int,
@@ -599,7 +599,7 @@ class DirectSession:
                     progress: Callable[[dict], None] | None = None) -> dict:
         """Jointly fit regional models and crop their full-scan reconstructions.
 
-        All numerical fitting and reconstruction use the ordinary SSB backend.
+        All numerical fitting and reconstruction use the ordinary direct ptychography backend.
         Independent regional sessions leave the overview calibration intact.
         Detector geometry and rotation are common; aberrations, both tilt
         components and depth spread are optimized together for each region,
@@ -610,27 +610,27 @@ class DirectSession:
         A fit within 0.01 of the tilt limit or of quantem.gpu's depth-spread
         search range (``quantem.gpu.direct_ptycho.DEPTH_SPREAD_RANGE_NM``) is flagged ``bound_hit``.
         """
-        ssb = self.ssb
-        if ssb.scan_region is not None or not ssb.source_path:
+        direct = self.direct
+        if direct.scan_region is not None or not direct.source_path:
             raise ValueError(
                 "Local fitting needs the full acquisition. Open it with "
                 "DirectPtycho.open(path, ...) or pass source_path to DirectPtycho(data, ...).")
         optics = parameters["aberrations"]
-        if ssb.scan_sampling_A[0] != ssb.scan_sampling_A[1]:
+        if direct.scan_sampling_A[0] != direct.scan_sampling_A[1]:
             raise ValueError("Regional display currently needs equal row and column scan sampling.")
         started = time.perf_counter()
         fits, images = [], {}
         from quantem.gpu.direct_ptycho import DEPTH_SPREAD_RANGE_NM as depth_range_nm  # the joint fit's own depth search range
         factor = int(upsample)
         geometry = {
-            "backend": ssb.backend, "voltage_kV": ssb.voltage_kV,
-            "semiangle_mrad": ssb.semiangle_mrad,
-            "scan_sampling_A": ssb.scan_sampling_A,
-            "detector_sampling_mrad": ssb.detector_sampling_mrad,
-            "bright_field_center_px": ssb.bright_field_center_px,
-            "bright_field_radius_px": ssb.bright_field_radius_px,
-            "bright_field_intensity_threshold": ssb.bright_field_intensity_threshold,
-            "scan_detector_rotation_flipped": ssb.scan_detector_rotation_flipped,
+            "backend": direct.backend, "voltage_kV": direct.voltage_kV,
+            "semiangle_mrad": direct.semiangle_mrad,
+            "scan_sampling_A": direct.scan_sampling_A,
+            "detector_sampling_mrad": direct.detector_sampling_mrad,
+            "bright_field_center_px": direct.bright_field_center_px,
+            "bright_field_radius_px": direct.bright_field_radius_px,
+            "bright_field_intensity_threshold": direct.bright_field_intensity_threshold,
+            "scan_detector_rotation_flipped": direct.scan_detector_rotation_flipped,
             "scan_detector_rotation_deg": parameters["scan_detector_rotation_deg"],
         }
         for region_index, region in enumerate(regions, start=1):
@@ -644,7 +644,7 @@ class DirectSession:
                               "trials": int(trials),
                               "elapsed_s": time.perf_counter() - started})
             report("preparing", 0)
-            with ssb.select_region(
+            with direct.select_region(
                 bounds, aberrations=optics,
                 scan_detector_rotation_deg=parameters["scan_detector_rotation_deg"],
             ) as regional:
@@ -672,9 +672,9 @@ class DirectSession:
                 fit["aberrations"], sample_tilt_mrad=fit["sample_tilt_mrad"],
                 depth_spread_nm=fit["depth_spread_nm"],
                 upsample=factor, compute_loss=False)
-            if tuple(phase.shape) != tuple(size * factor for size in ssb.scan_shape):
+            if tuple(phase.shape) != tuple(size * factor for size in direct.scan_shape):
                 raise ValueError("Local correction requires a full-scan reconstruction before cropping.")
-            images[f"{region['label']} · SSB"] = self.crop_native(phase, bounds, factor)
+            images[f"{region['label']} · Direct"] = self.crop_native(phase, bounds, factor)
             coordinates = np.asarray(fit["optimizer"].get("coordinates", []))
             fit_bounds = np.asarray(fit["optimizer"].get("bounds", []))
             if coordinates.size and fit_bounds.shape == (coordinates.size, 2):
@@ -690,9 +690,9 @@ class DirectSession:
                 "fit_seconds": time.perf_counter() - region_started,
                 "bound_hit": bool(bound_hit),
                 "fit_record": {"method": "joint optics, tilt and depth", "fits": [fit],
-                               "backend": ssb.backend, "trials": int(trials)},
+                               "backend": direct.backend, "trials": int(trials)},
                 "reconstruction": {
-                    "scan_shape": list(ssb.scan_shape), "scan_offset": list(self.scan_offset),
+                    "scan_shape": list(direct.scan_shape), "scan_offset": list(self.scan_offset),
                     "scan_region": None,
                     "display_bounds": list(bounds), "upsample": factor,
                     "num_bright_field_pixels": self.num_bright_field_pixels,
@@ -700,8 +700,8 @@ class DirectSession:
             })
         return {
             "regions": regions, "fits": fits, "images": images,
-            "sampling_A": ssb.scan_sampling_A[0] / factor,
-            "result_kind": "Joint optics, tilt and depth · full-scan SSB",
+            "sampling_A": direct.scan_sampling_A[0] / factor,
+            "result_kind": "Joint optics, tilt and depth · full-scan direct ptychography",
             "reference_parameters": parameters, "shared_geometry": geometry,
             "map": fits, "last_fit_seconds": time.perf_counter() - started,
         }

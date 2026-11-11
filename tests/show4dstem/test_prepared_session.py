@@ -41,7 +41,7 @@ def test_prepared_session_controls_and_lifetime():
     viewer = Show4DSTEM(session, bright_field_center_px=(7.5, 7.5), bright_field_radius_px=3)
     try:
         assert viewer.scan_sampling_A == [0.4, 0.5]
-        assert not viewer.ssb_compute_enabled
+        assert not viewer.direct_enabled
         for preset in ("bf", "adf", "haadf"):
             viewer.apply_preset(preset)
             mask = viewer._current_detector_mask()

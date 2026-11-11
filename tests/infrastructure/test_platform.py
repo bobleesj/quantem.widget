@@ -190,7 +190,7 @@ def test_notice_prints_once_per_process(monkeypatch, capsys):
 def test_gpu_adapter_without_quantem_gpu_explains_the_install(monkeypatch):
     adapter = _load_without(gpu_adapter.__file__, "quantem.gpu", monkeypatch)
     assert not adapter.available() and not adapter.accelerator_ready()
-    assert not adapter.is_acquisition(np.zeros(3)) and not adapter.is_ssb(object())
+    assert not adapter.is_acquisition(np.zeros(3)) and not adapter.is_direct_ptycho(object())
     _machine(monkeypatch, system="linux", machine="x86_64", nvidia=True)
     for call in (lambda: adapter.load_acquisition("scan_master.h5"), lambda: adapter.prepare_session(None),
                  lambda: adapter.DirectSession.open(None, voltage_kV=300, semiangle_mrad=20, scan_sampling_A=(0.5, 0.5)),

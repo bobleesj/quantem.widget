@@ -59,7 +59,7 @@ gets a schema bump and a rewrite script.
 ## Tests
 
 For a release, additionally run the installed-wheel CUDA and MPS
-[ShowPtycho acceptance gate](docs/maintainer/ssb-release-check.md).
+[ShowPtycho acceptance gate](docs/maintainer/direct-ptycho-release-check.md).
 Build-only checks do not qualify a release. The release workflow requires both
 hardware jobs before publication.
 

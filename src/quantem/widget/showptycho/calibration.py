@@ -1,4 +1,4 @@
-"""Read the complete saved SSB correction before the widget's first preview."""
+"""Read the complete saved direct ptychography correction before the widget's first preview."""
 
 import json
 import math
@@ -17,7 +17,7 @@ def read_calibration(path: Path, identity: dict | None, scan_region: tuple[int, 
     saved = json.loads(path.read_text(encoding="utf-8"))
     found = saved.get("schema") if isinstance(saved, dict) else None
     if found != schema:
-        rewrite = ("; rewrite it once with scripts/rewrite_ssb_calibration.py from the quantem.widget repository"
+        rewrite = ("; rewrite it once with scripts/rewrite_direct_calibration.py from the quantem.widget repository"
                    if isinstance(found, str) and found.startswith("quantem.ssb-calibration/") else "")
         raise ValueError(f"the saved calibration format {found!r} is not ShowPtycho's {schema!r}{rewrite}")
     if identity is None:

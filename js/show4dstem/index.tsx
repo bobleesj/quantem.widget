@@ -101,7 +101,7 @@ function viSourceLabel(source: string): string {
   if (source === "DPC_row") return "DPC row";
   if (source === "DPC_col") return "DPC col";
   if (source === "iDPC") return "iDPC";
-  if (source === "SSB") return "SSB";
+  if (source === "Direct") return "Direct ptycho";
   return source;
 }
 
@@ -138,7 +138,7 @@ type Show4DSTEMModel = ReturnType<typeof useModel>;
 type ViProductMaps = { bytes: DataView; productIndex: number; frames: number; pixels: number };
 
 /**
- * Locate the precomputed product maps (DPC, iDPC, SSB) Python sent for one VI
+ * Locate the precomputed product maps (DPC, iDPC, direct ptychography) Python sent for one VI
  * source: vi_product_maps_bytes holds float32 [label, frame, scan row, scan col].
  * Null when that source has no map, so the caller falls back to the ROI image.
  */
@@ -166,7 +166,7 @@ function viProductFrameView(
   scanCols: number,
   sourceOverride?: string,
 ): DataView | null {
-  // Python writes the canonical source names (roi, DPC_row, DPC_col, iDPC, SSB) back to the model.
+  // Python writes the canonical source names (roi, DPC_row, DPC_col, iDPC, direct ptychography) back to the model.
   const source = sourceOverride ?? model.get("vi_source");
   if (source === "roi") return null;
   const maps = viProductMaps(model, source, scanRows, scanCols);
@@ -387,7 +387,7 @@ const VI_SOURCE_COLORS: Record<string, { dark: string; light: string }> = {
   DPC_row: { dark: "#38bdf8", light: "#0369a1" },
   DPC_col: { dark: "#a78bfa", light: "#6d28d9" },
   iDPC: { dark: "#2dd4bf", light: "#0f766e" },
-  SSB: { dark: "#f472b6", light: "#be185d" },
+  Direct: { dark: "#f472b6", light: "#be185d" },
 };
 
 function viSourceDisplayColor(source: string, themeName: string): string {
@@ -2270,26 +2270,26 @@ function Show4DSTEM() {
   const [viProductLabels] = useModelState<string[]>("vi_product_labels");
   const [viProductMapFrames] = useModelState<number>("vi_product_map_frames");
   const [viProductMapsBytes] = useModelState<DataView>("vi_product_maps_bytes");
-  const [, setSsbComputeRequest] = useModelState<string>("ssb_compute_request");
+  const [, setDirectRequest] = useModelState<string>("direct_request");
   // A preset button asks the kernel (or, offline, the browser backend) to place the detector.
   const [, requestViPreset] = useModelState<string>("_preset_request");
-  const [ssbComputeStatus] = useModelState<string>("ssb_compute_status");
-  const [ssbComputeBusy] = useModelState<boolean>("ssb_compute_busy");
-  const [ssbComputeEnabled] = useModelState<boolean>("ssb_compute_enabled");
-  const [ssbComputeNTrials, setSsbComputeNTrials] = useModelState<number>("ssb_compute_trials");
-  const [ssbComputeTilt, setSsbComputeTilt] = useModelState<boolean>("ssb_compute_tilt");
-  // quantem.gpu's two SSB fits: tilt-corrected (default) and tilt=False
-  const ssbComputeMethod = ssbComputeTilt !== false ? "tilt" : "tilt0";
-  const [ssbComputeRefinement, setSsbComputeRefinement] = useModelState<"auto" | null>("ssb_compute_refinement");
-  const [ssbComputeLockC10, setSsbComputeLockC10] = useModelState<boolean>("ssb_compute_lock_C10");
-  const [ssbComputeLockC12, setSsbComputeLockC12] = useModelState<boolean>("ssb_compute_lock_C12");
-  const [ssbComputeBfPixels] = useModelState<number>("ssb_compute_num_bright_field_pixels");
-  const [ssbComputeC10Nm, setSsbComputeC10Nm] = useModelState<number>("ssb_compute_C10_nm");
-  const [ssbComputeC12Nm, setSsbComputeC12Nm] = useModelState<number>("ssb_compute_C12_nm");
-  const [ssbComputePhi12Deg, setSsbComputePhi12Deg] = useModelState<number>("ssb_compute_phi12_deg");
-  const [ssbComputeRotationDeg, setSsbComputeRotationDeg] = useModelState<number>("ssb_compute_scan_detector_rotation_deg");
-  const [ssbComputeCalibrationJson] = useModelState<string>("ssb_compute_calibration_json");
-  const [ssbComputeCalibrationFilename] = useModelState<string>("ssb_compute_calibration_filename");
+  const [directStatus] = useModelState<string>("direct_status");
+  const [directBusy] = useModelState<boolean>("direct_busy");
+  const [directEnabled] = useModelState<boolean>("direct_enabled");
+  const [directTrials, setDirectTrials] = useModelState<number>("direct_trials");
+  const [directTilt, setDirectTilt] = useModelState<boolean>("direct_tilt");
+  // quantem.gpu's two direct ptychography fits: tilt-corrected (default) and tilt=False
+  const directMethod = directTilt !== false ? "tilt" : "tilt0";
+  const [directRefinement, setDirectRefinement] = useModelState<"auto" | null>("direct_refinement");
+  const [directLockC10, setDirectLockC10] = useModelState<boolean>("direct_lock_C10");
+  const [directLockC12, setDirectLockC12] = useModelState<boolean>("direct_lock_C12");
+  const [directBrightFieldPixels] = useModelState<number>("direct_bright_field_pixels");
+  const [directC10Nm, setDirectC10Nm] = useModelState<number>("direct_C10_nm");
+  const [directC12Nm, setDirectC12Nm] = useModelState<number>("direct_C12_nm");
+  const [directPhi12Deg, setDirectPhi12Deg] = useModelState<number>("direct_phi12_deg");
+  const [directRotationDeg, setDirectRotationDeg] = useModelState<number>("direct_scan_detector_rotation_deg");
+  const [directCalibrationJson] = useModelState<string>("direct_calibration_json");
+  const [directCalibrationFilename] = useModelState<string>("direct_calibration_filename");
 
   // ROI state
   const [storedRoiRadius, setRoiRadius] = useModelState<number>("roi_radius");
@@ -4448,7 +4448,7 @@ function Show4DSTEM() {
     const seen = new Set<string>();
     const out: string[] = [];
     const add = (source: string) => {
-      if (!["DPC_row", "DPC_col", "iDPC", "SSB"].includes(source) || seen.has(source)) return;
+      if (!["DPC_row", "DPC_col", "iDPC", "Direct"].includes(source) || seen.has(source)) return;
       seen.add(source);
       out.push(source);
     };
@@ -4685,7 +4685,7 @@ function Show4DSTEM() {
   // Export
   const [dpExportAnchor, setDpExportAnchor] = React.useState<HTMLElement | null>(null);
   const [dpMoreAnchor, setDpMoreAnchor] = React.useState<HTMLElement | null>(null);
-  const [ssbCalOpen, setSsbCalOpen] = React.useState(false);
+  const [directCalOpen, setDirectCalOpen] = React.useState(false);
   const [, setExportRequest] = useModelState<string>("export_request");
   const [exportStatus] = useModelState<string>("export_status");
   const [exportEnabled] = useModelState<boolean>("export_enabled");
@@ -4704,7 +4704,7 @@ function Show4DSTEM() {
       setHtmlExportBusy(false);
     }
   }, [exportStatus]);
-  const requestSsbCompute = React.useCallback((options?: {
+  const requestDirect = React.useCallback((options?: {
     manualAberrations?: boolean;
     closeMenu?: boolean;
     c10Nm?: number;
@@ -4712,20 +4712,20 @@ function Show4DSTEM() {
     phi12Deg?: number;
     rotationDeg?: number;
   }) => {
-    const nTrials = Math.max(0, Math.round(Number(ssbComputeNTrials ?? 200)));
+    const nTrials = Math.max(0, Math.round(Number(directTrials ?? 200)));
     const manualAberrations = Boolean(options?.manualAberrations);
-    const c10Nm = Number(options?.c10Nm ?? ssbComputeC10Nm ?? 0);
-    const c12Nm = Number(options?.c12Nm ?? ssbComputeC12Nm ?? 0);
-    const phi12Deg = Number(options?.phi12Deg ?? ssbComputePhi12Deg ?? 0);
-    const rotationDeg = Number(options?.rotationDeg ?? ssbComputeRotationDeg ?? 0);
+    const c10Nm = Number(options?.c10Nm ?? directC10Nm ?? 0);
+    const c12Nm = Number(options?.c12Nm ?? directC12Nm ?? 0);
+    const phi12Deg = Number(options?.phi12Deg ?? directPhi12Deg ?? 0);
+    const rotationDeg = Number(options?.rotationDeg ?? directRotationDeg ?? 0);
     const payload = JSON.stringify({
       id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-      action: "compute_ssb",
+      action: "direct_phase",
       trials: nTrials,
-      tilt: ssbComputeTilt !== false,
-      refinement: ssbComputeRefinement ?? null,
-      lock_C10: Boolean(ssbComputeLockC10),
-      lock_C12: Boolean(ssbComputeLockC12),
+      tilt: directTilt !== false,
+      refinement: directRefinement ?? null,
+      lock_C10: Boolean(directLockC10),
+      lock_C12: Boolean(directLockC12),
       lock_aberrations: manualAberrations,
       ...(manualAberrations ? {
         aberrations: { C10_nm: c10Nm, C12_nm: c12Nm, phi12_deg: phi12Deg },
@@ -4733,38 +4733,38 @@ function Show4DSTEM() {
       } : {}),
     });
     if (options?.closeMenu !== false) setDpMoreAnchor(null);
-    setSsbComputeRequest(payload);
+    setDirectRequest(payload);
   }, [
-    setSsbComputeRequest,
-    ssbComputeC10Nm,
-    ssbComputeC12Nm,
-    ssbComputeLockC10,
-    ssbComputeLockC12,
-    ssbComputeNTrials,
-    ssbComputePhi12Deg,
-    ssbComputeRefinement,
-    ssbComputeRotationDeg,
-    ssbComputeTilt,
+    setDirectRequest,
+    directC10Nm,
+    directC12Nm,
+    directLockC10,
+    directLockC12,
+    directTrials,
+    directPhi12Deg,
+    directRefinement,
+    directRotationDeg,
+    directTilt,
   ]);
-  const requestSsbManualReconstruct = React.useCallback((values?: {
+  const requestDirectManualReconstruct = React.useCallback((values?: {
     c10Nm?: number;
     c12Nm?: number;
     phi12Deg?: number;
     rotationDeg?: number;
   }) => {
-    requestSsbCompute({
+    requestDirect({
       manualAberrations: true,
       closeMenu: false,
       ...values,
     });
-  }, [requestSsbCompute]);
-  const downloadSsbCalibration = React.useCallback(() => {
-    const text = String(ssbComputeCalibrationJson || "").trim();
+  }, [requestDirect]);
+  const downloadDirectCalibration = React.useCallback(() => {
+    const text = String(directCalibrationJson || "").trim();
     if (!text) return;
-    const filename = String(ssbComputeCalibrationFilename || "").trim() || "show4dstem_ssb_calibration.json";
+    const filename = String(directCalibrationFilename || "").trim() || "show4dstem_direct_calibration.json";
     downloadBlob(new Blob([text], { type: "application/json;charset=utf-8" }), filename);
     setDpMoreAnchor(null);
-  }, [ssbComputeCalibrationFilename, ssbComputeCalibrationJson]);
+  }, [directCalibrationFilename, directCalibrationJson]);
   const reportDatasetCount = React.useCallback((datasetScope: HtmlDatasetScope) => {
     const hidden = new Set((compareHiddenPanels || []).filter((idx) => Number.isInteger(idx) && idx >= 0 && idx < nFrames));
     const unhidden = Math.max(1, nFrames - hidden.size);
@@ -5315,7 +5315,7 @@ function Show4DSTEM() {
   const fftMagCacheRef = React.useRef<Float32Array | null>(null);
 
   // Parse displayed image bytes into Float32Array and apply scale for histogram.
-  // For DPC/SSB product maps this is a view into vi_product_maps_bytes, so source
+  // For DPC/direct ptychography product maps this is a view into vi_product_maps_bytes, so source
   // switching reuses the static map payload instead of asking Python to resend it.
   React.useEffect(() => {
     if (!displayedVirtualImageBytes) return;
@@ -6113,7 +6113,7 @@ function Show4DSTEM() {
     const kUnit = kCalibrated ? kPixelUnit : "px";
     if (showScaleBar) drawScaleBarHiDPI(canvas, DPR, dpZoom, kPixelSize || 1, kUnit, detCols);
     // Draw detector ROI only when the displayed virtual image is produced from
-    // the live detector mask. Precomputed DPC/SSB maps are static products, so
+    // the live detector mask. Precomputed DPC/direct ptychography maps are static products, so
     // showing the BF/ADF circle there is misleading.
     if (roiVirtualDetectorActive) {
       if (roiMode === "point") {
@@ -7524,29 +7524,29 @@ function Show4DSTEM() {
   const dpOptionSummary = `${optionLabel(roiMode)}${roiMode === "annular" ? ` ${Math.round(roiRadiusInner)}-${Math.round(roiRadius)}px` : roiMode !== "point" ? ` ${Math.round(roiRadius)}px` : ""} | ${optionLabel(dpColormap)} | ${dpScaleMode === "log" ? "Log" : "Lin"}`;
   const viOptionSummary = `${viSourceLabel(activeViSource)} | ${viRoiMode === "off" ? "ROI off" : `${optionLabel(viRoiMode)} ${Math.round(viRoiRadius || 5)}px`} | ${optionLabel(viColormap)} | ${viScaleMode === "log" ? "Log" : "Lin"}`;
   const fftOptionSummary = `${fftScaleMode === "log" ? "Log" : "Lin"} | ${optionLabel(fftColormap)}${fftAuto ? " | Auto" : ""}`;
-  const ssbBfCountText = Number(ssbComputeBfPixels || 0) > 0
-    ? `${Math.max(0, Math.round(Number(ssbComputeBfPixels || 0)))} BF px`
+  const directBfCountText = Number(directBrightFieldPixels || 0) > 0
+    ? `${Math.max(0, Math.round(Number(directBrightFieldPixels || 0)))} BF px`
     : "BF count appears after first run";
-  const hasSsbCalibrationDownload = String(ssbComputeCalibrationJson || "").trim().length > 0;
-  const ssbProgressText = String(ssbComputeStatus || "").trim()
-    || (ssbComputeBusy ? "Running SSB..." : "");
-  const ssbStatusIsFailure = ssbProgressText.startsWith("SSB failed");
-  const hasSsbProductMap = viProductSourceOptions.includes("SSB");
-  const showSsbCalibrationPanel = controlsVisible
-    && ssbComputeEnabled
-    && hasSsbProductMap
-    && hasSsbCalibrationDownload
+  const hasDirectCalibrationDownload = String(directCalibrationJson || "").trim().length > 0;
+  const directProgressText = String(directStatus || "").trim()
+    || (directBusy ? "Running direct ptycho..." : "");
+  const directStatusIsFailure = directProgressText.startsWith("Direct ptycho failed");
+  const hasDirectProductMap = viProductSourceOptions.includes("Direct");
+  const showDirectCalibrationPanel = controlsVisible
+    && directEnabled
+    && hasDirectProductMap
+    && hasDirectCalibrationDownload
     && !compareMode;
-  const ssbC10Limit = Math.max(100, Math.ceil(Math.abs(Number(ssbComputeC10Nm ?? 0)) * 2 / 25) * 25);
-  const ssbC12Limit = Math.max(100, Math.ceil(Math.abs(Number(ssbComputeC12Nm ?? 0)) * 2 / 25) * 25);
-  const ssbTuneSliderSx = {
+  const directC10Limit = Math.max(100, Math.ceil(Math.abs(Number(directC10Nm ?? 0)) * 2 / 25) * 25);
+  const directC12Limit = Math.max(100, Math.ceil(Math.abs(Number(directC12Nm ?? 0)) * 2 / 25) * 25);
+  const directTuneSliderSx = {
     ...sliderStyles.small,
     minWidth: 115,
     flex: 1,
     mx: 0.75,
   };
-  const ssbCalSummary = `C10 ${Number(ssbComputeC10Nm ?? 0).toFixed(0)} nm | C12 ${Number(ssbComputeC12Nm ?? 0).toFixed(0)} nm | φ12 ${Number(ssbComputePhi12Deg ?? 0).toFixed(0)}° | rot ${Number(ssbComputeRotationDeg ?? 0).toFixed(1)}°`;
-  const ssbCalToggleSx = {
+  const directCalSummary = `C10 ${Number(directC10Nm ?? 0).toFixed(0)} nm | C12 ${Number(directC12Nm ?? 0).toFixed(0)} nm | φ12 ${Number(directPhi12Deg ?? 0).toFixed(0)}° | rot ${Number(directRotationDeg ?? 0).toFixed(1)}°`;
+  const directCalToggleSx = {
     ...compactButton,
     display: "flex",
     width: "100%",
@@ -7563,57 +7563,57 @@ function Show4DSTEM() {
     "& .MuiButton-endIcon": { ml: 0.25, mr: 0 },
     "& .MuiSvgIcon-root": { fontSize: 16 },
   };
-  const ssbTuneCommit = React.useCallback((values?: {
+  const directTuneCommit = React.useCallback((values?: {
     c10Nm?: number;
     c12Nm?: number;
     phi12Deg?: number;
     rotationDeg?: number;
   }) => {
-    requestSsbManualReconstruct({
-      c10Nm: Number(values?.c10Nm ?? ssbComputeC10Nm ?? 0),
-      c12Nm: Number(values?.c12Nm ?? ssbComputeC12Nm ?? 0),
-      phi12Deg: Number(values?.phi12Deg ?? ssbComputePhi12Deg ?? 0),
-      rotationDeg: Number(values?.rotationDeg ?? ssbComputeRotationDeg ?? 0),
+    requestDirectManualReconstruct({
+      c10Nm: Number(values?.c10Nm ?? directC10Nm ?? 0),
+      c12Nm: Number(values?.c12Nm ?? directC12Nm ?? 0),
+      phi12Deg: Number(values?.phi12Deg ?? directPhi12Deg ?? 0),
+      rotationDeg: Number(values?.rotationDeg ?? directRotationDeg ?? 0),
     });
   }, [
-    requestSsbManualReconstruct,
-    ssbComputeC10Nm,
-    ssbComputeC12Nm,
-    ssbComputePhi12Deg,
-    ssbComputeRotationDeg,
+    requestDirectManualReconstruct,
+    directC10Nm,
+    directC12Nm,
+    directPhi12Deg,
+    directRotationDeg,
   ]);
-  const ssbTuneDebounceRef = React.useRef<number | null>(null);
-  const scheduleSsbTuneCommit = React.useCallback((values?: {
+  const directTuneDebounceRef = React.useRef<number | null>(null);
+  const scheduleDirectTuneCommit = React.useCallback((values?: {
     c10Nm?: number;
     c12Nm?: number;
     phi12Deg?: number;
     rotationDeg?: number;
   }) => {
-    if (ssbComputeBusy) return;
-    if (ssbTuneDebounceRef.current !== null) {
-      window.clearTimeout(ssbTuneDebounceRef.current);
+    if (directBusy) return;
+    if (directTuneDebounceRef.current !== null) {
+      window.clearTimeout(directTuneDebounceRef.current);
     }
-    ssbTuneDebounceRef.current = window.setTimeout(() => {
-      ssbTuneDebounceRef.current = null;
-      ssbTuneCommit(values);
+    directTuneDebounceRef.current = window.setTimeout(() => {
+      directTuneDebounceRef.current = null;
+      directTuneCommit(values);
     }, 350);
-  }, [ssbComputeBusy, ssbTuneCommit]);
-  const commitSsbTuneNow = React.useCallback((values?: {
+  }, [directBusy, directTuneCommit]);
+  const commitDirectTuneNow = React.useCallback((values?: {
     c10Nm?: number;
     c12Nm?: number;
     phi12Deg?: number;
     rotationDeg?: number;
   }) => {
-    if (ssbTuneDebounceRef.current !== null) {
-      window.clearTimeout(ssbTuneDebounceRef.current);
-      ssbTuneDebounceRef.current = null;
+    if (directTuneDebounceRef.current !== null) {
+      window.clearTimeout(directTuneDebounceRef.current);
+      directTuneDebounceRef.current = null;
     }
-    ssbTuneCommit(values);
-  }, [ssbTuneCommit]);
+    directTuneCommit(values);
+  }, [directTuneCommit]);
   React.useEffect(() => () => {
-    if (ssbTuneDebounceRef.current !== null) {
-      window.clearTimeout(ssbTuneDebounceRef.current);
-      ssbTuneDebounceRef.current = null;
+    if (directTuneDebounceRef.current !== null) {
+      window.clearTimeout(directTuneDebounceRef.current);
+      directTuneDebounceRef.current = null;
     }
   }, []);
   const currentViSource = model.get("vi_source");
@@ -7805,7 +7805,7 @@ function Show4DSTEM() {
           </MenuItem>
         ))}
       </Menu>}
-      {ssbComputeEnabled && <Button
+      {directEnabled && <Button
         size="small"
         sx={compactButton}
         onClick={(event) => setDpMoreAnchor(event.currentTarget)}
@@ -7813,7 +7813,7 @@ function Show4DSTEM() {
       >
         More
       </Button>}
-      {ssbComputeEnabled && <Menu
+      {directEnabled && <Menu
         anchorEl={dpMoreAnchor}
         open={Boolean(dpMoreAnchor)}
         onClose={() => setDpMoreAnchor(null)}
@@ -7825,17 +7825,17 @@ function Show4DSTEM() {
         <Box sx={{ px: 1.5, py: 1, width: 242, boxSizing: "border-box" }}>
           <Stack direction="row" alignItems="center" sx={{ mb: 0.75, gap: 0.25 }}>
             <Typography sx={{ ...themedTypography.label, color: themeColors.text }}>
-              SSB
+              Direct ptycho
             </Typography>
             <InfoTooltip
               theme={themeInfo.theme}
               text={
                 <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
                   <Typography sx={{ fontSize: 11, lineHeight: 1.35 }}>
-                    SSB (single-sideband ptychography) computes a phase image from the 4D-STEM diffraction stack using the live backend.
+                    Direct ptychography computes a phase image from the 4D-STEM diffraction stack using the live backend.
                   </Typography>
                   <Typography sx={{ fontSize: 11, lineHeight: 1.35 }}>
-                    Fit: the default is model-based and tilt-corrected, as everywhere in quantem: the SSB model fitted to the data with the sample tilt and depth spread; C10 is then the defocus at mid-depth. Tilt 0 holds the tilt at 0 (tilt=False).
+                    Fit: the default is model-based and tilt-corrected, as everywhere in quantem: the direct ptychography model fitted to the data with the sample tilt and depth spread; C10 is then the defocus at mid-depth. Tilt 0 holds the tilt at 0 (tilt=False).
                   </Typography>
                   <Typography sx={{ fontSize: 11, lineHeight: 1.35 }}>
                     Trials controls the aberration search; Refine runs a final local fit. Lock C10 or C12 to pin a coefficient at its slider value during the search. With tilt correction, C12 locks alone only at 0; lock both to fit the tilt and depth alone.
@@ -7850,10 +7850,10 @@ function Show4DSTEM() {
           <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.75, gap: 1 }}>
             <Typography sx={themedTypography.label}>Trials</Typography>
             <Select
-              value={Math.max(0, Math.round(Number(ssbComputeNTrials ?? 200)))}
-              onChange={(event) => setSsbComputeNTrials(Number(event.target.value))}
+              value={Math.max(0, Math.round(Number(directTrials ?? 200)))}
+              onChange={(event) => setDirectTrials(Number(event.target.value))}
               size="small"
-              disabled={ssbComputeBusy}
+              disabled={directBusy}
               sx={{ ...themedSelect, minWidth: 82, fontSize: 10 }}
               MenuProps={themedMenuProps}
             >
@@ -7865,15 +7865,15 @@ function Show4DSTEM() {
             </Select>
           </Stack>
           <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5, gap: 1 }}>
-            <Typography sx={themedTypography.label} title="quantem's SSB fits: model-based, tilt-corrected (the default); model-based, tilt held at 0">
+            <Typography sx={themedTypography.label} title="quantem's direct ptychography fits: model-based, tilt-corrected (the default); model-based, tilt held at 0">
               Fit
             </Typography>
             <Select
-              value={ssbComputeMethod}
-              onChange={(event) => setSsbComputeTilt(String(event.target.value) === "tilt")}
+              value={directMethod}
+              onChange={(event) => setDirectTilt(String(event.target.value) === "tilt")}
               size="small"
-              disabled={ssbComputeBusy}
-              inputProps={{ "aria-label": "SSB fit" }}
+              disabled={directBusy}
+              inputProps={{ "aria-label": "Direct ptycho fit" }}
               sx={{ ...themedSelect, minWidth: 82, fontSize: 10 }}
               MenuProps={themedMenuProps}
             >
@@ -7884,51 +7884,51 @@ function Show4DSTEM() {
           <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5, gap: 1 }}>
             <Typography sx={themedTypography.label} title="Local refinement after the search; quantem.gpu picks the optimizer the fit supports">Refine</Typography>
             <Switch
-              checked={ssbComputeRefinement != null}
-              slotProps={{ input: { "aria-label": "SSB refinement" } }}
-              onChange={(event) => setSsbComputeRefinement(event.target.checked ? "auto" : null)}
-              disabled={ssbComputeBusy}
+              checked={directRefinement != null}
+              slotProps={{ input: { "aria-label": "Direct ptycho refinement" } }}
+              onChange={(event) => setDirectRefinement(event.target.checked ? "auto" : null)}
+              disabled={directBusy}
               size="small"
               sx={switchStyles.small}
             />
           </Stack>
           <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5, gap: 1 }}>
             <Typography sx={themedTypography.label} title="Pin C10 at its slider value during the aberration search">
-              Lock C10 <Box component="span" sx={{ color: themeColors.textMuted }}>{Number(ssbComputeC10Nm ?? 0).toFixed(0)} nm</Box>
+              Lock C10 <Box component="span" sx={{ color: themeColors.textMuted }}>{Number(directC10Nm ?? 0).toFixed(0)} nm</Box>
             </Typography>
             <Switch
-              checked={Boolean(ssbComputeLockC10)}
-              slotProps={{ input: { "aria-label": "SSB lock C10" } }}
-              onChange={(event) => setSsbComputeLockC10(event.target.checked)}
-              disabled={ssbComputeBusy}
+              checked={Boolean(directLockC10)}
+              slotProps={{ input: { "aria-label": "Direct ptycho lock C10" } }}
+              onChange={(event) => setDirectLockC10(event.target.checked)}
+              disabled={directBusy}
               size="small"
               sx={switchStyles.small}
             />
           </Stack>
           <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5, gap: 1 }}>
             <Typography sx={themedTypography.label} title="Pin C12 and φ12 at their slider values during the aberration search">
-              Lock C12 <Box component="span" sx={{ color: themeColors.textMuted }}>{Number(ssbComputeC12Nm ?? 0).toFixed(0)} nm</Box>
+              Lock C12 <Box component="span" sx={{ color: themeColors.textMuted }}>{Number(directC12Nm ?? 0).toFixed(0)} nm</Box>
             </Typography>
             <Switch
-              checked={Boolean(ssbComputeLockC12)}
-              slotProps={{ input: { "aria-label": "SSB lock C12" } }}
-              onChange={(event) => setSsbComputeLockC12(event.target.checked)}
-              disabled={ssbComputeBusy}
+              checked={Boolean(directLockC12)}
+              slotProps={{ input: { "aria-label": "Direct ptycho lock C12" } }}
+              onChange={(event) => setDirectLockC12(event.target.checked)}
+              disabled={directBusy}
               size="small"
               sx={switchStyles.small}
             />
           </Stack>
           <Typography sx={{ ...themedTypography.label, color: themeColors.textMuted, whiteSpace: "normal", lineHeight: 1.35, mb: 0.75 }}>
-            {ssbBfCountText}
+            {directBfCountText}
           </Typography>
-          {ssbProgressText && (
+          {directProgressText && (
             <Typography
               role="status"
               sx={{
                 ...themedTypography.label,
-                color: ssbStatusIsFailure
+                color: directStatusIsFailure
                   ? "#d32f2f"
-                  : ssbComputeBusy
+                  : directBusy
                     ? themeColors.accent
                     : themeColors.textMuted,
                 whiteSpace: "normal",
@@ -7936,18 +7936,18 @@ function Show4DSTEM() {
                 mb: 0.75,
               }}
             >
-              {ssbProgressText}
+              {directProgressText}
             </Typography>
           )}
           <Typography sx={{ ...themedTypography.label, color: themeColors.textMuted, whiteSpace: "normal", lineHeight: 1.35 }}>
             Default is the tilt-corrected fit: 200 trials with refinement on every detected BF pixel. Full 512 scans can take seconds to about a minute.
           </Typography>
         </Box>
-        <MenuItem onClick={() => requestSsbCompute()} disabled={ssbComputeBusy} sx={{ fontSize: 12 }}>
+        <MenuItem onClick={() => requestDirect()} disabled={directBusy} sx={{ fontSize: 12 }}>
           Calculate Phase
         </MenuItem>
-        {hasSsbCalibrationDownload && (
-          <MenuItem onClick={downloadSsbCalibration} disabled={ssbComputeBusy} sx={{ fontSize: 12 }}>
+        {hasDirectCalibrationDownload && (
+          <MenuItem onClick={downloadDirectCalibration} disabled={directBusy} sx={{ fontSize: 12 }}>
             Download calibration JSON
           </MenuItem>
         )}
@@ -7984,7 +7984,7 @@ function Show4DSTEM() {
           {h5LocalSourceStatus}
         </Typography>
       )}
-      {(ssbComputeStatus || ssbComputeBusy) && (
+      {(directStatus || directBusy) && (
         <Typography
           sx={{
             ...themedTypography.label,
@@ -7992,32 +7992,32 @@ function Show4DSTEM() {
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
-            color: ssbStatusIsFailure
+            color: directStatusIsFailure
               ? "#d32f2f"
-              : ssbComputeBusy
+              : directBusy
                 ? themeColors.accent
                 : themeColors.textMuted,
           }}
-          title={ssbProgressText || "Running SSB..."}
+          title={directProgressText || "Running direct ptycho..."}
         >
-          {ssbProgressText || "Running SSB..."}
+          {directProgressText || "Running direct ptycho..."}
         </Typography>
       )}
     </Stack>
   ), [
     brightFieldCenterColPx, brightFieldCenterRowPx, browserSourceAvailable, controlsVisible,
-    currentPageReportCount, detailedReportScanBin, downloadSsbCalibration, dpCanvasRef, dpExportAnchor,
+    currentPageReportCount, detailedReportScanBin, downloadDirectCalibration, dpCanvasRef, dpExportAnchor,
     dpMoreAnchor, dpResetDisabled, estimateReportHtmlSize, exportEnabled, exportStatus, grantH5LocalFiles,
-    h5LocalFilesGranted, h5LocalSourceStatus, handleHtmlExportSelect, hasSsbCalibrationDownload,
+    h5LocalFilesGranted, h5LocalSourceStatus, handleHtmlExportSelect, hasDirectCalibrationDownload,
     htmlExportBusy, interactiveHtmlPresets, localHtmlExportStatus, offline, profileActive, qemLocalFiles,
-    qemSourceAvailable, reportDetectorBin, reportScanBin, requestSsbCompute, setDpExportAnchor,
+    qemSourceAvailable, reportDetectorBin, reportScanBin, requestDirect, setDpExportAnchor,
     setDpMoreAnchor, setDpPanX, setDpPanY, setDpZoom, setHoveredDpProfileEndpoint,
     setIsHoveringDpProfileLine, setOfflineBackendError, setProfileActive, setProfileData, setProfileLine,
-    setSsbComputeLockC10, setSsbComputeLockC12, setSsbComputeNTrials, setSsbComputeRefinement, setSsbComputeTilt,
-    ssbComputeMethod,
-    ssbBfCountText, ssbComputeBusy, ssbComputeC10Nm, ssbComputeC12Nm, ssbComputeEnabled, ssbComputeLockC10,
-    ssbComputeLockC12, ssbComputeNTrials, ssbComputeRefinement, ssbComputeStatus, ssbComputeTilt, ssbProgressText,
-    ssbStatusIsFailure, starredReportCount, themeColors, themeInfo, themedMenuProps, themedSelect,
+    setDirectLockC10, setDirectLockC12, setDirectTrials, setDirectRefinement, setDirectTilt,
+    directMethod,
+    directBfCountText, directBusy, directC10Nm, directC12Nm, directEnabled, directLockC10,
+    directLockC12, directTrials, directRefinement, directStatus, directTilt, directProgressText,
+    directStatusIsFailure, starredReportCount, themeColors, themeInfo, themedMenuProps, themedSelect,
     themedTypography, title, writeRoiCenterModel
   ]);
   const dpControlRows = React.useMemo(() => (
@@ -8843,19 +8843,19 @@ function Show4DSTEM() {
                   </Box>
                 </Box>
               </Box>
-              {showSsbCalibrationPanel && (
+              {showDirectCalibrationPanel && (
                 <Box sx={{ mt: `${SPACING.XS}px`, width: "100%", maxWidth: viCanvasWidth, boxSizing: "border-box" }}>
                   <Button
                     size="small"
-                    onClick={() => setSsbCalOpen(!ssbCalOpen)}
-                    sx={ssbCalToggleSx}
-                    endIcon={ssbCalOpen ? <KeyboardArrowUpIcon fontSize="small" /> : <KeyboardArrowDownIcon fontSize="small" />}
-                    aria-expanded={ssbCalOpen}
+                    onClick={() => setDirectCalOpen(!directCalOpen)}
+                    sx={directCalToggleSx}
+                    endIcon={directCalOpen ? <KeyboardArrowUpIcon fontSize="small" /> : <KeyboardArrowDownIcon fontSize="small" />}
+                    aria-expanded={directCalOpen}
                   >
-                    <Box component="span">SSB calibration</Box>
-                    <Box component="span" sx={mobileOptionSummarySx}>{ssbCalSummary}</Box>
+                    <Box component="span">Direct ptycho calibration</Box>
+                    <Box component="span" sx={mobileOptionSummarySx}>{directCalSummary}</Box>
                   </Button>
-                  {ssbCalOpen && (
+                  {directCalOpen && (
                   <Box
                     sx={{
                       border: `1px solid ${themeColors.border}`,
@@ -8870,14 +8870,14 @@ function Show4DSTEM() {
                     }}
                   >
                   <Stack direction="row" alignItems="center" sx={{ gap: 0.75, flexWrap: "wrap" }}>
-                    {ssbProgressText && (
+                    {directProgressText && (
                       <Typography
                         role="status"
                         sx={{
                           ...themedTypography.label,
-                          color: ssbStatusIsFailure
+                          color: directStatusIsFailure
                             ? "#d32f2f"
-                            : ssbComputeBusy
+                            : directBusy
                               ? themeColors.accent
                               : themeColors.textMuted,
                           minWidth: 0,
@@ -8886,16 +8886,16 @@ function Show4DSTEM() {
                           textOverflow: "ellipsis",
                           whiteSpace: "nowrap",
                         }}
-                        title={ssbProgressText}
+                        title={directProgressText}
                       >
-                        {ssbProgressText}
+                        {directProgressText}
                       </Typography>
                     )}
-                    {hasSsbCalibrationDownload && (
+                    {hasDirectCalibrationDownload && (
                       <Button
                         size="small"
-                        onClick={downloadSsbCalibration}
-                        disabled={ssbComputeBusy}
+                        onClick={downloadDirectCalibration}
+                        disabled={directBusy}
                         sx={{ ...compactButton, color: themeColors.accent, ml: "auto" }}
                       >
                         Download JSON
@@ -8917,57 +8917,57 @@ function Show4DSTEM() {
                         key: "c10",
                         label: "C10",
                         unit: "nm",
-                        value: Number(ssbComputeC10Nm ?? 0),
-                        min: -ssbC10Limit,
-                        max: ssbC10Limit,
+                        value: Number(directC10Nm ?? 0),
+                        min: -directC10Limit,
+                        max: directC10Limit,
                         step: 1,
                         precision: 0,
-                        setValue: setSsbComputeC10Nm,
-                        schedule: (value: number) => scheduleSsbTuneCommit({ c10Nm: value }),
-                        commit: (value: number) => commitSsbTuneNow({ c10Nm: value }),
+                        setValue: setDirectC10Nm,
+                        schedule: (value: number) => scheduleDirectTuneCommit({ c10Nm: value }),
+                        commit: (value: number) => commitDirectTuneNow({ c10Nm: value }),
                         title: "Defocus in nanometers. Release the slider to reconstruct.",
                       },
                       {
                         key: "c12",
                         label: "C12",
                         unit: "nm",
-                        value: Number(ssbComputeC12Nm ?? 0),
+                        value: Number(directC12Nm ?? 0),
                         min: 0,
-                        max: ssbC12Limit,
+                        max: directC12Limit,
                         step: 1,
                         precision: 0,
-                        setValue: setSsbComputeC12Nm,
-                        schedule: (value: number) => scheduleSsbTuneCommit({ c12Nm: value }),
-                        commit: (value: number) => commitSsbTuneNow({ c12Nm: value }),
+                        setValue: setDirectC12Nm,
+                        schedule: (value: number) => scheduleDirectTuneCommit({ c12Nm: value }),
+                        commit: (value: number) => commitDirectTuneNow({ c12Nm: value }),
                         title: "Two-fold astigmatism magnitude in nanometers. Release the slider to reconstruct.",
                       },
                       {
                         key: "phi12",
                         label: "φ12",
                         unit: "°",
-                        value: Number(ssbComputePhi12Deg ?? 0),
+                        value: Number(directPhi12Deg ?? 0),
                         min: -180,
                         max: 180,
                         step: 1,
                         precision: 0,
-                        setValue: setSsbComputePhi12Deg,
-                        schedule: (value: number) => scheduleSsbTuneCommit({ phi12Deg: value }),
-                        commit: (value: number) => commitSsbTuneNow({ phi12Deg: value }),
+                        setValue: setDirectPhi12Deg,
+                        schedule: (value: number) => scheduleDirectTuneCommit({ phi12Deg: value }),
+                        commit: (value: number) => commitDirectTuneNow({ phi12Deg: value }),
                         title: "Two-fold astigmatism angle. Release the slider to reconstruct.",
                       },
                       {
                         key: "rotation",
                         label: "Rotation",
                         unit: "°",
-                        value: Number(ssbComputeRotationDeg ?? 0),
+                        value: Number(directRotationDeg ?? 0),
                         // the physical scan-to-detector rotation: the whole turn, the 180-degree reversal included
                         min: 0,
                         max: 360,
                         step: 0.1,
                         precision: 1,
-                        setValue: setSsbComputeRotationDeg,
-                        schedule: (value: number) => scheduleSsbTuneCommit({ rotationDeg: value }),
-                        commit: (value: number) => commitSsbTuneNow({ rotationDeg: value }),
+                        setValue: setDirectRotationDeg,
+                        schedule: (value: number) => scheduleDirectTuneCommit({ rotationDeg: value }),
+                        commit: (value: number) => commitDirectTuneNow({ rotationDeg: value }),
                         title: "Scan-detector rotation angle. Release the slider to reconstruct.",
                       },
                     ] as const).map((control) => (
@@ -8982,7 +8982,7 @@ function Show4DSTEM() {
                           min={control.min}
                           max={control.max}
                           step={control.step}
-                          disabled={ssbComputeBusy}
+                          disabled={directBusy}
                           onChange={(_, value) => {
                             const next = Number(Array.isArray(value) ? value[0] : value);
                             control.setValue(next);
@@ -8992,7 +8992,7 @@ function Show4DSTEM() {
                           size="small"
                           valueLabelDisplay="auto"
                           valueLabelFormat={(value) => `${Number(value).toFixed(control.precision)} ${control.unit}`}
-                          sx={ssbTuneSliderSx}
+                          sx={directTuneSliderSx}
                         />
                       </Box>
                     ))}

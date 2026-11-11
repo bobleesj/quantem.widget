@@ -3270,8 +3270,8 @@ function Show3D() {
   ): { vmin: number; vmax: number; logScale: boolean } => {
     const state = panelStatesLiveRef.current[panel] || panelStates[panel] || initialState;
     // Per-panel mode: always interpret slider pct in THIS panel's data
-    // range. Stack-wide bounds (for mixed BF/DF counts vs SSB radians)
-    // would decode SSB sliders to count-territory values → black image.
+    // range. Stack-wide bounds (for mixed BF/DF counts vs direct ptychography radians)
+    // would decode direct ptychography sliders to count-territory values → black image.
     const panelDataRange = panelDataRanges[panel];
     const effectiveRange = (panelDataRange && panelDataRange.max > panelDataRange.min)
       ? panelDataRange
@@ -5619,7 +5619,7 @@ function Show3D() {
       const out = prev.map((state, i) => {
         // PER-PANEL auto: percentile-clip THIS panel's own data, then map
         // pct in THIS panel's data range. Mixed-unit stacks (BF/DF counts
-        // vs SSB radians) span many orders of magnitude; using stack
+        // vs direct ptychography radians) span many orders of magnitude; using stack
         // range squashes tight panels to pct ≈ 0.
         const clip = panelAutoClipPcts(i, state, stackBounds);
         return clip ? { ...state, imageVminPct: clip.imageVminPct, imageVmaxPct: clip.imageVmaxPct } : state;
@@ -7470,7 +7470,7 @@ function Show3D() {
     let displayMin: number, displayMax: number;
     let displayData: Float32Array;
     if (fftAuto && grid) {
-      // Multi-panel FFTs can differ by orders of magnitude (BF/DF vs SSB).
+      // Multi-panel FFTs can differ by orders of magnitude (BF/DF vs direct ptychography).
       // Auto mode should reveal each panel, so normalize every FFT tile before
       // composing the shared canvas. Manual mode below intentionally stays global.
       displayData = new Float32Array(mag.length);
@@ -12183,7 +12183,7 @@ function Show3D() {
                         const state = panelStates[panel] || initialState;
                         // Per-panel histogram uses THIS panel's data range
                         // (not stack-wide histMin/histMax). Tight-range
-                        // modalities (SSB phase) get a sensible slider
+                        // modalities (direct ptychography phase) get a sensible slider
                         // space instead of being squashed by DF counts.
                         const panelDataRange = panelDataRanges[panel];
                         const panelRange = (panelDataRange && panelDataRange.max > panelDataRange.min) ? panelDataRange : { min: histMin, max: histMax };

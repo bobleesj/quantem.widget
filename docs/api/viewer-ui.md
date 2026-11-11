@@ -28,7 +28,7 @@ Show2D(images, panel_width_px=380)   # explicit width overrides size
 ```
 
 `panel_width_px=None` or `0` uses the named preset. Saved manual widths remain
-intact when restoring viewer state. Static SSB figures use the same relative
+intact when restoring viewer state. Static direct ptychography figures use the same relative
 scale; their export resolution is controlled independently by figure DPI.
 
 ## Presets

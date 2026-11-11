@@ -24,7 +24,7 @@ Measured, per drag:
 
 - ShowPtycho, C10 slider dragged back and forth at native sampling and at 2x:
   phase and FFT panel paints per second, and the request latency from the
-  browser's ``ssb-preview`` message to the kernel's phase for the same id;
+  browser's ``direct-preview`` message to the kernel's phase for the same id;
 - Show4DSTEM on the gold scan as loaded (its uint32 counts fit 16 bits once
   the flagged pixels are replaced, so quantem.gpu stores them as the uint16
   count resident): the probe dragged across the scan, the bright-field disk

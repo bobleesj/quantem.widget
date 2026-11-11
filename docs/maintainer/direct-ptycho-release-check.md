@@ -22,14 +22,14 @@ To run the same gate locally after installing candidate wheels:
 ```bash
 unset PYTHONPATH
 export QUANTEM_WIDGET_BROWSER=1 QUANTEM_WIDGET_HEADLESS=1
-export QUANTEM_SSB_RELEASE=1
-export QUANTEM_SSB_RELEASE_SOURCE=/path/to/scan.qem
-export QUANTEM_WIDGET_BROWSER_OUT=/tmp/ssb-widget-check
+export QUANTEM_DIRECT_RELEASE=1
+export QUANTEM_DIRECT_RELEASE_SOURCE=/path/to/scan.qem
+export QUANTEM_WIDGET_BROWSER_OUT=/tmp/direct-widget-check
 python -m pytest -q -s tests/browser/test_showptycho_release.py
 ```
 
 For an H5 file with incomplete calibration, set
-`QUANTEM_SSB_RELEASE_CALIBRATION` to a JSON object with the actual beam energy,
+`QUANTEM_DIRECT_RELEASE_CALIBRATION` to a JSON object with the actual beam energy,
 convergence semiangle and scan sampling. Saved detector sampling is reused;
 missing sampling is fitted. Do not substitute another specimen's calibration.
 

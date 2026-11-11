@@ -1,5 +1,5 @@
 // Copy the WebGPU science kernels that Show4DSTEM and ShowPtycho bundle
-// (detector reductions, HDF5/bslz4 browser IO, SSB, QEM tables) from
+// (detector reductions, HDF5/bslz4 browser IO, direct ptychography, QEM tables) from
 // quantem.gpu into js/.generated/engine. Display kernels (colormaps, display
 // FFT, statistics, display geometry) are widget source under js/display and
 // are not synced. The science kernels share the widget's WebGPU device: the

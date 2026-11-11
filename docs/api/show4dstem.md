@@ -187,7 +187,7 @@ opened from a path, `Show4DSTEM(path)`; acquisitions you pass to
 shows a compact GPU memory label in its title row when CUDA or MPS memory is visible. Exported HTML has no live
 Python GPU allocation, so it does not expose a "free GPU memory" control.
 
-## Compute SSB
+## Direct ptychography
 
 The default on CUDA and MPS uses 200 initial TPE trials, then jointly
 refines aberrations through fifth order with sample tilt and depth.
@@ -195,11 +195,11 @@ refines aberrations through fifth order with sample tilt and depth.
 The initial result is provisional; final refinement can change its phase.
 
 
-With a live kernel on CUDA or MPS, the **Compute SSB** control, or
-`viewer.compute_ssb()`, runs quantem.gpu's default fit,
-`quantem.gpu.DirectPtycho(...).aberrations()`, on the current 4D frame: the SSB
+With a live kernel on CUDA or MPS, the **Direct ptycho** control (**Calculate Phase**), or
+`viewer.direct_phase()`, runs quantem.gpu's default fit,
+`quantem.gpu.DirectPtycho(...).aberrations()`, on the current 4D frame: the direct ptychography
 model fitted to the data together with the sample tilt and depth spread
-(tilt-corrected; the fitted C10 is the defocus at mid-depth). It attaches the SSB phase and the aligned DPC row/col maps as
+(tilt-corrected; the fitted C10 is the defocus at mid-depth). It attaches the direct ptychography phase and the aligned DPC row/col maps as
 virtual-image sources and switches the virtual image to the phase. The
 voltage, the convergence semiangle and the scan step are read from the dataset
 or `.qem` file:
@@ -208,8 +208,8 @@ or `.qem` file:
 from quantem.gpu.io import load
 
 viewer = Show4DSTEM(load("scan.qem"))
-phase = viewer.compute_ssb()             # 200 initial trials, then joint fifth-order refinement
-control = viewer.compute_ssb(tilt=False)  # the same model at tilt 0
+phase = viewer.direct_phase()             # 200 initial trials, then joint fifth-order refinement
+control = viewer.direct_phase(tilt=False)  # the same model at tilt 0
 ```
 
 The two fits are quantem.gpu's:
@@ -231,31 +231,31 @@ viewer = Show4DSTEM(counts, voltage_kV=300, semiangle_mrad=30, scan_sampling_A=(
 `(row, col)` in mrad or 1/angstrom per pixel. A keyword that contradicts a
 value the input records raises: the dataset or file is the source of its
 calibration. The fit uses every detected
-bright-field pixel (the `compute_ssb` keywords
+bright-field pixel (the `direct_phase` keywords
 `bright_field_intensity_threshold` and `bright_field_radius_px`). The keywords
 `tilt` (True, the default, or False), which the **Fit** menu sets
 (Tilt-corrected, Tilt 0), `trials`, `refinement` (`"auto"`, the default,
 quantem.gpu's exact-derivative refinement, or None for the best trial without
 one; the retired `"newton"` and `"nelder-mead"` print one line and run
 `"auto"`) and `seed` control the search, for example
-`viewer.compute_ssb(trials=100, seed=0)`. **Lock C10** and **Lock C12**
+`viewer.direct_phase(trials=100, seed=0)`. **Lock C10** and **Lock C12**
 hold a coefficient at its slider value; in the tilt-corrected fit C12 is held
 alone only at 0, and both locks hold all three coefficients and fit the tilt
 and depth spread alone. A manual recompute from the sliders keeps the last
 tilt-corrected fit's tilt and depth spread. The fitted values are the traits
-`ssb_compute_C10_nm`, `ssb_compute_C12_nm`, `ssb_compute_phi12_deg` and
-`ssb_compute_scan_detector_rotation_deg` (the physical rotation in [0, 360)),
-and the downloadable `*_ssb_calibration.json` holds them under the same names
-with `"schema": "quantem.show4dstem-ssb-calibration/4"` (`trials` is the search budget; its `refinement` names the local
+`direct_C10_nm`, `direct_C12_nm`, `direct_phi12_deg` and
+`direct_scan_detector_rotation_deg` (the physical rotation in [0, 360)),
+and the downloadable `*_direct_calibration.json` holds them under the same names
+with `"schema": "quantem.show4dstem-direct-calibration/5"` (`trials` is the search budget; its `refinement` names the local
 refinement quantem.gpu ran, or null; `objective`
 what the fit optimized, null for a manual recompute; `tilt`,
 `sample_tilt_mrad` in the scan frame, `depth_spread_nm` and `tilt_fit_gain`
 record the sample model, false and null at tilt 0). It is not a
 ShowPtycho `calibration.json` (`quantem.ssb-calibration/8`), which records the
-source file, scan region, reconstruction method and session identity. Compute SSB
+source file, scan region, reconstruction method and session identity. `direct_phase()`
 needs one 4D frame; quantem.gpu centres any scan shape in its FFT grid and the
 phase shows the measured positions. An encoded
-acquisition goes to SSB without a dense copy; SSB decodes only the
+acquisition goes to direct ptychography without a dense copy; direct ptychography decodes only the
 bright-field disk.
 
 ## Multiple grid
@@ -492,7 +492,7 @@ compare-grid signoff.
 
 ```{eval-rst}
 .. autoclass:: quantem.widget.show4dstem.Show4DSTEM
-   :members: selected_scan_region, export_html, compute_ssb, apply_preset, state_dict, save, load_state_dict, free, close, pattern, virtual_image
+   :members: selected_scan_region, export_html, direct_phase, apply_preset, state_dict, save, load_state_dict, free, close, pattern, virtual_image
 ```
 
 ```{note}

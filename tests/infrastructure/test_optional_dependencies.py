@@ -111,7 +111,7 @@ widgets = [
 dense = widgets[5]
 assert dense._session(0).masked_sum(np.ones((16, 16), bool)).tolist() == counts.sum(axis=(2, 3)).astype(np.float32).tolist()
 ptycho = widgets[-1]
-assert not ptycho.ssb_session and np.frombuffer(ptycho.phase_bytes, np.float32).reshape(32, 32).tolist() == np.angle(np.exp(1j * image).astype(np.complex64)).tolist()
+assert not ptycho.ptycho_session and np.frombuffer(ptycho.phase_bytes, np.float32).reshape(32, 32).tolist() == np.angle(np.exp(1j * image).astype(np.complex64)).tolist()
 route = device.gpu_path_hint() or device.no_gpu_path()  # this machine's way to quantem.gpu, or why it has none
 assert route in ptycho.session_note
 try:

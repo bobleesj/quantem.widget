@@ -52,7 +52,7 @@ test('clicking a result targets its own rectangle, bounds and refit', async () =
       ...region, sample_tilt_mrad: [1, 2], seed_sd_mrad: null,
     })) }),
     local_tilt_images_json: JSON.stringify(regions.map((region, index) => ({
-      label: `${region.label} · SSB`, shape: [2, 2], offset: index * 4, sampling_A: 0.5,
+      label: `${region.label} · Direct`, shape: [2, 2], offset: index * 4, sampling_A: 0.5,
     }))),
     local_tilt_bytes: new DataView(new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer),
   });
@@ -63,7 +63,7 @@ test('clicking a result targets its own rectangle, bounds and refit', async () =
     expect(el.textContent).not.toContain('SD');
     for (const region of regions) {
       const panel = Array.from(el.querySelectorAll('[data-local-tilt-result]'))
-        .find(element => element.textContent?.includes(`${region.label} · SSB`))!;
+        .find(element => element.textContent?.includes(`${region.label} · Direct`))!;
       act(() => panel.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })));
       expect(model.get('local_tilt_active_region')).toBe(region.id);
       const selected = el.querySelector('svg rect[stroke-width="2"]')!;

@@ -52,7 +52,7 @@ def test_widget_has_no_duplicate_gpu_or_io_public_api() -> None:
 
 
 def test_public_docs_use_the_canonical_gpu_api() -> None:
-    """Tutorials must not revive widget-owned IO or retired SSB fit calls."""
+    """Tutorials must not revive widget-owned IO or retired direct ptychography fit calls."""
 
     repo = Path(__file__).resolve().parents[2]
     docs = repo / "docs"
@@ -60,8 +60,8 @@ def test_public_docs_use_the_canonical_gpu_api() -> None:
     retired_widget_load = re.compile(
         r"from\s+quantem\.widget\s+import\s+(?:\([^)]*\)|[^\n]*)"
     )
-    retired_ssb_member = re.compile(
-        r"\b(?:ssb|workflow)\.(?:optimize|refine|result|explore)\b"
+    retired_direct_member = re.compile(
+        r"\b(?:direct|workflow)\.(?:optimize|refine|result|explore)\b"
     )
     offenders: list[str] = []
     for path in documents:
@@ -73,7 +73,7 @@ def test_public_docs_use_the_canonical_gpu_api() -> None:
             offenders.append(path.relative_to(repo).as_posix())
         if "quantem.widget.load" in source:
             offenders.append(path.relative_to(repo).as_posix())
-        if retired_ssb_member.search(source):
+        if retired_direct_member.search(source):
             offenders.append(path.relative_to(repo).as_posix())
 
     showptycho_docs = "\n".join(
@@ -92,8 +92,8 @@ def test_tutorial_notebook_code_is_valid_and_uses_gpu_owned_io() -> None:
     retired_widget_load = re.compile(
         r"from\s+quantem\.widget\s+import\s+(?:\([^)]*\)|[^\n]*)"
     )
-    retired_ssb_member = re.compile(
-        r"\b(?:ssb|workflow)\.(?:optimize|refine|result|explore)\b"
+    retired_direct_member = re.compile(
+        r"\b(?:direct|workflow)\.(?:optimize|refine|result|explore)\b"
     )
     for path in sorted((repo / "docs" / "tutorials").glob("*.ipynb")):
         notebook = json.loads(path.read_text(encoding="utf-8"))
@@ -102,7 +102,7 @@ def test_tutorial_notebook_code_is_valid_and_uses_gpu_owned_io() -> None:
             if any(
                 re.search(r"\bload\b", match.group(0))
                 for match in retired_widget_load.finditer(source)
-            ) or "quantem.widget.load" in source or retired_ssb_member.search(source):
+            ) or "quantem.widget.load" in source or retired_direct_member.search(source):
                 offenders.append(f"{path.name}:cell-{cell_index}")
             if cell.get("cell_type") != "code":
                 continue

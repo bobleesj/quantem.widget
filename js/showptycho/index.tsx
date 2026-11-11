@@ -220,7 +220,7 @@ const MAX_ZOOM = 20;
 const ZOOM_FACTOR = 1.15;
 const MIN_PANEL = 200;
 const DEFAULT_PANEL = 800;
-// C12 (nm) and phi12 (degrees) slider spans: the SSB fit's default search range
+// C12 (nm) and phi12 (degrees) slider spans: the direct ptychography fit's default search range
 const C12_RANGE: [number, number] = [-10, 10];
 const PHI12_RANGE: [number, number] = [-90, 90];
 const MAX_PINS = 20;
@@ -245,7 +245,7 @@ const STATUS_BAD = "#f44336";
 
 type ZoomState = { zoom: number; panX: number; panY: number };
 const ZOOM_RESET: ZoomState = { zoom: 1, panX: 0, panY: 0 };
-// Amplitude and complex views exist only for an object-wave array: SSB recovers the phase alone.
+// Amplitude and complex views exist only for an object-wave array: direct ptychography recovers the phase alone.
 type ExtraRealViewMode = "amp" | "complex";
 type FFTPlacement = "panel" | "inset";
 type FFTInsetBox = { x: number; y: number };
@@ -1303,10 +1303,10 @@ function formatHOValue(valueNm: number, maxNm: number, displayScale: number): st
   return value.toFixed(4);
 }
 
-/* Sample panel: thick-sample SSB.  A crystal tilted by theta changes how strongly each
+/* Sample panel: thick-sample direct ptychography.  A crystal tilted by theta changes how strongly each
    bright-field pixel carries each spatial frequency; the kernel averages every pixel's correction
-   over a depth spread with the columns leaning by the tilt.  Depth spread 0 = standard SSB.
-   Joint fit solves C10, C12, phi12, tilt and depth spread together in the SSB session. */
+   over a depth spread with the columns leaning by the tilt.  Depth spread 0 = standard direct ptychography.
+   Joint fit solves C10, C12, phi12, tilt and depth spread together in the direct ptychography session. */
 const SAMPLE_ZERO: SampleValues = { tiltRowMrad: 0, tiltColMrad: 0, depthSpreadNm: 0 };
 
 function SamplePanel({
@@ -1332,7 +1332,7 @@ function SamplePanel({
     { key: "tiltColMrad", label: "tilt col", unit: "mrad", min: -25, max: 25, step: 0.1,
       tip: "Sample tilt along the scan columns.  Only acts when the depth spread > 0." },
     { key: "depthSpreadNm", label: "depth spread", unit: "nm", min: 0, max: 60, step: 0.5,
-      tip: "Depth over which the correction is averaged.  0 = standard SSB.  A model depth spread, not a measured sample thickness." },
+      tip: "Depth over which the correction is averaged.  0 = standard direct ptychography.  A model depth spread, not a measured sample thickness." },
   ];
   return (
     <Box sx={{
@@ -1347,7 +1347,7 @@ function SamplePanel({
         onClick={onToggle}
       >
         <Typography sx={{ ...typography.label, color: tc.accent }}>
-          {open ? "▾" : "▸"} Sample tilt (thick SSB)
+          {open ? "▾" : "▸"} Sample tilt
         </Typography>
         {active && (
           <Box sx={{ fontSize: 10, px: 0.8, py: 0.1, borderRadius: 0, bgcolor: STATUS_GOOD, color: "#fff", fontFamily: "monospace" }}>
@@ -1647,7 +1647,7 @@ function Explore() {
   const [localSelectionJson] = useModelState<string>("local_tilt_selection_json");
   const [localReplyJson] = useModelState<string>("local_tilt_reply_json");
   const [localTiltStale] = useModelState<boolean>("local_tilt_stale");
-  const regionalMode = localTiltEnabled && !!activeRegionId && !!model.get('ssb_session');
+  const regionalMode = localTiltEnabled && !!activeRegionId && !!model.get('ptycho_session');
   const localConfig = React.useMemo(() => JSON.parse(localTiltJson || '{}'), [localTiltJson]);
   const activeFit = regionalMode ? localConfig.fits?.find((fit:any) => fit.id === activeRegionId) : null;
   const selectedRegions = JSON.parse(localSelectionJson || 'null') || localConfig.regions || [];
@@ -1741,11 +1741,11 @@ function Explore() {
   const [sampleFitRequest, setSampleFitRequest] = useModelState<number>("sample_fit_request");
   const [sampleFitStatus] = useModelState<string>("sample_fit_status");
   const [sampleFitJson] = useModelState<string>("sample_fit_json");
-  const [ssbSession] = useModelState<boolean>("ssb_session");
+  const [ptychoSession] = useModelState<boolean>("ptycho_session");
   const [sessionNote] = useModelState<string>("session_note");
   const [amplitudeBytes] = useModelState<DataView>("amplitude_bytes");
-  // An array input has no SSB session: only the views, FFT and display controls apply.
-  const tuning = ssbSession;
+  // An array input has no direct ptychography session: only the views, FFT and display controls apply.
+  const tuning = ptychoSession;
   const objectAmplitude = React.useMemo(
     () => (amplitudeBytes && amplitudeBytes.byteLength > 0 ? extractFloat32(amplitudeBytes) : null),
     [amplitudeBytes],
@@ -2032,7 +2032,7 @@ function Explore() {
   const shouldCommitOnReleaseRef = React.useRef(false);
   const [webgpuRuntimeStatus, setWebgpuRuntimeStatus] = React.useState("");
   const [webgpuLoadProgress, setWebgpuLoadProgress] = React.useState<WebGPULoadProgress | null>(null);
-  const webgpuSsbRef = React.useRef<WebGPUSSBBackend | null>(null);
+  const webgpuDirectRef = React.useRef<WebGPUSSBBackend | null>(null);
   const webgpuInFlightRef = React.useRef(false);
   const webgpuPendingRef = React.useRef<[number, number, number, number] | null>(null);
   const webgpuPendingFullRef = React.useRef(false);
@@ -2136,13 +2136,13 @@ function Explore() {
     webgpuDiagnostic.cancel();
     const hasH5Source = !!webgpuH5SourceJson && webgpuH5SourceJson.trim() !== "" && webgpuH5SourceJson.trim() !== "{}";
     if (!webgpuPreviewEnabled || !webgpuCalJson || !hasH5Source) {
-      webgpuSsbRef.current = null;
+      webgpuDirectRef.current = null;
       setWebgpuRuntimeStatus(webgpuPreviewStatus || "");
       setWebgpuLoadProgress(null);
       return;
     }
     if (!localSourceGranted) {
-      webgpuSsbRef.current = null;
+      webgpuDirectRef.current = null;
       setWebgpuRuntimeStatus("No-server mode: grant the folder containing this HTML to start");
       setWebgpuLoadProgress(null);
       return;
@@ -2154,17 +2154,17 @@ function Explore() {
         setWebgpuLoadProgress(progress.stage === "ready" ? null : progress);
         setWebgpuRuntimeStatus(webgpuProgressLabel(progress));
       });
-      webgpuSsbRef.current = engine;
+      webgpuDirectRef.current = engine;
       setWebgpuRuntimeStatus(engine.readyLabel);
       setWebgpuLoadProgress(null);
       return () => {
         webgpuDiagnostic.cancel();
         engine.setProgressHandler(null);
-        if (webgpuSsbRef.current === engine) webgpuSsbRef.current = null;
+        if (webgpuDirectRef.current === engine) webgpuDirectRef.current = null;
         engine.close();
       };
     } catch (err) {
-      webgpuSsbRef.current = null;
+      webgpuDirectRef.current = null;
       setWebgpuRuntimeStatus(err instanceof Error ? err.message : String(err));
       setWebgpuLoadProgress({
         stage: "error",
@@ -2260,7 +2260,7 @@ function Explore() {
     }
   }, [autoC10, autoC12, autoPhi12]);
 
-  /* --- Sample panel (thick SSB): push slider values to Python; apply a finished tilt fit to the
+  /* --- Sample panel (thick-sample direct ptychography): push slider values to Python; apply a finished tilt fit to the
          aberration sliders and the panel (the sample_json push then re-renders). --- */
   // Seed once from Python (a restored calibration sets sample_json before the widget mounts); afterwards the panel owns it.
   const [sample, setSample] = React.useState<SampleValues>(() => {
@@ -2354,7 +2354,7 @@ function Explore() {
     // Our bounded in-flight queue already supplies backpressure. A custom command
     // can start as soon as a previous result arrives, without the notebook's
     // generic trait throttle waiting for a later kernel-idle notification.
-    model.send({ type: "ssb-preview", request: { id, C10_nm: c10Val, C12_nm: c12Val, phi12_deg: phi12Val, committed,
+    model.send({ type: "direct-preview", request: { id, C10_nm: c10Val, C12_nm: c12Val, phi12_deg: phi12Val, committed,
       ...(region ? {region_id:region.id,region_bounds:region.bounds} : {}),
       sample: { sample_tilt_mrad: [sample.tiltRowMrad, sample.tiltColMrad], depth_spread_nm: sample.depthSpreadNm },
       higher_order: higherOrderRef.current,
@@ -2701,7 +2701,7 @@ function Explore() {
         setPhi12(value); sendDrag(sliderVals.current.c10, sliderVals.current.c12, value);
       } else if (sweepParam === "rot") {
         setRotationDeg(value);
-        if (webgpuSsbRef.current) sendDrag(sliderVals.current.c10, sliderVals.current.c12, sliderVals.current.phi12, value);
+        if (webgpuDirectRef.current) sendDrag(sliderVals.current.c10, sliderVals.current.c12, sliderVals.current.phi12, value);
       }
       // Advance index (boomerang: bounces between 0 and SWEEP_STEPS-1)
       sweepIdxRef.current += sweepDirRef.current;
@@ -2891,7 +2891,7 @@ function Explore() {
     const painted = renderPanel(phase, w, h, 0, cmapRef.current, contrastRange[0], contrastRange[1], given);
     const extras = extraRealViewsRef.current;
     const objectAmp = objectAmplitudeRef.current;
-    // only an object-wave array carries an amplitude (SSB recovers the phase alone)
+    // only an object-wave array carries an amplitude (direct ptychography recovers the phase alone)
     const amp = objectAmp && objectAmp.length === phase.length && (extras.amp || extras.complex) ? objectAmp : null;
     ampDataRef.current = amp ? { data: amp, w, h } : null;
     if (amp && extras.amp) {
@@ -3071,7 +3071,7 @@ function Explore() {
   const webgpuDisplayFrame = React.useMemo(() => latestFrame(() => {
     const next = pendingWebgpuDisplay.current;
     pendingWebgpuDisplay.current = null;
-    if (!next || webgpuSsbRef.current !== next.engine) return;
+    if (!next || webgpuDirectRef.current !== next.engine) return;
     if (negatePhaseRef.current) {
       for (let i = 0; i < next.phase.length; i++) next.phase[i] = -next.phase[i];
     }
@@ -3094,7 +3094,7 @@ function Explore() {
     }
   };
   const runFrontendPreview = React.useCallback((c10Val: number, c12Val: number, phi12Val: number, rotationVal: number): boolean => {
-    const engine = webgpuSsbRef.current;
+    const engine = webgpuDirectRef.current;
     if (!engine) return false;
     webgpuDiagnostic.cancel();
     setLoss(null);
@@ -3121,7 +3121,7 @@ function Explore() {
     };
     const phaseKey = JSON.stringify(request);
     reconstruct(engine, request).then(result => {
-      if (webgpuSsbRef.current !== engine) return;
+      if (webgpuDirectRef.current !== engine) return;
       webgpuPhaseKeyRef.current = phaseKey;
       if (result.loss != null) {
         setLoss(result.loss);
@@ -3145,7 +3145,7 @@ function Explore() {
         renderPreviewPhase(phase, result.width, result.height);
       }
     }).catch(err => {
-      if (webgpuSsbRef.current !== engine) return;
+      if (webgpuDirectRef.current !== engine) return;
       const message = err instanceof Error ? err.message : String(err);
       console.error("[showptycho] WebGPU preview failed", err);
       if (webgpuStandalone) {
@@ -3157,7 +3157,7 @@ function Explore() {
         });
         setWebgpuRuntimeStatus(`WebGPU folder failed: ${message}`);
       } else {
-        webgpuSsbRef.current = null;
+        webgpuDirectRef.current = null;
         setWebgpuLoadProgress({ stage: "error", message: "WebGPU ptychography failed", detail: message, percent: 0 });
         setWebgpuRuntimeStatus(`WebGPU preview failed: ${message}`);
       }
@@ -3167,7 +3167,7 @@ function Explore() {
 
   frontendPreviewRef.current = runFrontendPreview;
   const runFrontendFull = React.useCallback((c10Val: number, c12Val: number, phi12Val: number, rotationVal: number): boolean => {
-    const engine = webgpuSsbRef.current;
+    const engine = webgpuDirectRef.current;
     if (!webgpuStandalone || !engine) return false;
     webgpuDiagnostic.cancel();
     if (webgpuInFlightRef.current) {
@@ -3199,11 +3199,11 @@ function Explore() {
     }
     if (!isFull || !computeLoss) return true;
     webgpuDiagnostic.schedule(signal => {
-      if (webgpuSsbRef.current !== engine) return;
+      if (webgpuDirectRef.current !== engine) return;
       webgpuInFlightRef.current = true;
       setBusy(true);
       reconstruct(engine, { ...request, computeLoss: true, diagnosticOnly: true, signal }).then(result => {
-        if (signal.aborted || webgpuSsbRef.current !== engine || webgpuPhaseKeyRef.current !== phaseKey) return;
+        if (signal.aborted || webgpuDirectRef.current !== engine || webgpuPhaseKeyRef.current !== phaseKey) return;
         setLoss(result.loss);
       }).catch(err => {
         if (signal.aborted) return;
@@ -3221,11 +3221,11 @@ function Explore() {
     previousUpsampleRef.current = upsample;
     if (webgpuStandalone) frontendPreviewRef.current?.(sliderVals.current.c10, sliderVals.current.c12, sliderVals.current.phi12, rotationDegRef.current);
   }, [upsample, webgpuStandalone]);
-  shouldCommitOnReleaseRef.current = effectiveTotalBf > 0 || !!webgpuSsbRef.current;
+  shouldCommitOnReleaseRef.current = effectiveTotalBf > 0 || !!webgpuDirectRef.current;
   const standaloneInitialRenderRef = React.useRef(false);
   React.useEffect(() => {
     if (!webgpuStandalone || standaloneInitialRenderRef.current) return;
-    if (!webgpuSsbRef.current || !initRef.current) return;
+    if (!webgpuDirectRef.current || !initRef.current) return;
     if (rawPhaseRef.current) return;
     standaloneInitialRenderRef.current = true;
     const total = Math.max(1, effectiveTotalBf || 1);
@@ -3725,7 +3725,7 @@ function Explore() {
     if (shouldIgnoreWidgetShortcut(e.target, e.key)) return;
     let handled = true;
     if (e.key === "r" || e.key === "R") resetZoom();
-    // pins, sweeps and trials belong to an SSB session
+    // pins, sweeps and trials belong to a direct ptychography session
     else if (!tuning) handled = false;
     // P pins the current snapshot (the oldest is evicted once MAX_PINS is hit)
     else if (e.key === "p" || e.key === "P") doPin();
@@ -3782,13 +3782,13 @@ function Explore() {
   }, []);
 
   /* --- Frame the full FFT by physical frequency, independently of the phase zoom. --- */
-  const fftSampling = ssbSession && scanSamplingA?.length === 2 && fftSourceShape.every(value => value > 0)
+  const fftSampling = ptychoSession && scanSamplingA?.length === 2 && fftSourceShape.every(value => value > 0)
     ? [scanSamplingA[0] * scanRows / fftSourceShape[0], scanSamplingA[1] * scanCols / fftSourceShape[1]]
     : objectSamplingA;
   const fftAutoZoom = fftAutoFrameZoom(fftOff?.width || 0, fftOff?.height || 0,
     fftSampling || [], scanSamplingA || []);
   fftStatsRegionRef.current = (pw, ph, w, h) => {
-    const sampling = ssbSession && scanSamplingA?.length === 2
+    const sampling = ptychoSession && scanSamplingA?.length === 2
       ? [scanSamplingA[0] * scanRows / h, scanSamplingA[1] * scanCols / w] : objectSamplingA;
     return fftFrameRegion(pw, ph, fftAutoFrameZoom(pw, ph, sampling || [], scanSamplingA || []));
   };
@@ -3803,7 +3803,7 @@ function Explore() {
   const fftAsInset = showFFT && fftPlacement === "inset";
   const realPanelCount = 1 + (extraRealViews.amp ? 1 : 0) + (extraRealViews.complex ? 1 : 0);
   const localPanelCount = localTiltEnabled ? JSON.parse(localImagesJson || "[]").filter((image:any)=>{
-    const fit=localConfig.fits?.find((fit:any)=>`${fit.label} · SSB`===image.label);
+    const fit=localConfig.fits?.find((fit:any)=>`${fit.label} · Direct`===image.label);
     return !fit||selectedRegions.some((region:any)=>region.id===fit.id);
   }).length : 0;
   const visiblePanelCount = realPanelCount + (fftAsPanel ? 1 : 0) + localPanelCount;
@@ -4028,7 +4028,7 @@ function Explore() {
           </Typography>
         )}
         {(cropRefitStatus || "").startsWith("Refit complete:") && (
-          <Typography sx={{ ...typography.value, color: STATUS_GOOD }}>SSB refit complete</Typography>
+          <Typography sx={{ ...typography.value, color: STATUS_GOOD }}>Refit complete</Typography>
         )}
         <Badge variant="dot" invisible={!showFFT && !cropSelecting && !scanCrop && editedRangeCount === 0}
           sx={{ "& .MuiBadge-badge": { bgcolor: tc.accent, right: 4, top: 4 } }}>
@@ -4124,7 +4124,7 @@ function Explore() {
             </Box>}
             {tuning && cropRefitAvailable && <Box component="details" onToggle={() => settingsPopover.current?.updatePosition()}
               sx={{ borderTop: `1px solid ${tc.border}`, pt: 1 }}>
-              <Box component="summary" sx={{ ...typography.label, cursor: "pointer", color: cropSelecting || scanCrop ? tc.accent : tc.text }}>SSB Crop</Box>
+              <Box component="summary" sx={{ ...typography.label, cursor: "pointer", color: cropSelecting || scanCrop ? tc.accent : tc.text }}>Direct ptycho crop</Box>
               <Box component="label" sx={{ ...typography.label, display: "flex", alignItems: "center", justifyContent: "space-between", mt: 1 }}>
                 Draw Crop Region
                 <Switch checked={cropSelecting} size="small" sx={switchStyles.small}
@@ -4137,7 +4137,7 @@ function Explore() {
                   onClick={() => { resetCrop(); setSettingsAnchor(null); }}>Crop Reset</Button>
                 <Button size="small" sx={compactButton(tc)} disabled={busy || cropRefitPending || !scanCrop}
                   title="Refit the crop with the default fit, model-based and tilt-corrected"
-                  onClick={() => { requestCropRefit(); setSettingsAnchor(null); }}>Refit SSB (200 trials)</Button>
+                  onClick={() => { requestCropRefit(); setSettingsAnchor(null); }}>Refit (200 trials)</Button>
               </Box>
             </Box>}
           </Box>
@@ -4234,7 +4234,7 @@ function Explore() {
             inputProps={{ "aria-label": "Reconstruction method" }}
             onChange={event => changeReconstruction({ method: event.target.value }, true)}
             sx={{ ...typography.label, height: 28 }}>
-            <MenuItem value="phase_of_mean">SSB</MenuItem>
+            <MenuItem value="phase_of_mean">Phase of mean</MenuItem>
             <MenuItem value="phase" disabled={!regularizationAvailable || webgpuStandalone || !!localTiltJson}>Phase · experimental</MenuItem>
             <MenuItem value="complex" disabled={!regularizationAvailable || webgpuStandalone || !!localTiltJson}>Amplitude + phase · experimental</MenuItem>
           </Select>
@@ -4322,7 +4322,7 @@ function Explore() {
                 <Typography
                   sx={{
                     ...typography.value,
-                    ...statChip(tc, !!webgpuSsbRef.current && !/failed|unavailable/i.test(webgpuRuntimeStatus)),
+                    ...statChip(tc, !!webgpuDirectRef.current && !/failed|unavailable/i.test(webgpuRuntimeStatus)),
                     maxWidth: 520,
                     whiteSpace: "nowrap",
                     overflow: "visible",
@@ -4573,7 +4573,7 @@ function Explore() {
               </Box>
             );
           })}
-          <Tooltip title="Negate the displayed phase.  SSB's phase is defined only up to ± (sign-ambiguous).  Use this to match the expected contrast of your sample.  Display only: it does not re-run reconstruction or change any fitted number (display_negate_phase)." placement="top" arrow>
+          <Tooltip title="Negate the displayed phase.  The direct ptychography phase is defined only up to ± (sign-ambiguous).  Use this to match the expected contrast of your sample.  Display only: it does not re-run reconstruction or change any fitted number (display_negate_phase)." placement="top" arrow>
             <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, cursor: "help" }}>
               <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>Negate phase (display)</Typography>
               <Switch disabled={regionalMode} checked={!!displayNegatePhase} onChange={(_, checked) => setDisplayNegatePhase(checked)} size="small" />
@@ -4771,7 +4771,7 @@ function Explore() {
               </Box>
               <Box sx={{ flex: 1 }} />
               {trials.length > 0 && (
-                <Tooltip title={`Showing ${trials.length} retained trial previews ranked by ${trialObjectiveText}; this is not the total search budget. The refined fit's model agreement is ${fitAgreement == null ? 'not measured' : formatNumber(fitAgreement, 4)} (higher is better)${tiltFitGain != null ? `; the tilt fit gains ${tiltFitGain.toFixed(2)}× over standard SSB` : ''}. A trial shows its own objective's score: model agreement (higher is better) or phase variance (lower is better). Different objectives cannot be compared directly.`} placement="top" arrow>
+                <Tooltip title={`Showing ${trials.length} retained trial previews ranked by ${trialObjectiveText}; this is not the total search budget. The refined fit's model agreement is ${fitAgreement == null ? 'not measured' : formatNumber(fitAgreement, 4)} (higher is better)${tiltFitGain != null ? `; the tilt fit gains ${tiltFitGain.toFixed(2)}× over standard direct ptychography` : ''}. A trial shows its own objective's score: model agreement (higher is better) or phase variance (lower is better). Different objectives cannot be compared directly.`} placement="top" arrow>
                   <Typography sx={{ ...typography.value, color: tc.textMuted, cursor: "help" }}>
                     Fit agreement {fitAgreement == null ? 'not measured' : formatNumber(fitAgreement, 4)}{tiltFitGain != null ? `  ·  tilt gain ${tiltFitGain.toFixed(2)}×` : ''}
                   </Typography>

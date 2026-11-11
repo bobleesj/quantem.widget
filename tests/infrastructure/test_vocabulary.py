@@ -59,8 +59,12 @@ EXCEPTIONS = {
 }
 
 
+# The method is direct ptychography (maintainer, 11 Nov 2026): no public name spells SSB, in any case.
+RETIRED_FRAGMENTS = ("ssb",)
+
+
 def _banned(name: str) -> bool:
-    return name not in EXCEPTIONS and name in BANNED
+    return name not in EXCEPTIONS and (name in BANNED or any(part in name.lower() for part in RETIRED_FRAGMENTS))
 
 
 def _signature_names(function, owner):

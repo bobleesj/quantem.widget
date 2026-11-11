@@ -40,7 +40,7 @@ describe("the units at the engine boundary", () => {
     });
   });
 
-  it("sends no sample for standard SSB (depth spread 0)", async () => {
+  it("sends no sample for standard direct ptychography (depth spread 0)", async () => {
     const calls: unknown[][] = [];
     const engine = { reconstruct: (...args: unknown[]) => { calls.push(args); return Promise.resolve(null); } } as unknown as WebGPUSSBBackend;
     await reconstruct(engine, {
