@@ -124,3 +124,21 @@ def test_existing_session_name_downloads_canonical_folder(tmp_path, monkeypatch)
     )
     assert hub.download("gold_haadf_session", verbose=False) == tmp_path / "widget/gold_session"
     assert calls[0]["allow_patterns"] == "widget/gold_session/*"
+
+
+def test_quiet_download_hides_hub_progress_bars_and_restores_them(tmp_path, monkeypatch):
+    from huggingface_hub.utils import are_progress_bars_disabled, enable_progress_bars
+
+    enable_progress_bars()
+    seen = []
+
+    def shared(name, **kwargs):
+        seen.append(are_progress_bars_disabled())
+        return tmp_path
+
+    monkeypatch.setattr(hub, "_shared_download", shared)
+    hub.download("haadf/gold", verbose=False)
+    hub.download("haadf/gold", verbose=True)
+    # quiet hides the bars only for its own call; verbose leaves the caller's setting alone
+    assert seen == [True, False]
+    assert not are_progress_bars_disabled()
