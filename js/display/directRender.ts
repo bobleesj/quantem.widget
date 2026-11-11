@@ -33,6 +33,11 @@ type ViewTransform = { zoom: number; panX: number; panY: number };
 export type PanelCanvasDraw = {
   slot: number; ctx: GPUCanvasContext; range: DisplayRange; logScale: boolean;
   lut: { name: string; lut: Uint8Array }; transform?: ViewTransform;
+  /**
+   * A second slot drawn over the first with the same range, LUT and view: a full-resolution
+   * detail tile over a binned preview. x, y, width and height place it in canvas pixels at zoom 1.
+   */
+  overlay?: { slot: number; x: number; y: number; width: number; height: number };
 };
 /** One canvas view of a slot: its size, background and optional zoom/pan. */
 type CanvasViewOptions = { width: number; height: number; bgRgb: number; transform?: ViewTransform; smooth?: boolean };
@@ -429,52 +434,21 @@ export class DirectRenderer {
    */
   renderSlotsDirectToCanvases(draws: PanelCanvasDraw[], opts: { width: number; height: number; bgRgb: number; smooth?: boolean }): boolean {
     if (draws.length === 0) return false;
-    if (new Set(draws.map(draw => draw.slot)).size !== draws.length) throw new Error("Supply one distinct resident slot for each canvas context.");
-    const slots = draws.map(draw => this.engine.slots[draw.slot]);
-    if (slots.some(slot => !slot || slot.dataKind !== "f32")) return false;
+    const slotIndices = draws.flatMap(draw => draw.overlay ? [draw.slot, draw.overlay.slot] : [draw.slot]);
+    if (new Set(slotIndices).size !== slotIndices.length) throw new Error("Supply one distinct resident slot for each canvas context.");
+    if (slotIndices.some(idx => this.engine.slots[idx]?.dataKind !== "f32")) return false;
     const outW = Math.max(1, Math.round(opts.width));
     const outH = Math.max(1, Math.round(opts.height));
     this.ensureDirectSlotPipeline(navigator.gpu.getPreferredCanvasFormat());
     const pipeline = this.directSlotPipeline;
     if (!pipeline) return false;
-    const params = this.directGridParams;
-    const paramsU32 = this.directGridParamsU32;
-    const paramsF32 = this.directGridParamsF32;
     const encoder = this.device.createCommandEncoder();
-    for (let k = 0; k < draws.length; k++) {
-      const draw = draws[k];
-      const slot = slots[k]!;
-      const transform = draw.transform;
-      const zoomValue = Math.max(1e-6, transform?.zoom ?? 1);
-      paramsU32[0] = slot.width;
-      paramsU32[1] = slot.height;
-      paramsU32[2] = 0;
-      paramsU32[3] = slot.width;
-      paramsU32[4] = outH;
-      paramsU32[5] = outW;
-      paramsF32[6] = 0;
-      paramsF32[7] = 0;
-      paramsU32[8] = draw.logScale ? 1 : 0;
-      paramsU32[9] = opts.bgRgb & 0xFFFFFF;
-      paramsF32[10] = zoomValue;
-      paramsU32[11] = shouldSmoothDirectSample(opts.smooth, zoomValue, slot.width, slot.height, outW, outH) ? 1 : 0;
-      paramsF32[12] = draw.range.vmin;
-      paramsF32[13] = draw.range.vmax;
-      paramsF32[14] = transform?.panX ?? 0;
-      paramsF32[15] = transform?.panY ?? 0;
-      this.device.queue.writeBuffer(slot.paramsBuffer, 0, params);
+    for (const draw of draws) {
+      const zoom = Math.max(1e-6, draw.transform?.zoom ?? 1);
+      const panX = draw.transform?.panX ?? 0;
+      const panY = draw.transform?.panY ?? 0;
       const lutBuffer = this.engine.namedLutBuffer(draw.lut.name, draw.lut.lut);
-      if (!slot.directCanvasBindGroup || slot.directCanvasLut !== lutBuffer) {
-        slot.directCanvasBindGroup = this.device.createBindGroup({
-          layout: pipeline.getBindGroupLayout(0),
-          entries: [
-            { binding: 0, resource: { buffer: slot.paramsBuffer } },
-            { binding: 1, resource: { buffer: slot.dataBuffer } },
-            { binding: 2, resource: { buffer: lutBuffer } },
-          ],
-        });
-        slot.directCanvasLut = lutBuffer;
-      }
+      const base = this.bindCanvasSlot(pipeline, draw.slot, lutBuffer, draw, outW, outH, zoom, panX, panY, opts);
       const pass = encoder.beginRenderPass({
         colorAttachments: [{
           view: draw.ctx.getCurrentTexture().createView(),
@@ -484,12 +458,68 @@ export class DirectRenderer {
         }],
       });
       pass.setPipeline(pipeline);
-      pass.setBindGroup(0, slot.directCanvasBindGroup);
+      pass.setBindGroup(0, base);
       pass.draw(3);
+      const overlay = draw.overlay;
+      if (overlay) {
+        const tileW = Math.max(1, Math.round(overlay.width));
+        const tileH = Math.max(1, Math.round(overlay.height));
+        const left = panX + zoom * overlay.x;
+        const top = panY + zoom * overlay.y;
+        // The pixels whose centres fall inside the tile; the shader paints outside it black.
+        const x0 = Math.max(0, Math.ceil(left - 0.5));
+        const y0 = Math.max(0, Math.ceil(top - 0.5));
+        const x1 = Math.min(outW, Math.ceil(left + zoom * tileW - 0.5));
+        const y1 = Math.min(outH, Math.ceil(top + zoom * tileH - 0.5));
+        if (x1 > x0 && y1 > y0) {
+          pass.setBindGroup(0, this.bindCanvasSlot(pipeline, overlay.slot, lutBuffer, draw, tileW, tileH, zoom, left, top, opts));
+          pass.setScissorRect(x0, y0, x1 - x0, y1 - y0);
+          pass.draw(3);
+        }
+      }
       pass.end();
     }
     this.device.queue.submit([encoder.finish()]);
     return true;
+  }
+
+  /** Write `idx`'s params for an outW x outH image placed at (panX, panY) and zoom, and return its cached binding. */
+  private bindCanvasSlot(
+    pipeline: GPURenderPipeline, idx: number, lutBuffer: GPUBuffer, draw: PanelCanvasDraw,
+    outW: number, outH: number, zoom: number, panX: number, panY: number, opts: { bgRgb: number; smooth?: boolean },
+  ): GPUBindGroup {
+    const slot = this.engine.slots[idx]!;
+    const paramsU32 = this.directGridParamsU32;
+    const paramsF32 = this.directGridParamsF32;
+    paramsU32[0] = slot.width;
+    paramsU32[1] = slot.height;
+    paramsU32[2] = 0;
+    paramsU32[3] = slot.width;
+    paramsU32[4] = outH;
+    paramsU32[5] = outW;
+    paramsF32[6] = 0;
+    paramsF32[7] = 0;
+    paramsU32[8] = draw.logScale ? 1 : 0;
+    paramsU32[9] = opts.bgRgb & 0xFFFFFF;
+    paramsF32[10] = zoom;
+    paramsU32[11] = shouldSmoothDirectSample(opts.smooth, zoom, slot.width, slot.height, outW, outH) ? 1 : 0;
+    paramsF32[12] = draw.range.vmin;
+    paramsF32[13] = draw.range.vmax;
+    paramsF32[14] = panX;
+    paramsF32[15] = panY;
+    this.device.queue.writeBuffer(slot.paramsBuffer, 0, this.directGridParams);
+    if (!slot.directCanvasBindGroup || slot.directCanvasLut !== lutBuffer) {
+      slot.directCanvasBindGroup = this.device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: slot.paramsBuffer } },
+          { binding: 1, resource: { buffer: slot.dataBuffer } },
+          { binding: 2, resource: { buffer: lutBuffer } },
+        ],
+      });
+      slot.directCanvasLut = lutBuffer;
+    }
+    return slot.directCanvasBindGroup;
   }
 
   /**

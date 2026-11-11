@@ -536,6 +536,8 @@ type DetailTile = {
   bin: number;
   floats: Float32Array;
   canvas: HTMLCanvasElement | null;
+  /** The engine holding the tile in its slot, once uploaded (see drawGpuPanels). */
+  gpuEngine?: DisplayColormapEngine | null;
 };
 // Cap on one detail reply (float32 bytes) so a zoom refetch stays sub-second
 // on a slow kernel->browser channel. Mirrors Show2D._DETAIL_BUDGET_BYTES.
@@ -4062,8 +4064,8 @@ function Show2D() {
   /**
    * Draw the eligible `panels` of a gallery on WebGPU with `ranges` (indexed by panel) in one
    * submission and return the panels drawn; the rest stay on the 2D path. Rotated or flipped
-   * kernel-less exports, packed uint8 folder frames, binned previews with detail tiles, true
-   * color and panels whose slot lags the data are left to it. With `retain`, each drawn frame is
+   * kernel-less exports, packed uint8 folder frames, true color and panels whose slot lags
+   * the data are left to it. With `retain`, each drawn frame is
    * copied to its 2D canvas in the same task, while the canvas texture still holds it (after
    * presentation it may be discarded), and the 2D canvas shows again.
    */
@@ -4071,11 +4073,30 @@ function Show2D() {
     const drawn = new Set<number>();
     const engine = gpuCmapRef.current;
     if (!isGallery || !(engine instanceof GPUColormapEngine) || !gpuCmapReadyRef.current) return drawn;
-    if (uint8FolderPreviewMode || (displayBin ?? 1) > 1 || canvasW <= 0 || canvasH <= 0) return drawn;
+    if (uint8FolderPreviewMode || canvasW <= 0 || canvasH <= 0) return drawn;
+    const binned = (displayBin ?? 1) > 1;
     const draws: PanelCanvasDraw[] = [];
     for (const panel of panels) {
       const range = ranges[panel];
       if (!range || (isRgbFlags && isRgbFlags[panel]) || imageResizePending(panel)) continue;
+      // A full-resolution detail tile over a binned preview draws in the same pass, from its
+      // own slot (after the preview and FFT slots), placed as paintMainPanels places it.
+      const tile = binned ? detailTilesRef.current.get(panel) : undefined;
+      let overlay: PanelCanvasDraw["overlay"];
+      if (tile && detailTileCoversWindow(tile, currentDetailWindow(panel))) {
+        const tileSlot = 2 * nImages + panel;
+        if (tile.gpuEngine !== engine) {
+          engine.uploadData(tileSlot, tile.floats, tile.cols, tile.rows);
+          tile.gpuEngine = engine;
+        }
+        const scaleX = canvasW / width;
+        const scaleY = canvasH / height;
+        overlay = {
+          slot: tileSlot,
+          x: (tile.col0 / displayBin) * scaleX, y: (tile.row0 / displayBin) * scaleY,
+          width: (tile.cols * tile.bin / displayBin) * scaleX, height: (tile.rows * tile.bin / displayBin) * scaleY,
+        };
+      }
       const placement = panelPlacement(panel);
       if (placement.rotationTurns !== 0 || placement.flipX || placement.flipY) continue;
       if (!gpuPanelSlotCurrent(engine, panel)) continue;
@@ -4087,6 +4108,7 @@ function Show2D() {
         lut: { name, lut: COLORMAPS[name] || COLORMAPS.inferno },
         // Zoom about the canvas centre, as applyPanelTransform draws it.
         transform: { zoom: placement.zoom, panX: canvasW / 2 * (1 - placement.zoom) + placement.panX, panY: canvasH / 2 * (1 - placement.zoom) + placement.panY },
+        overlay,
       });
     }
     if (draws.length === 0) return drawn;
