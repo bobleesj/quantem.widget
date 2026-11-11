@@ -175,9 +175,29 @@ def open_page(chrome):
 @pytest.fixture(scope="session")
 def serve():
     """Serve a directory over HTTP (exports fetch their data; file:// blocks it)."""
-    servers = []
+    servers, processes = [], []
 
     def start(directory: Path) -> str:
+        # An export that ships its own server is opened through it, as its launcher does: a CUDA
+        # ShowPtycho export reads source/bf_columns.qem by byte range, which SimpleHTTPRequestHandler ignores.
+        own_server = Path(directory) / ".viewer" / "serve_range.py"
+        if own_server.exists():
+            with socket.socket() as probe:
+                probe.bind(("127.0.0.1", 0))
+                port = probe.getsockname()[1]
+            process = subprocess.Popen([sys.executable, str(own_server), "--root", str(directory),
+                                        "--host", "127.0.0.1", "--port", str(port)])
+            processes.append(process)
+            url = f"http://127.0.0.1:{port}"
+            deadline = time.monotonic() + 15
+            while True:
+                try:
+                    urllib.request.urlopen(url + "/index.html", timeout=1).close()
+                    return url
+                except OSError:
+                    if process.poll() is not None or time.monotonic() > deadline:
+                        raise
+                    time.sleep(0.1)
         handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(directory))
         handler.log_message = lambda *args: None
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -188,6 +208,9 @@ def serve():
     yield start
     for server in servers:
         server.shutdown()
+    for process in processes:
+        process.terminate()
+        process.wait(timeout=10)
 
 
 @pytest.fixture
