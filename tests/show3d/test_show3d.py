@@ -303,6 +303,39 @@ def test_flip_sign_is_a_display_toggle_that_sends_one_boolean_and_no_pixels():
         viewer.free()
 
 
+@pytest.mark.parametrize("marks", ["frame_flip_signs"])
+def test_per_frame_marks_follow_the_stack_and_send_no_pixels(marks):
+    stack = _ramp(4, 32, offset=-0.25)
+    widget = Show3D(stack, verbose=False)
+    assert getattr(widget, marks) == [False] * 4 and widget.state_dict()[marks] == [False] * 4
+    stored = widget._data.copy()
+    sent = []
+    send = widget._send
+    widget._send = lambda msg, buffers=None: (sent.append((msg.get("state"), buffers)), send(msg, buffers))[1]
+    setattr(widget, marks, [False, False, True, False])
+    # the whole transfer: one state update holding the list, no binary buffer
+    assert [(sorted(state), buffers) for state, buffers in sent] == [([marks], [])]
+    np.testing.assert_array_equal(widget._data, stored)
+    restored = Show3D(stack, verbose=False)
+    restored.load_state_dict(widget.state_dict())
+    assert getattr(restored, marks) == [False, False, True, False]
+    # a saved list of another length does not fit this stack and is dropped
+    shorter = Show3D(stack[:3], verbose=False)
+    shorter.load_state_dict(widget.state_dict())
+    assert getattr(shorter, marks) == [False] * 3
+    # a stream keeps earlier marks when frames arrive; each new frame starts unmarked
+    stream = Show3D.stream()
+    stream.append(stack[0])
+    stream.append(stack[1])
+    assert stream._stream_wait_sent(5) and getattr(stream, marks) == [False, False]
+    setattr(stream, marks, [True, False])
+    stream.append(stack[2])
+    assert stream._stream_wait_sent(5) and getattr(stream, marks) == [True, False, False]
+    stream.close()
+    for viewer in (widget, restored, shorter):
+        viewer.free()
+
+
 def test_saved_notebook_state_keeps_a_preview_instead_of_pixels():
     widget = Show3D(_ramp(), title="save", verbose=False)
     state = widget.get_state()

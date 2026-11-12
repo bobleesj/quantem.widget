@@ -12,6 +12,11 @@ const INNER_WIDTH = THUMBNAIL_STRIP_WIDTH - 2; // inside the 1 px strip border
 const HEADER_HEIGHT = 30;
 // Thumbnails stay small on the GPU: at most this many device pixels across, whatever the screen density.
 const MAX_DEVICE_PX = 320;
+// A mark in a thumbnail corner, on the same dark plate as the frame number so it reads on bright and dark frames.
+const CORNER_BADGE = {
+  position: "absolute", minWidth: 14, height: 14, px: "2px", boxSizing: "border-box", fontSize: 10, fontWeight: 700,
+  lineHeight: "14px", textAlign: "center", color: "#fff", bgcolor: "rgba(0,0,0,0.55)", pointerEvents: "none",
+} as const;
 
 export type ThumbnailStripColors = { text: string; textMuted: string; border: string; accent: string; controlBg: string };
 
@@ -41,6 +46,10 @@ export type ThumbnailStripProps = {
   /** Why no thumbnail can be drawn (no WebGPU, a color stack); null when they can. */
   unavailableReason: string | null;
   colors: ThumbnailStripColors;
+  /** Per frame: shown with its sign flipped (`frame_flip_signs`); those thumbnails carry an "F" in the top left corner. */
+  flipped?: boolean[];
+  /** Starred frames (stack indices); those thumbnails carry a star in the bottom right corner. */
+  starred?: number[];
   /** Frames picked for Find drift (stack indices); ⌘/Ctrl-click toggles one, Shift-click picks a range. */
   chosen?: number[];
   onChoose?: (frames: number[]) => void;
@@ -60,6 +69,7 @@ export type ThumbnailStripProps = {
 export function ThumbnailStrip(props: ThumbnailStripProps) {
   const { frames, currentFrame, labels, columns, height, imageAspect, draw, drawKey, retryKey, colors } = props;
   const chosen = React.useMemo(() => new Set(props.chosen ?? []), [props.chosen]);
+  const starred = React.useMemo(() => new Set(props.starred ?? []), [props.starred]);
   const lastChosen = React.useRef<number | null>(null);
   /** ⌘/Ctrl-click toggles a frame for Find drift; Shift-click adds the range from the last one; a plain click selects. */
   const handleClick = (event: React.MouseEvent, frame: number) => {
@@ -216,12 +226,18 @@ export function ThumbnailStrip(props: ThumbnailStripProps) {
                   style={{ display: "block", width: imageWidth >= cell ? "100%" : imageWidth, height: imageHeight >= cell ? "100%" : imageHeight, objectFit: imageWidth >= cell && imageHeight >= cell ? "cover" : "contain" }}
                 />
                 <Box sx={{
-                  position: "absolute", left: 3, bottom: 3, px: 0.5, maxWidth: cell - 6,
+                  position: "absolute", left: 3, bottom: 3, px: 0.5, maxWidth: cell - 6 - (starred.has(frame) ? 17 : 0),   // clear of the star
                   fontSize: 10, lineHeight: "14px", color: "#fff", bgcolor: selected ? colors.accent : "rgba(0,0,0,0.55)",
                   overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", pointerEvents: "none",
                 }}>
                   {cols < 3 && custom ? `${frame + 1} · ${custom}` : frame + 1}
                 </Box>
+                {props.flipped?.[frame] && (
+                  <Box data-testid="show3d-thumbnail-flip-sign" aria-label={`Frame ${frame + 1} shown with its sign flipped`} sx={{ ...CORNER_BADGE, left: 3, top: 3 }}>F</Box>
+                )}
+                {starred.has(frame) && (
+                  <Box data-testid="show3d-thumbnail-star" aria-label={`Frame ${frame + 1} starred`} sx={{ ...CORNER_BADGE, right: 3, bottom: 3, color: "#ffc107" }}>★</Box>
+                )}
                 {chosen.has(frame) && (
                   <Box aria-label={`Frame ${frame + 1} picked for Find drift`} sx={{
                     position: "absolute", right: 3, top: 3, width: 16, height: 16, borderRadius: "50%", fontSize: 11,

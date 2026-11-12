@@ -33,6 +33,8 @@ import PauseIcon from "@mui/icons-material/Pause";
 import FastRewindIcon from "@mui/icons-material/FastRewind";
 import FastForwardIcon from "@mui/icons-material/FastForward";
 import StopIcon from "@mui/icons-material/Stop";
+import StarIcon from "@mui/icons-material/Star";
+import StarBorderIcon from "@mui/icons-material/StarBorder";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
@@ -55,7 +57,7 @@ import { MetadataSection } from "../widgetInfo";
 import { applyFrequencyFilterBrowser, frequencyFilterActive, getFrequencyFilterBackend, normalizeFrequencyFilterMode } from "../display/frequencyFilter";
 import { encodeIndexedGif, quantizeRgbaForBrowserGif } from "./gif";
 import { missingDisplayStackStatus } from "./displayStack";
-import { displayColormap, shownHistogramBins, shownHistogramWindow, shownLimits, shownStats, shownValue, storedClipPercent } from "./flipSign";
+import { displayColormap, frameSignFlipped, toggledFrameMark, shownHistogramBins, shownHistogramWindow, shownLimits, shownStats, shownValue, storedClipPercent } from "./flipSign";
 import { ThumbnailStrip } from "./ThumbnailStrip";
 import { ThumbnailRenderer } from "../display/thumbnails";
 import {
@@ -164,6 +166,7 @@ const SHOW3D_STANDALONE_VIEW_STATE_KEYS = [
   "flip_sign",
   "flip_vertical",
   "fps",
+  "frame_flip_signs",
   "frame_rotations",
   "frequency_filter",
   "frequency_filter_center",
@@ -1399,12 +1402,20 @@ function Show3D() {
   const [flipRows, setFlipRows] = useModelState<boolean>("flip_vertical");
   const [flipCols, setFlipCols] = useModelState<boolean>("flip_horizontal");
   const [flipSignTrait, setFlipSign] = useModelState<boolean>("flip_sign");
+  const [frameFlipSigns, setFrameFlipSigns] = useModelState<boolean[]>("frame_flip_signs");
   // Show -value (see flipSign.ts). True color has no colormap window to mirror, so the flip is gray only.
-  const flipSign = !!flipSignTrait && !isRgb;
+  // stackFlipSign is the switch for every frame; a frame is shown negated when exactly one of it and the
+  // frame's own entry (key f) is set. Views built from several frames (compare, kymograph) follow the switch only.
+  const stackFlipSign = !!flipSignTrait && !isRgb;
+  const flipSignFor = (frame: number) => !isRgb && frameSignFlipped(stackFlipSign, frameFlipSigns, frame);
+  // The frame on screen: its limits, histogram, colorbar, statistics and cursor value are negated with it.
+  const flipSign = flipSignFor(liveSliceIdx);
   // Direct WebGPU repaints run from long-lived closures (playback rAF, gesture previews), so they
-  // read the flip of this render the way they read cmapLiveRef.
-  const flipSignLiveRef = React.useRef(flipSign);
-  flipSignLiveRef.current = flipSign;
+  // read the flips of this render the way they read cmapLiveRef.
+  const flipSignsLiveRef = React.useRef({ stack: stackFlipSign, frames: frameFlipSigns });
+  flipSignsLiveRef.current = { stack: stackFlipSign, frames: isRgb ? [] : frameFlipSigns };
+  const liveFlipSignFor = (frame: number) => frameSignFlipped(flipSignsLiveRef.current.stack, flipSignsLiveRef.current.frames, frame);
+  const frameFlipSignsKey = (frameFlipSigns || []).map(flipped => flipped ? "1" : "0").join("");
   const [compareMode, setCompareMode] = useModelState<string>("compare_mode");
   const [comparePair, setComparePair] = useModelState<number[]>("compare_pair");
   const [blinkFps, setBlinkFps] = useModelState<number>("blink_fps");
@@ -2134,7 +2145,7 @@ function Show3D() {
       const panel = activePanels[slot];
       const panelData = extractPanelSlice(frame, panel, logScale);
       if (!panelData) continue;
-      const lut = displayColormap(panelCmapFor(panel), flipSign).lut;
+      const lut = displayColormap(panelCmapFor(panel), flipSignFor(frameIdx)).lut;
       let range: { vmin: number; vmax: number };
       if (autoContrast) {
         if (sharedAutoRange && linkContrast) {
@@ -4514,11 +4525,19 @@ function Show3D() {
       return false;
     }
     const panelSourceCount = Math.max(1, nPanels || 1);
-    if (panelSourceCount <= 1 || width <= 0 || height <= 0 || canvasW <= 0 || canvasH <= 0) return false;
+    if (width <= 0 || height <= 0 || canvasW <= 0 || canvasH <= 0) return false;
     const normalized = ((Math.round(idx) % Math.max(1, nSlices)) + Math.max(1, nSlices)) % Math.max(1, nSlices);
     const engine = gpuCmapRef.current;
     if (!engine || !gpuCmapReadyRef.current) return false;
     const settings = playRef.current;
+    // One image at its default view is renderGpuCachedSliceDirect's; zoomed or panned it is drawn here, from its
+    // resident texture with the frame's live range. The Canvas2D copy it used to be drawn from was not kept
+    // current by a streamed stack (a frame arriving left it blank: the zoomed image went white) and carried the
+    // range of the last static draw, not the frame's.
+    if (panelSourceCount <= 1) {
+      const view = settings.linkPanels ? settings.linkedState : (settings.panelStates[0] || initialState);
+      if (view.zoom === 1 && view.panX === 0 && view.panY === 0) return false;
+    }
     if (settings.imageRotation % 4 !== 0 || settings.width <= 0 || settings.height <= 0 || settings.canvasW <= 0 || settings.canvasH <= 0) return false;
     const panels = (settings.visiblePanelIndices.length ? settings.visiblePanelIndices : visiblePanelIndices)
       .filter((panel) => Number.isFinite(panel) && panel >= 0 && panel < panelSourceCount);
@@ -4557,7 +4576,7 @@ function Show3D() {
     }
     if (slotIdx === null) return false;
 
-    const liveFlipSign = flipSignLiveRef.current;
+    const liveFlipSign = liveFlipSignFor(normalized);
     const { name: liveCmap, lut } = displayColormap(cmapLiveRef.current || settings.cmap, liveFlipSign);
     engine.uploadLUT(liveCmap, lut);
     const panelCount = panels.length;
@@ -4697,12 +4716,7 @@ function Show3D() {
     if (gpuSlotMissesTheView(residentSlotIdx)) return false;
     const renderSlotIdx = residentSlotIdx ?? normalized;
     if (isRgb) return renderGpuRgbSliceDirect(normalized, updateDisplayState, renderSlotIdx);
-    if (
-      Math.max(1, nPanels || 1) > 1 &&
-      renderGpuPackedPanelTransformSlice(normalized, updateDisplayState, residentSlotIdx)
-    ) {
-      return true;
-    }
+    if (renderGpuPackedPanelTransformSlice(normalized, updateDisplayState, residentSlotIdx)) return true;
     const engine = gpuCmapRef.current;
     if (!engine || !gpuCmapReadyRef.current) return false;
     const settings = playRef.current;
@@ -4720,7 +4734,7 @@ function Show3D() {
     const gpuCtx = ensureGpuDisplayContext(engine, settings.canvasW, settings.canvasH);
     if (!gpuCtx) return false;
 
-    const { name: liveCmap, lut } = displayColormap(cmapLiveRef.current || settings.cmap, flipSignLiveRef.current);
+    const { name: liveCmap, lut } = displayColormap(cmapLiveRef.current || settings.cmap, liveFlipSignFor(normalized));
     engine.uploadLUT(liveCmap, lut);
     let vmin: number, vmax: number;
     if (settings.autoContrast) {
@@ -5172,7 +5186,7 @@ function Show3D() {
 
       // Render frame. The 4k playback hot path must stay off the JS CPU:
       // one 4096^2 colormap loop alone is ~37 ms, before auto-contrast/canvas.
-      const liveFlipSign = flipSignLiveRef.current;
+      const liveFlipSign = liveFlipSignFor(next);
       const { name: liveCmap, lut } = displayColormap(cmapLiveRef.current || settings.cmap, liveFlipSign);
       if (mainOffscreenRef.current && mainImgDataRef.current) {
         let vmin: number, vmax: number;
@@ -5590,6 +5604,9 @@ function Show3D() {
   const initialAutoSnappedRef = React.useRef(false);
   const lastLogScaleRef = React.useRef(logScale);
   const lastAutoContrastRef = React.useRef(autoContrast);
+  // The frame the thumbs were last snapped to. Auto contrast shows every frame over its own range, so thumbs left
+  // at an earlier frame's range made the image jump the moment a handle was grabbed.
+  const lastAutoSnapFrameRef = React.useRef(-1);
   React.useEffect(() => {
     const logScaleChanged = lastLogScaleRef.current !== logScale;
     // Detect Auto toggled false -> true (user re-engages Auto).
@@ -5598,14 +5615,16 @@ function Show3D() {
     lastLogScaleRef.current = logScale;
     lastAutoContrastRef.current = autoContrast;
     if (perPanelHistogramEnabled) return;
-    if (!autoContrast || !imageHistogramData || imageHistogramData.length === 0) return;
+    if (!autoContrast) return;
     // Skip initial snap if user already moved thumbs (e.g. loaded from saved state).
     if (!initialAutoSnappedRef.current && (imageVminPct !== 0 || imageVmaxPct !== 100)) {
       initialAutoSnappedRef.current = true;
       return;
     }
-    // After first snap, re-snap only on logScale OR Auto-toggle-on transitions.
-    if (initialAutoSnappedRef.current && !logScaleChanged && !autoToggledOn) return;
+    // After first snap, re-snap on logScale or Auto-toggle-on transitions, and when another frame is shown
+    // (not during playback: the thumbs follow once it stops).
+    const frameChanged = lastAutoSnapFrameRef.current !== sliceIdx && !playing;
+    if (initialAutoSnappedRef.current && !logScaleChanged && !autoToggledOn && !frameChanged) return;
     const { min: autoMin, max: autoMax } = resolveDisplayBounds(dataMin, dataMax, traitVmin, traitVmax, logScale);
     const span = autoMax - autoMin;
     if (span <= 0) return;
@@ -5613,11 +5632,15 @@ function Show3D() {
       cachedAutoDisplayRange(autoVmins, autoVmaxs, sliceIdx, logScale)
       || cachedAutoDisplayRange(localAutoVminsRef.current, localAutoVmaxsRef.current, sliceIdx, logScale)
     ) : null;
-    const { vmin: pmin, vmax: pmax } = cached ?? percentileClip(imageHistogramData, percentileLow, percentileHigh);
+    // The frame's precomputed Auto range needs no histogram samples (a WebGPU viewer holds none on the page:
+    // its bins are counted on the GPU), so the thumbs can follow it; only the fallback reads the samples.
+    if (!cached && (!imageHistogramData || imageHistogramData.length === 0)) return;
+    const { vmin: pmin, vmax: pmax } = cached ?? percentileClip(imageHistogramData!, percentileLow, percentileHigh);
     setImageVminPct(Math.max(0, Math.min(100, ((pmin - autoMin) / span) * 100)));
     setImageVmaxPct(Math.max(0, Math.min(100, ((pmax - autoMin) / span) * 100)));
     initialAutoSnappedRef.current = true;
-  }, [autoContrast, imageHistogramData, dataMin, dataMax, traitVmin, traitVmax, autoVmins, autoVmaxs, sliceIdx, percentileLow, percentileHigh, logScale, imageVminPct, imageVmaxPct, perPanelHistogramEnabled]);
+    lastAutoSnapFrameRef.current = sliceIdx;
+  }, [autoContrast, imageHistogramData, dataMin, dataMax, traitVmin, traitVmax, autoVmins, autoVmaxs, sliceIdx, playing, percentileLow, percentileHigh, logScale, imageVminPct, imageVmaxPct, perPanelHistogramEnabled]);
 
   // useEffect (not useLayoutEffect) so the per-panel auto-snap runs AFTER
   // the data effect populates panelHistogramData for the new frame.
@@ -6046,6 +6069,12 @@ function Show3D() {
     }
   }, []);
 
+  // A sign flip repaints the frame on screen from its resident texture. That frame may be one a
+  // thumbnail under the pointer is previewing, which the display effect (keyed on the selected frame) does not own.
+  React.useEffect(() => {
+    scheduleHistogramPreviewPaint();
+  }, [stackFlipSign, frameFlipSignsKey]);
+
   React.useEffect(() => {
     const preview = imageHistogramPreviewPctRef.current;
     if (
@@ -6110,7 +6139,7 @@ function Show3D() {
       const data = logScale ? applyLogScale(frame) : frame;
       const range = percentileClip(data, percentileLow, percentileHigh);
       const img = outCtx.createImageData(width, height);
-      const lut = displayColormap(panelCmapFor(visiblePanelIndices[0] ?? 0), flipSign, "plasma").lut;
+      const lut = displayColormap(panelCmapFor(visiblePanelIndices[0] ?? 0), stackFlipSign, "plasma").lut;
       renderFramePlayback(data, img.data, lut, range.vmin, range.vmax, false);
       outCtx.putImageData(img, 0, 0);
       drawMain(ctx, out, { sourcePanelWidth: sharedPanelSource ? undefined : panelW });
@@ -6130,8 +6159,8 @@ function Show3D() {
         const storedA = Math.max(0, Math.min(1, (frameA[i] - aRange.vmin) / aSpan));
         const storedB = Math.max(0, Math.min(1, (frameB[i] - bRange.vmin) / bSpan));
         // flip_sign: -value between the negated limits is 1 - t
-        const valueA = flipSign ? 1 - storedA : storedA;
-        const valueB = flipSign ? 1 - storedB : storedB;
+        const valueA = stackFlipSign ? 1 - storedA : storedA;
+        const valueB = stackFlipSign ? 1 - storedB : storedB;
         rgba[4 * i] = Math.round(255 * valueA);
         rgba[4 * i + 1] = Math.round(255 * valueB);
         rgba[4 * i + 2] = Math.round(255 * valueA);
@@ -6142,7 +6171,7 @@ function Show3D() {
       for (let i = 0; i < width * height; i++) maxAbsDifference = Math.max(maxAbsDifference, Math.abs(frameB[i] - frameA[i]));
       const scale = maxAbsDifference > 0 ? 1 / maxAbsDifference : 1;
       // flip_sign negates the difference too: (-B) - (-A) = -(B - A), so the two colours trade places
-      const magentaPositive = (String(diffCmap || "magenta-green").toLowerCase() === "magenta-green") !== flipSign;
+      const magentaPositive = (String(diffCmap || "magenta-green").toLowerCase() === "magenta-green") !== stackFlipSign;
       for (let i = 0; i < width * height; i++) {
         const difference = Math.max(-1, Math.min(1, (frameB[i] - frameA[i]) * scale));
         const intensity = Math.round(255 * Math.abs(difference));
@@ -6159,7 +6188,7 @@ function Show3D() {
   };
   React.useEffect(() => {
     paintCompare();
-  }, [compareMode, comparePair, blinkPhase, blinkFps, compareBackground, diffCmap, isRgb, canvasW, canvasH, width, height, nSlices, nPanels, numPanelCols, sharedPanelSource, displaySliceIdx, frameBytes, frameSeq, avgWindow, subpixelAlignEnabled, subpixelAlignVersion, cmap, flipSign, panelCmaps, percentileLow, percentileHigh, logScale, visiblePanelIndices, canvasRepaintSignal]);
+  }, [compareMode, comparePair, blinkPhase, blinkFps, compareBackground, diffCmap, isRgb, canvasW, canvasH, width, height, nSlices, nPanels, numPanelCols, sharedPanelSource, displaySliceIdx, frameBytes, frameSeq, avgWindow, subpixelAlignEnabled, subpixelAlignVersion, cmap, stackFlipSign, panelCmaps, percentileLow, percentileHigh, logScale, visiblePanelIndices, canvasRepaintSignal]);
 
   const ensureFullSizeMainOffscreen = React.useCallback((): boolean => {
     if (width <= 0 || height <= 0) return false;
@@ -6730,7 +6759,7 @@ function Show3D() {
     const stored = extractFloat32(roiPlotData);
     if (!stored || stored.length === 0) return;
     // flip_sign: the ROI mean of -value is minus the stored mean
-    const values = flipSign ? stored.map(value => 0 - value) : stored;
+    const values = stored.map((value, frame) => flipSignFor(frame) ? 0 - value : value);
     let min = values[0], max = values[0];
     for (let i = 1; i < values.length; i++) {
       if (values[i] < min) min = values[i];
@@ -6775,7 +6804,7 @@ function Show3D() {
     ctx.textAlign = "left";
     ctx.fillText(formatNumber(max), 2, padY - 2);
     ctx.fillText(formatNumber(min), 2, padY + drawH + 10);
-  }, [roiPlotData, flipSign, effectiveRoiActive, showRoiPlot, canvasW, themeColors, sliceIdx, displaySliceIdx, playing, canvasRepaintSignal, dpr]);
+  }, [roiPlotData, stackFlipSign, frameFlipSigns, effectiveRoiActive, showRoiPlot, canvasW, themeColors, sliceIdx, displaySliceIdx, playing, canvasRepaintSignal, dpr]);
 
   // Keep sampled profile data current, but do not reopen the profile UI after
   // the user has turned it off. The line stays cached so toggling Profile back
@@ -7776,7 +7805,7 @@ function Show3D() {
     }
     // flip_sign: the kymograph is a small derived image, so it is negated here after its limits are
     // found on the stored values (negating the limits keeps the exact negative picture).
-    if (flipSign) {
+    if (stackFlipSign) {
       displayData = displayData.map(value => 0 - value);
       ({ vmin: displayMin, vmax: displayMax } = shownLimits(displayMin, displayMax, true));
     }
@@ -7804,7 +7833,7 @@ function Show3D() {
         ctx.restore();
       }
     }
-  }, [kymoReady, kymoVersion, kymoLogScale, kymoAuto, kymoVminPct, kymoVmaxPct, kymoColormap, flipSign,
+  }, [kymoReady, kymoVersion, kymoLogScale, kymoAuto, kymoVminPct, kymoVmaxPct, kymoColormap, stackFlipSign,
       percentileLow, percentileHigh, canvasW, canvasH, canvasRepaintSignal, smooth]);
 
   // Redraw cached kymograph with zoom/pan (cheap - no recomputation)
@@ -9812,13 +9841,12 @@ function Show3D() {
     [normalizedBookmarkedFrames]
   );
   const currentFrameBookmarked = normalizedBookmarkedFrames.includes(visibleSliceIdx);
-  const toggleCurrentFrameBookmark = React.useCallback(() => {
-    const frame = visibleSliceIdx;
+  const toggleFrameBookmark = React.useCallback((frame: number) => {
     const next = new Set(normalizedBookmarkedFrames);
     if (next.has(frame)) next.delete(frame);
     else next.add(frame);
     setBookmarkedFrames(Array.from(next).sort((a, b) => a - b));
-  }, [normalizedBookmarkedFrames, setBookmarkedFrames, visibleSliceIdx]);
+  }, [normalizedBookmarkedFrames, setBookmarkedFrames]);
   const currentPlaybackIndex = () => (
     Number.isFinite(playbackIdxRef.current)
       ? playbackIdxRef.current
@@ -9946,6 +9974,20 @@ function Show3D() {
           handled = true;
         }
         break;
+      case "f":
+        // the frame on screen only; the More menu switch flips every frame
+        if (!isRgb && !e.metaKey && !e.ctrlKey && !e.altKey) {
+          setFrameFlipSigns(toggledFrameMark(frameFlipSigns, nSlices, clampSlice(currentPlaybackIndex())));
+          handled = true;
+        }
+        break;
+      case "s":
+        if (!e.metaKey && !e.ctrlKey && !e.altKey) {
+          // like F: the frame on screen, which a thumbnail under the pointer may be previewing
+          toggleFrameBookmark(clampSlice(currentPlaybackIndex()));
+          handled = true;
+        }
+        break;
       case "h":
       case "H": {
         if (hasPanelChoices && selectedVisiblePanels.length > 0) {
@@ -10049,7 +10091,7 @@ function Show3D() {
     const panels = Math.max(1, nPanels || 1);
     const panelSourceWidth = sharedPanelSource ? Math.max(1, numPanelCols || width) : Math.max(1, numPanelCols || Math.round(width / panels));
     const firstPanel = sharedPanelSource ? 0 : Math.max(0, Math.min(panels - 1, visiblePanelIndices[0] ?? 0));
-    const thumbnailColormap = displayColormap(cmapLiveRef.current || cmap, flipSign);
+    const thumbnailColormap = displayColormap(cmapLiveRef.current || cmap, flipSignFor(frame));
     return thumbnailRendererRef.current.draw(context, frame, {
       panels: 1,
       panelSourceWidth,
@@ -10063,7 +10105,7 @@ function Show3D() {
       lutName: thumbnailColormap.name,
       lut: thumbnailColormap.lut,
     });
-  }, [isRgb, nPanels, sharedPanelSource, numPanelCols, width, cmap, flipSign, logScale, interPanelGapColor, visiblePanelIndices]);
+  }, [isRgb, nPanels, sharedPanelSource, numPanelCols, width, cmap, stackFlipSign, frameFlipSigns, logScale, interPanelGapColor, visiblePanelIndices]);
   const releaseThumbnail = React.useCallback((canvas: HTMLCanvasElement) => {
     const context = canvas.getContext("webgpu") as GPUCanvasContext | null;
     if (context) thumbnailRendererRef.current?.release(context);
@@ -10191,6 +10233,8 @@ function Show3D() {
     ["Home / End", `First / Last ${dimLabel.toLowerCase()}`],
     ["R", "Reset zoom"],
     ["C", "Copy cursor coords"],
+    ...(isRgb ? [] : [["F", `Flip sign of this ${dimLabel.toLowerCase()}`]] as [string, string][]),
+    ["S", `Star this ${dimLabel.toLowerCase()}`],
     ...(hasPanelChoices ? [["Shift-click", "Select panel range"], ["Ctrl/⌘-click", "Toggle panel selection"], ["H", "Hide selected panels"]] as [string, string][] : []),
     ...(roiAllowed ? [["Del", "Delete selected ROI"], ["Ctrl/⌘+D", "Duplicate selected ROI"]] as [string, string][] : []),
     ["Esc", "Release keyboard focus"],
@@ -10841,9 +10885,9 @@ function Show3D() {
                 <Switch checked={flipCols} onClick={(e) => e.stopPropagation()} onChange={(e) => setFlipCols(e.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Toggle horizontal column flip" } }} />
               </MenuItem>
               {!isRgb && (
-                <MenuItem dense onClick={() => setFlipSign(!flipSign)} sx={{ fontSize: 12, gap: 1, color: flipSign ? themeColors.accent : themeColors.text }}>
-                  <Typography sx={{ flex: 1, fontSize: 12, color: "inherit" }} title="Flip sign: show −value. Display only; the stored frames are unchanged and nothing is resent.">Flip Sign</Typography>
-                  <Switch checked={flipSign} onClick={(e) => e.stopPropagation()} onChange={(e) => setFlipSign(e.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Toggle sign flip" } }} />
+                <MenuItem dense onClick={() => setFlipSign(!stackFlipSign)} sx={{ fontSize: 12, gap: 1, color: stackFlipSign ? themeColors.accent : themeColors.text }}>
+                  <Typography sx={{ flex: 1, fontSize: 12, color: "inherit" }} title="Flip sign: show −value of every frame (key F flips the current frame only). Display only; the stored frames are unchanged and nothing is resent.">Flip Sign</Typography>
+                  <Switch checked={stackFlipSign} onClick={(e) => e.stopPropagation()} onChange={(e) => setFlipSign(e.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Toggle sign flip" } }} />
                 </MenuItem>
               )}
               <MenuItem
@@ -11303,10 +11347,12 @@ function Show3D() {
               imageAspect={(sharedPanelSource ? Math.max(1, numPanelCols || width) : Math.max(1, numPanelCols || Math.round(width / Math.max(1, nPanels || 1)))) / Math.max(1, height)}
               draw={drawThumbnail}
               release={releaseThumbnail}
-              drawKey={`${thumbnailDataVersion}|${cmap}|${flipSign}|${logScale}|${width}x${height}|${nPanels}|${themeColors.bg}|${visiblePanelIndices[0] ?? 0}`}
+              drawKey={`${thumbnailDataVersion}|${cmap}|${stackFlipSign}|${frameFlipSignsKey}|${logScale}|${width}x${height}|${nPanels}|${themeColors.bg}|${visiblePanelIndices[0] ?? 0}`}
               retryKey={gpuResidency.ready}
               unavailableReason={thumbnailUnavailableReason}
               colors={{ text: themeColors.text, textMuted: themeColors.textMuted, border: themeColors.border, accent: themeColors.accent, controlBg: themeColors.controlBg }}
+              flipped={isRgb ? undefined : frameFlipSigns}
+              starred={normalizedBookmarkedFrames}
               chosen={driftFrames || []}
               onChoose={setDriftFrames}
               onFindDrift={handleFindDrift}
@@ -12122,8 +12168,8 @@ function Show3D() {
                   >
                     {`${visibleSliceIdx + 1}/${nSlices}`}
                   </span>
-                  <IconButton size="small" onClick={toggleCurrentFrameBookmark} aria-pressed={currentFrameBookmarked} aria-label={`${currentFrameBookmarked ? "Unstar" : "Star"} frame ${visibleSliceIdx + 1}`} title={`${currentFrameBookmarked ? "Unstar" : "Star"} frame ${visibleSliceIdx + 1}`} sx={{ color: currentFrameBookmarked ? "#ffc107" : themeColors.textMuted, p: 0.25, width: 22, height: 22, flexShrink: 0, "&:hover": { color: currentFrameBookmarked ? "#ffc107" : themeColors.text } }}>
-                    <Box component="span" sx={{ fontSize: 18, lineHeight: "18px" }}>{currentFrameBookmarked ? "★" : "☆"}</Box>
+                  <IconButton size="small" onClick={() => toggleFrameBookmark(visibleSliceIdx)} aria-pressed={currentFrameBookmarked} aria-label={`${currentFrameBookmarked ? "Unstar" : "Star"} frame ${visibleSliceIdx + 1}`} title={`${currentFrameBookmarked ? "Unstar" : "Star"} this frame (s)`} sx={{ color: currentFrameBookmarked ? "#ffc107" : themeColors.textMuted, p: 0.25, width: 22, height: 22, flexShrink: 0, "&:hover": { color: currentFrameBookmarked ? "#ffc107" : themeColors.text } }}>
+                    {currentFrameBookmarked ? <StarIcon sx={{ fontSize: 18 }} /> : <StarBorderIcon sx={{ fontSize: 18 }} />}
                   </IconButton>
                   <Badge
                     badgeContent={playbackPathLength > 0 ? 1 : 0}

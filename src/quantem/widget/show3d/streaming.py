@@ -182,8 +182,10 @@ class Show3DStream:
                 self.data_min, self.data_max = low, high
             self.n_slices = new_n
             self.labels = labels
-            rotations = list(self.frame_rotations)
-            self.frame_rotations = (rotations if len(rotations) == old_n else [0] * old_n) + [0] * len(batch)
+            # per-frame marks keep what the user set on earlier frames; a new frame starts unmarked
+            for key, unmarked in (("frame_rotations", 0), ("frame_flip_signs", False)):
+                kept = list(getattr(self, key))
+                setattr(self, key, (kept if len(kept) == old_n else [unmarked] * old_n) + [unmarked] * len(batch))
             if self.auto_contrast and self.diff_mode == "off":
                 ranges = [stack_percentiles([frame], self.percentile_low, self.percentile_high) for frame in new_frames]
                 vmins, vmaxs = (list(self.auto_vmins), list(self.auto_vmaxs)) if old_n else ([], [])

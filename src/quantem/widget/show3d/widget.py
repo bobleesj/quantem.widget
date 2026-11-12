@@ -419,6 +419,8 @@ class Show3D(
     flip_vertical = traitlets.Bool(False).tag(sync=True)
     # Display-only: the browser shows -value (image, limits, histogram, readouts); _data is never changed or resent.
     flip_sign = traitlets.Bool(False).tag(sync=True)
+    # One entry per frame. A frame is shown negated when exactly one of flip_sign and its entry is set (key f).
+    frame_flip_signs = traitlets.List(traitlets.Bool(), default_value=[]).tag(sync=True)
 
     roi_active = traitlets.Bool(False).tag(sync=True)
     roi_list = traitlets.List([]).tag(sync=True)
@@ -1100,6 +1102,7 @@ class Show3D(
         self.title = title
         self.labels = list(labels) if labels is not None else [str(i) for i in range(self.n_slices)]
         self.frame_rotations = [0] * self.n_slices
+        self.frame_flip_signs = [False] * self.n_slices
         self.slice_idx = self.n_slices // 2
         self._set_data_range()
 
@@ -1180,6 +1183,7 @@ class Show3D(
         self._set_data_range()
         self.labels = list(labels) if labels is not None else [str(i) for i in range(self.n_slices)]
         self.frame_rotations = [0] * self.n_slices
+        self.frame_flip_signs = [False] * self.n_slices
         self.slice_idx = min(self.slice_idx, self.n_slices - 1)
         if (self.height, self.width) != prev_shape:
             self.roi_list = []
@@ -1239,7 +1243,7 @@ class Show3D(
         "panel_gap_px", "show_panel_titles", "show_zoom_indicator", "thumbnails", "thumbnail_columns", "show_fft", "fft_layout",
         "fft_overlay_position", "fft_overlay_size", "fft_overlay_zoom", "show_kymograph", "fft_window",
         "pixel_size", "pixel_unit", "smooth", "image_rotation", "rotation_scope", "frame_rotations",
-        "flip_horizontal", "flip_vertical", "flip_sign", "show_scale_bar", "panel_width_px", "fps", "avg_window",
+        "flip_horizontal", "flip_vertical", "flip_sign", "frame_flip_signs", "show_scale_bar", "panel_width_px", "fps", "avg_window",
         "loop", "reverse", "boomerang", "loop_end", "loop_start", "bookmarked_frames", "starred", "hidden_panels",
         "selected_panels", "panel_order", "page_idx", "page_labels",
         "page_starred", "hidden_page_slots", "playback_path", "slice_idx", "roi_active", "roi_list",
@@ -1254,7 +1258,7 @@ class Show3D(
         "labels", "panel_titles", "panel_title_spans",
     )
     # Keys whose length is tied to the stack; dropped on load when the sizes differ.
-    _FRAME_LENGTH_KEYS = ("labels", "frame_rotations", "frame_times_s")
+    _FRAME_LENGTH_KEYS = ("labels", "frame_rotations", "frame_flip_signs", "frame_times_s")
     _PANEL_LENGTH_KEYS = ("starred", "panel_titles", "panel_title_spans", "panel_cmaps", "vmin_per_panel", "vmax_per_panel", "panel_order")
 
     def state_dict(self) -> dict:

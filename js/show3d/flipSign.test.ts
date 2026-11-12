@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { COLORMAPS, applyColormap } from "../display/colormaps";
 import {
   displayColormap,
+  frameSignFlipped,
   shownHistogramBins,
   shownHistogramWindow,
   shownLimits,
@@ -10,6 +11,7 @@ import {
   shownValue,
   signFlippedLut,
   storedClipPercent,
+  toggledFrameMark,
 } from "./flipSign";
 
 /** Gray LUT entry the CPU colormap reference picks for each value (red channel of a gray ramp). */
@@ -79,5 +81,26 @@ describe("flip_sign display", () => {
     expect(shown.dataMin + span * shown.vmaxPct / 100).toBeCloseTo(1.2, 12);
     expect(storedClipPercent(shown.vminPct, shown.vmaxPct, true)).toEqual([10, 75]);
     expect(storedClipPercent(10, 75, false)).toEqual([10, 75]);
+  });
+
+  // --- one frame ------------------------------------------------------------------------------
+
+  it("shows a frame negated when exactly one of the stack switch and its own entry is set", () => {
+    const flips = [false, false, true, false];
+    expect(flips.map((_, frame) => frameSignFlipped(false, flips, frame))).toEqual([false, false, true, false]);
+    // the stack switch inverts every frame: the flipped frame is back to its stored sign
+    expect(flips.map((_, frame) => frameSignFlipped(true, flips, frame))).toEqual([true, true, false, true]);
+    // a list shorter than the stack (a frame appended a moment ago) and no list at all read as not flipped
+    expect(frameSignFlipped(false, flips, 4)).toBe(false);
+    expect(frameSignFlipped(true, null, 0)).toBe(true);
+    expect(frameSignFlipped(false, undefined, 0)).toBe(false);
+  });
+
+  it("toggles one frame of a mark list and keeps one entry per frame", () => {
+    expect(toggledFrameMark([false, false, false, false], 4, 2)).toEqual([false, false, true, false]);
+    expect(toggledFrameMark([false, false, true, false], 4, 2)).toEqual([false, false, false, false]);
+    expect(toggledFrameMark([true], 3, 1)).toEqual([true, true, false]);     // a short list grows to the stack
+    expect(toggledFrameMark(null, 2, 0)).toEqual([true, false]);
+    expect(toggledFrameMark([true, false, true], 2, 1)).toEqual([true, true]);   // and a long one is cut to it
   });
 });

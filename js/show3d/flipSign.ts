@@ -82,3 +82,16 @@ export function shownHistogramWindow(
 export function storedClipPercent(shownMinPct: number, shownMaxPct: number, flipSign: boolean): [number, number] {
   return flipSign ? [100 - shownMaxPct, 100 - shownMinPct] : [shownMinPct, shownMaxPct];
 }
+
+/**
+ * Whether frame `frame` is shown negated: the stack switch (`flip_sign`) or the frame's own entry
+ * in `frame_flip_signs`, not both. Two negations cancel, so the stack switch still inverts every frame.
+ */
+export function frameSignFlipped(flipSign: boolean, frameFlipSigns: readonly boolean[] | null | undefined, frame: number): boolean {
+  return flipSign !== !!frameFlipSigns?.[frame];
+}
+
+/** A per-frame mark list (`frame_flip_signs`) of `frames` entries with frame `frame` toggled. */
+export function toggledFrameMark(marks: readonly boolean[] | null | undefined, frames: number, frame: number): boolean[] {
+  return Array.from({ length: frames }, (_, index) => !!marks?.[index] !== (index === frame));
+}
