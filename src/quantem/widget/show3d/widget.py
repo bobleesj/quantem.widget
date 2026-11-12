@@ -204,6 +204,12 @@ class Show3D(
     smooth : bool
         Bilinear interpolation when the canvas enlarges a frame. Default False
         paints every data pixel as a sharp block (nearest neighbour).
+    flip_sign : bool
+        Show every frame as ``-value``: the exact negative image, with the
+        contrast limits, histogram, colorbar and cursor value negated too.
+        Display only: the stored stack is unchanged and nothing is resent.
+        Direct ptychography's two 180 degree rotation branches are negatives
+        of each other, so this shows the other branch. Gray stacks only.
     panel_annotations, panel_overlays : mapping or sequence, optional
         Text annotations and geometric overlays per panel, keyed by index or
         panel title.
@@ -411,6 +417,8 @@ class Show3D(
     frame_rotations = traitlets.List(traitlets.Int(), default_value=[]).tag(sync=True)
     flip_horizontal = traitlets.Bool(False).tag(sync=True)
     flip_vertical = traitlets.Bool(False).tag(sync=True)
+    # Display-only: the browser shows -value (image, limits, histogram, readouts); _data is never changed or resent.
+    flip_sign = traitlets.Bool(False).tag(sync=True)
 
     roi_active = traitlets.Bool(False).tag(sync=True)
     roi_list = traitlets.List([]).tag(sync=True)
@@ -781,6 +789,7 @@ class Show3D(
         sampling: float | Sequence[float] | None = None,
         units: str | Sequence[str] | None = None,
         smooth: bool = False,
+        flip_sign: bool = False,
         panel_annotations: Sequence[object] | Mapping[object, object] | object | None = None,
         panel_overlays: Sequence[object] | Mapping[object, object] | object | None = None,
         fps: float = 30.0,
@@ -884,6 +893,7 @@ class Show3D(
             self.vmin = vmin
             self.vmax = vmax
             self.smooth = bool(smooth)
+            self.flip_sign = bool(flip_sign)
             self.auto_contrast = bool(auto_contrast)
             self.fps = float(fps)
             self.avg_window = int(avg_window)
@@ -1229,8 +1239,8 @@ class Show3D(
         "panel_gap_px", "show_panel_titles", "show_zoom_indicator", "thumbnails", "thumbnail_columns", "show_fft", "fft_layout",
         "fft_overlay_position", "fft_overlay_size", "fft_overlay_zoom", "show_kymograph", "fft_window",
         "pixel_size", "pixel_unit", "smooth", "image_rotation", "rotation_scope", "frame_rotations",
-        "flip_horizontal", "flip_vertical", "show_scale_bar", "panel_width_px", "fps", "avg_window", "loop",
-        "reverse", "boomerang", "loop_end", "loop_start", "bookmarked_frames", "starred", "hidden_panels",
+        "flip_horizontal", "flip_vertical", "flip_sign", "show_scale_bar", "panel_width_px", "fps", "avg_window",
+        "loop", "reverse", "boomerang", "loop_end", "loop_start", "bookmarked_frames", "starred", "hidden_panels",
         "selected_panels", "panel_order", "page_idx", "page_labels",
         "page_starred", "hidden_page_slots", "playback_path", "slice_idx", "roi_active", "roi_list",
         "roi_selected_idx", "profile_line", "profile_width", "diff_mode", "compare_mode", "compare_pair",

@@ -55,6 +55,7 @@ import { MetadataSection } from "../widgetInfo";
 import { applyFrequencyFilterBrowser, frequencyFilterActive, getFrequencyFilterBackend, normalizeFrequencyFilterMode } from "../display/frequencyFilter";
 import { encodeIndexedGif, quantizeRgbaForBrowserGif } from "./gif";
 import { missingDisplayStackStatus } from "./displayStack";
+import { displayColormap, shownHistogramBins, shownHistogramWindow, shownLimits, shownStats, shownValue, storedClipPercent } from "./flipSign";
 import { ThumbnailStrip } from "./ThumbnailStrip";
 import { ThumbnailRenderer } from "../display/thumbnails";
 import {
@@ -160,6 +161,7 @@ const SHOW3D_STANDALONE_VIEW_STATE_KEYS = [
   "fft_overlay_zoom",
   "fft_window",
   "flip_horizontal",
+  "flip_sign",
   "flip_vertical",
   "fps",
   "frame_rotations",
@@ -1396,6 +1398,13 @@ function Show3D() {
   const interPanelGapColor = String(themeColors.bg);
   const [flipRows, setFlipRows] = useModelState<boolean>("flip_vertical");
   const [flipCols, setFlipCols] = useModelState<boolean>("flip_horizontal");
+  const [flipSignTrait, setFlipSign] = useModelState<boolean>("flip_sign");
+  // Show -value (see flipSign.ts). True color has no colormap window to mirror, so the flip is gray only.
+  const flipSign = !!flipSignTrait && !isRgb;
+  // Direct WebGPU repaints run from long-lived closures (playback rAF, gesture previews), so they
+  // read the flip of this render the way they read cmapLiveRef.
+  const flipSignLiveRef = React.useRef(flipSign);
+  flipSignLiveRef.current = flipSign;
   const [compareMode, setCompareMode] = useModelState<string>("compare_mode");
   const [comparePair, setComparePair] = useModelState<number[]>("compare_pair");
   const [blinkFps, setBlinkFps] = useModelState<number>("blink_fps");
@@ -2110,7 +2119,6 @@ function Show3D() {
     const panelCtx = panelCanvas.getContext("2d");
     if (!panelCtx) return null;
     const panelImage = panelCtx.createImageData(panelW, panelH);
-    const fallbackLut = COLORMAPS[cmap] || COLORMAPS.inferno;
     let sharedAutoRange: { vmin: number; vmax: number } | null = null;
     if (autoContrast && linkContrast) {
       sharedAutoRange =
@@ -2126,7 +2134,7 @@ function Show3D() {
       const panel = activePanels[slot];
       const panelData = extractPanelSlice(frame, panel, logScale);
       if (!panelData) continue;
-      const lut = COLORMAPS[panelCmapFor(panel)] || fallbackLut;
+      const lut = displayColormap(panelCmapFor(panel), flipSign).lut;
       let range: { vmin: number; vmax: number };
       if (autoContrast) {
         if (sharedAutoRange && linkContrast) {
@@ -3193,6 +3201,12 @@ function Show3D() {
   const [panelHistogramData, setPanelHistogramData] = React.useState<(Float32Array | null)[]>([]);
   const [panelHistogramBins, setPanelHistogramBins] = React.useState<(number[] | null)[]>([]);
   const [panelDataRanges, setPanelDataRanges] = React.useState<{ min: number; max: number }[]>([]);
+  // flip_sign mirrors the bins already counted on the GPU; the frame is not histogrammed again.
+  const shownImageHistogramBins = React.useMemo(() => shownHistogramBins(imageHistogramBins, flipSign), [imageHistogramBins, flipSign]);
+  const shownPanelHistogramBins = React.useMemo(
+    () => panelHistogramBins.map(bins => shownHistogramBins(bins, flipSign)),
+    [panelHistogramBins, flipSign],
+  );
   // Measured ranges are histogram output; publishing them must not schedule another measurement.
   const panelDataRangesRef = React.useRef(panelDataRanges);
   panelDataRangesRef.current = panelDataRanges;
@@ -3739,7 +3753,12 @@ function Show3D() {
   const [profileActive, setProfileActive] = React.useState(false);
   const [profileLine, setProfileLine] = useModelState<{row: number; col: number}[]>("profile_line");
   const [profileWidth, setProfileWidth] = useModelState<number>("profile_width");
-  const [profileData, setProfileData] = React.useState<Float32Array | null>(null);
+  const [storedProfileData, setProfileData] = React.useState<Float32Array | null>(null);
+  // The profile is plotted in shown values: -value under flip_sign.
+  const profileData = React.useMemo(
+    () => flipSign && storedProfileData ? storedProfileData.map(value => 0 - value) : storedProfileData,
+    [storedProfileData, flipSign],
+  );
   const [profilePanelIdx, setProfilePanelIdx] = React.useState(0);
   const profileCanvasRef = React.useRef<HTMLCanvasElement>(null);
   const profilePoints = profileLine || [];
@@ -4538,8 +4557,8 @@ function Show3D() {
     }
     if (slotIdx === null) return false;
 
-    const liveCmap = cmapLiveRef.current || settings.cmap;
-    const lut = COLORMAPS[liveCmap] || COLORMAPS.inferno;
+    const liveFlipSign = flipSignLiveRef.current;
+    const { name: liveCmap, lut } = displayColormap(cmapLiveRef.current || settings.cmap, liveFlipSign);
     engine.uploadLUT(liveCmap, lut);
     const panelCount = panels.length;
     // Playback continues in one long rAF effect while layout controls remain
@@ -4554,12 +4573,7 @@ function Show3D() {
     // cost a CPU colormap per frame and dropped scrub frames on slower machines.
     const livePanelCmaps = panelCmapsLiveRef.current;
     const panelLuts = livePanelCmaps.length === panelSourceCount
-      ? panels.map((panel) => {
-          const name = livePanelCmaps[panel] && COLORMAPS[livePanelCmaps[panel]]
-            ? livePanelCmaps[panel]
-            : liveCmap;
-          return { name, lut: COLORMAPS[name] || lut };
-        })
+      ? panels.map((panel) => displayColormap(livePanelCmaps[panel], liveFlipSign, cmapLiveRef.current || settings.cmap))
       : undefined;
     const rendered = engine.renderCombinedPanelRegionsDirectToCanvas(
       slotIdx,
@@ -4706,8 +4720,7 @@ function Show3D() {
     const gpuCtx = ensureGpuDisplayContext(engine, settings.canvasW, settings.canvasH);
     if (!gpuCtx) return false;
 
-    const liveCmap = cmapLiveRef.current || settings.cmap;
-    const lut = COLORMAPS[liveCmap] || COLORMAPS.inferno;
+    const { name: liveCmap, lut } = displayColormap(cmapLiveRef.current || settings.cmap, flipSignLiveRef.current);
     engine.uploadLUT(liveCmap, lut);
     let vmin: number, vmax: number;
     if (settings.autoContrast) {
@@ -5159,8 +5172,8 @@ function Show3D() {
 
       // Render frame. The 4k playback hot path must stay off the JS CPU:
       // one 4096^2 colormap loop alone is ~37 ms, before auto-contrast/canvas.
-      const liveCmap = cmapLiveRef.current || settings.cmap;
-      const lut = COLORMAPS[liveCmap] || COLORMAPS.inferno;
+      const liveFlipSign = flipSignLiveRef.current;
+      const { name: liveCmap, lut } = displayColormap(cmapLiveRef.current || settings.cmap, liveFlipSign);
       if (mainOffscreenRef.current && mainImgDataRef.current) {
         let vmin: number, vmax: number;
         let cpuData: Float32Array | null = frame;
@@ -5246,10 +5259,9 @@ function Show3D() {
               ? panelDataRange
               : resolveDisplayBounds(settings.dataMin, settings.dataMax, settings.traitVmin, settings.traitVmax, settings.logScale);
             const range = resolvePanelRenderRange(panel, panelRange, sharedAutoRange, null, settings.autoContrast, settings.percentileLow, settings.percentileHigh);
-            const panelCmap = livePanelCmaps.length === panelCountForGrid
-              ? livePanelCmaps[panel]
-              : liveCmap;
-            const panelLut = COLORMAPS[panelCmap] || lut;
+            const panelLut = livePanelCmaps.length === panelCountForGrid
+              ? displayColormap(livePanelCmaps[panel], liveFlipSign, cmapLiveRef.current || settings.cmap).lut
+              : lut;
             renderPackedPanelPlayback(frame, sourceW, x0, panelW, settings.height, panelImg.data, panelLut, range.vmin, range.vmax, settings.logScale);
             offCtx.putImageData(panelImg, panel * panelW, 0);
           }
@@ -5815,7 +5827,7 @@ function Show3D() {
       ({ vmin, vmax } = sliderRange(lo, hi, imageVminPct, imageVmaxPct));
     }
 
-    const lut = COLORMAPS[cmap] || COLORMAPS.inferno;
+    const lut = displayColormap(cmap, flipSign).lut;
     const mixedPanelCmaps = hasMixedPanelCmaps && panelCount > 1 && !sharedPanelSource && width % panelCount === 0 && height > 0;
     const renderPackedPanelsCpu = (
       offscreen: HTMLCanvasElement | OffscreenCanvas,
@@ -5838,7 +5850,7 @@ function Show3D() {
         const range = perPanelContrast
           ? resolvePanelRenderRange(p, panelRange, sharedAutoRange, panelData, autoContrast, percentileLow, percentileHigh)
           : { vmin, vmax };
-        const panelLut = COLORMAPS[panelCmapFor(p)] || lut;
+        const panelLut = displayColormap(panelCmapFor(p), flipSign).lut;
         applyColormap(panelData, panelImg.data, panelLut, range.vmin, range.vmax);
         offCtx.putImageData(panelImg, p * panelW, 0);
       }
@@ -5858,7 +5870,7 @@ function Show3D() {
     }
     drawMain(ctx, offscreen);
     confirmStaticCanvasPresent();
-  }, [frameBytes, frameSeq, width, height, cmap, panelCmapFor, hasMixedPanelCmaps, displayScale, canvasW, canvasH, imageVminPct, imageVmaxPct, logScale, autoContrast, percentileLow, percentileHigh, traitVmin, traitVmax, dataMin, dataMax, autoVmins, autoVmaxs, smooth, imageRotation, nPanels, sharedPanelSource, visiblePanelIndices, perPanelHistogramEnabled, linkContrast, panelStates, panelDataRanges, vminPerPanel, vmaxPerPanel, liveSliceIdx, diffMode, avgWindow, playing, gpuCmapReady, canvasRepaintSignal, isRgb, browserFilterTick, denoiseSigmaLive, displayFilter, spatialBin, browserFilterKnobsOn, frequencyRenderVersion, frequencyFilterIsActive, subpixelAlignEnabled, subpixelAlignVersion, compareMode, comparePair, blinkPhase, getOfflineFrame, nSlices]);
+  }, [frameBytes, frameSeq, width, height, cmap, flipSign, panelCmapFor, hasMixedPanelCmaps, displayScale, canvasW, canvasH, imageVminPct, imageVmaxPct, logScale, autoContrast, percentileLow, percentileHigh, traitVmin, traitVmax, dataMin, dataMax, autoVmins, autoVmaxs, smooth, imageRotation, nPanels, sharedPanelSource, visiblePanelIndices, perPanelHistogramEnabled, linkContrast, panelStates, panelDataRanges, vminPerPanel, vmaxPerPanel, liveSliceIdx, diffMode, avgWindow, playing, gpuCmapReady, canvasRepaintSignal, isRgb, browserFilterTick, denoiseSigmaLive, displayFilter, spatialBin, browserFilterKnobsOn, frequencyRenderVersion, frequencyFilterIsActive, subpixelAlignEnabled, subpixelAlignVersion, compareMode, comparePair, blinkPhase, getOfflineFrame, nSlices]);
 
   // Per-panel render: each slot gets its own zoom/pan transform. The
   // panelGapPx gutter between slots keeps the grid fill from clearWithGridBackground.
@@ -6098,7 +6110,7 @@ function Show3D() {
       const data = logScale ? applyLogScale(frame) : frame;
       const range = percentileClip(data, percentileLow, percentileHigh);
       const img = outCtx.createImageData(width, height);
-      const lut = COLORMAPS[panelCmapFor(visiblePanelIndices[0] ?? 0)] || COLORMAPS.plasma;
+      const lut = displayColormap(panelCmapFor(visiblePanelIndices[0] ?? 0), flipSign, "plasma").lut;
       renderFramePlayback(data, img.data, lut, range.vmin, range.vmax, false);
       outCtx.putImageData(img, 0, 0);
       drawMain(ctx, out, { sourcePanelWidth: sharedPanelSource ? undefined : panelW });
@@ -6115,8 +6127,11 @@ function Show3D() {
       const aSpan = Math.max(1e-12, aRange.vmax - aRange.vmin);
       const bSpan = Math.max(1e-12, bRange.vmax - bRange.vmin);
       for (let i = 0; i < width * height; i++) {
-        const valueA = Math.max(0, Math.min(1, (frameA[i] - aRange.vmin) / aSpan));
-        const valueB = Math.max(0, Math.min(1, (frameB[i] - bRange.vmin) / bSpan));
+        const storedA = Math.max(0, Math.min(1, (frameA[i] - aRange.vmin) / aSpan));
+        const storedB = Math.max(0, Math.min(1, (frameB[i] - bRange.vmin) / bSpan));
+        // flip_sign: -value between the negated limits is 1 - t
+        const valueA = flipSign ? 1 - storedA : storedA;
+        const valueB = flipSign ? 1 - storedB : storedB;
         rgba[4 * i] = Math.round(255 * valueA);
         rgba[4 * i + 1] = Math.round(255 * valueB);
         rgba[4 * i + 2] = Math.round(255 * valueA);
@@ -6126,7 +6141,8 @@ function Show3D() {
       let maxAbsDifference = 0;
       for (let i = 0; i < width * height; i++) maxAbsDifference = Math.max(maxAbsDifference, Math.abs(frameB[i] - frameA[i]));
       const scale = maxAbsDifference > 0 ? 1 / maxAbsDifference : 1;
-      const magentaPositive = String(diffCmap || "magenta-green").toLowerCase() === "magenta-green";
+      // flip_sign negates the difference too: (-B) - (-A) = -(B - A), so the two colours trade places
+      const magentaPositive = (String(diffCmap || "magenta-green").toLowerCase() === "magenta-green") !== flipSign;
       for (let i = 0; i < width * height; i++) {
         const difference = Math.max(-1, Math.min(1, (frameB[i] - frameA[i]) * scale));
         const intensity = Math.round(255 * Math.abs(difference));
@@ -6143,7 +6159,7 @@ function Show3D() {
   };
   React.useEffect(() => {
     paintCompare();
-  }, [compareMode, comparePair, blinkPhase, blinkFps, compareBackground, diffCmap, isRgb, canvasW, canvasH, width, height, nSlices, nPanels, numPanelCols, sharedPanelSource, displaySliceIdx, frameBytes, frameSeq, avgWindow, subpixelAlignEnabled, subpixelAlignVersion, cmap, panelCmaps, percentileLow, percentileHigh, logScale, visiblePanelIndices, canvasRepaintSignal]);
+  }, [compareMode, comparePair, blinkPhase, blinkFps, compareBackground, diffCmap, isRgb, canvasW, canvasH, width, height, nSlices, nPanels, numPanelCols, sharedPanelSource, displaySliceIdx, frameBytes, frameSeq, avgWindow, subpixelAlignEnabled, subpixelAlignVersion, cmap, flipSign, panelCmaps, percentileLow, percentileHigh, logScale, visiblePanelIndices, canvasRepaintSignal]);
 
   const ensureFullSizeMainOffscreen = React.useCallback((): boolean => {
     if (width <= 0 || height <= 0) return false;
@@ -6609,7 +6625,7 @@ function Show3D() {
     if (!ctx) return;
 
     const raw = displayFrameRef.current;
-    const lut = COLORMAPS[cmap] || COLORMAPS.inferno;
+    const lut = displayColormap(cmap, flipSign).lut;
     const processed = logScale ? applyLogScale(raw) : raw;
     let vmin: number, vmax: number;
     if (traitVmin != null || traitVmax != null) {
@@ -6693,7 +6709,7 @@ function Show3D() {
     ctx.font = "10px monospace";
     ctx.fillText(`${lensMag}×`, lensX + 4, lensY + lensSize - 4);
     ctx.restore();
-  }, [showLens, lensPos, cmap, logScale, autoContrast, imageDataRange, imageVminPct, imageVmaxPct, dataMin, dataMax, traitVmin, traitVmax, width, height, canvasW, canvasH, themeColors, lensMag, lensDisplaySize, lensAnchor, percentileLow, percentileHigh, frameBytes, sliceIdx, displaySliceIdx, nPanels, canvasRepaintSignal, dpr]);
+  }, [showLens, lensPos, cmap, flipSign, logScale, autoContrast, imageDataRange, imageVminPct, imageVmaxPct, dataMin, dataMax, traitVmin, traitVmax, width, height, canvasW, canvasH, themeColors, lensMag, lensDisplaySize, lensAnchor, percentileLow, percentileHigh, frameBytes, sliceIdx, displaySliceIdx, nPanels, canvasRepaintSignal, dpr]);
 
   // ROI sparkline plot
   React.useEffect(() => {
@@ -6711,8 +6727,10 @@ function Show3D() {
     ctx.clearRect(0, 0, plotW, plotH);
 
     if (!roiPlotData || roiPlotData.byteLength < 4) return;
-    const values = extractFloat32(roiPlotData);
-    if (!values || values.length === 0) return;
+    const stored = extractFloat32(roiPlotData);
+    if (!stored || stored.length === 0) return;
+    // flip_sign: the ROI mean of -value is minus the stored mean
+    const values = flipSign ? stored.map(value => 0 - value) : stored;
     let min = values[0], max = values[0];
     for (let i = 1; i < values.length; i++) {
       if (values[i] < min) min = values[i];
@@ -6757,7 +6775,7 @@ function Show3D() {
     ctx.textAlign = "left";
     ctx.fillText(formatNumber(max), 2, padY - 2);
     ctx.fillText(formatNumber(min), 2, padY + drawH + 10);
-  }, [roiPlotData, effectiveRoiActive, showRoiPlot, canvasW, themeColors, sliceIdx, displaySliceIdx, playing, canvasRepaintSignal, dpr]);
+  }, [roiPlotData, flipSign, effectiveRoiActive, showRoiPlot, canvasW, themeColors, sliceIdx, displaySliceIdx, playing, canvasRepaintSignal, dpr]);
 
   // Keep sampled profile data current, but do not reopen the profile UI after
   // the user has turned it off. The line stays cached so toggling Profile back
@@ -7014,7 +7032,9 @@ function Show3D() {
       ctx.restore();
     }
     if (showColorbar) {
-      const lut = COLORMAPS[cmap] || COLORMAPS.inferno;
+      // The bar runs over shown values, and -value takes the colormap as stored (only the frame,
+      // still holding +value, is drawn through the reversed table), so flip_sign negates its labels alone.
+      const lut = displayColormap(cmap, false).lut;
       // Colorbar must match what's painted on the image, not the raw data range.
       // When autoContrast is on, the image uses percentileClip(low, high) of the
       // current frame - show that range. Otherwise use slider range over data.
@@ -7068,12 +7088,13 @@ function Show3D() {
         ctx.rect(slotX, slotY, slotW, slotH);
         ctx.clip();
         ctx.translate(slotX, slotY);
-        drawColorbar(ctx, slotW, slotH, lut, panelVmin, panelVmax, logScale);
+        const shown = shownLimits(panelVmin, panelVmax, flipSign);
+        drawColorbar(ctx, slotW, slotH, lut, shown.vmin, shown.vmax, logScale);
         ctx.restore();
       }
       ctx.restore();
     }
-  }, [pixelSize, pixelUnit, showScaleBar, width, sourcePanelWidth, canvasW, canvasH, displayScale, firstPanelZoom, nPanels, visiblePanelCount, visiblePanelIndices, maxCols, panelStates, linkedState, linkPanels, panelGapPx, showZoomIndicator, panelChromeVisible, showColorbar, cmap, imageDataRange, imageVminPct, imageVmaxPct, logScale, autoContrast, imageHistogramData, autoVmins, autoVmaxs, displaySliceIdx, percentileLow, percentileHigh, dataMin, dataMax, traitVmin, traitVmax, linkContrast, sharedPanelSource, panelDataRanges, vminPerPanel, vmaxPerPanel, canvasRepaintSignal, dpr]);
+  }, [pixelSize, pixelUnit, showScaleBar, width, sourcePanelWidth, canvasW, canvasH, displayScale, firstPanelZoom, nPanels, visiblePanelCount, visiblePanelIndices, maxCols, panelStates, linkedState, linkPanels, panelGapPx, showZoomIndicator, panelChromeVisible, showColorbar, cmap, flipSign, imageDataRange, imageVminPct, imageVmaxPct, logScale, autoContrast, imageHistogramData, autoVmins, autoVmaxs, displaySliceIdx, percentileLow, percentileHigh, dataMin, dataMax, traitVmin, traitVmax, linkContrast, sharedPanelSource, panelDataRanges, vminPerPanel, vmaxPerPanel, canvasRepaintSignal, dpr]);
 
   // Compute FFT magnitude (expensive, async - only re-run on data/GPU changes)
   // Supports ROI-scoped FFT: when ROI is active with a selected ROI, compute
@@ -7748,10 +7769,16 @@ function Show3D() {
     }
 
     // The range takes the same signed log1p as the data: signed stacks (phase, differences) go below -1.
-    const displayData = kymoLogScale ? applyLogScale(data) : data;
+    let displayData = kymoLogScale ? applyLogScale(data) : data;
     if (kymoLogScale) {
       displayMin = signedLog1p(displayMin);
       displayMax = signedLog1p(displayMax);
+    }
+    // flip_sign: the kymograph is a small derived image, so it is negated here after its limits are
+    // found on the stored values (negating the limits keeps the exact negative picture).
+    if (flipSign) {
+      displayData = displayData.map(value => 0 - value);
+      ({ vmin: displayMin, vmax: displayMax } = shownLimits(displayMin, displayMax, true));
     }
 
     setKymoHistogramData(displayData);
@@ -7777,7 +7804,7 @@ function Show3D() {
         ctx.restore();
       }
     }
-  }, [kymoReady, kymoVersion, kymoLogScale, kymoAuto, kymoVminPct, kymoVmaxPct, kymoColormap,
+  }, [kymoReady, kymoVersion, kymoLogScale, kymoAuto, kymoVminPct, kymoVmaxPct, kymoColormap, flipSign,
       percentileLow, percentileHigh, canvasW, canvasH, canvasRepaintSignal, smooth]);
 
   // Redraw cached kymograph with zoom/pan (cheap - no recomputation)
@@ -8021,7 +8048,7 @@ function Show3D() {
       setPreviewCropDims({ w: crop.cropW, h: crop.cropH });
 
       const processed = logScale ? applyLogScale(crop.cropped) : crop.cropped;
-      const lut = COLORMAPS[cmap] || COLORMAPS.inferno;
+      const lut = displayColormap(cmap, flipSign).lut;
 
       let vmin: number, vmax: number;
       const panelCount = Math.max(1, nPanels || 1);
@@ -8068,7 +8095,7 @@ function Show3D() {
       if (!cancelled) console.error("[Show3D] WebGPU ROI preview crop failed", error);
     });
     return () => { cancelled = true; };
-  }, [previewVisible, selectedRoiKey, cmap, logScale, autoContrast, imageVminPct, imageVmaxPct, dataMin, dataMax, traitVmin, traitVmax, percentileLow, percentileHigh, width, height, frameBytes, displaySliceIdx, autoVmins, autoVmaxs, nPanels, linkContrast, sharedPanelSource, panelStates, vminPerPanel, vmaxPerPanel, canvasRepaintSignal]);
+  }, [previewVisible, selectedRoiKey, cmap, flipSign, logScale, autoContrast, imageVminPct, imageVmaxPct, dataMin, dataMax, traitVmin, traitVmax, percentileLow, percentileHigh, width, height, frameBytes, displaySliceIdx, autoVmins, autoVmaxs, nPanels, linkContrast, sharedPanelSource, panelStates, vminPerPanel, vmaxPerPanel, canvasRepaintSignal]);
 
   // -------------------------------------------------------------------------
   // Preview panel - compute aspect-ratio-aware canvas dimensions
@@ -9915,7 +9942,7 @@ function Show3D() {
       case "c":
       case "C":
         if (cursorInfo && cursorReadoutVisible) {
-          navigator.clipboard.writeText(`(${cursorInfo.row}, ${cursorInfo.col}, ${cursorInfo.value})`);
+          navigator.clipboard.writeText(`(${cursorInfo.row}, ${cursorInfo.col}, ${shownValue(cursorInfo.value, flipSign)})`);
           handled = true;
         }
         break;
@@ -10022,7 +10049,7 @@ function Show3D() {
     const panels = Math.max(1, nPanels || 1);
     const panelSourceWidth = sharedPanelSource ? Math.max(1, numPanelCols || width) : Math.max(1, numPanelCols || Math.round(width / panels));
     const firstPanel = sharedPanelSource ? 0 : Math.max(0, Math.min(panels - 1, visiblePanelIndices[0] ?? 0));
-    const liveCmap = cmapLiveRef.current || cmap || "inferno";
+    const thumbnailColormap = displayColormap(cmapLiveRef.current || cmap, flipSign);
     return thumbnailRendererRef.current.draw(context, frame, {
       panels: 1,
       panelSourceWidth,
@@ -10033,10 +10060,10 @@ function Show3D() {
       gap: 0,
       bgRgb: packedRgbFromHex(interPanelGapColor),
       logScale: !!logScale,
-      lutName: liveCmap,
-      lut: COLORMAPS[liveCmap] || COLORMAPS.inferno,
+      lutName: thumbnailColormap.name,
+      lut: thumbnailColormap.lut,
     });
-  }, [isRgb, nPanels, sharedPanelSource, numPanelCols, width, cmap, logScale, interPanelGapColor, visiblePanelIndices]);
+  }, [isRgb, nPanels, sharedPanelSource, numPanelCols, width, cmap, flipSign, logScale, interPanelGapColor, visiblePanelIndices]);
   const releaseThumbnail = React.useCallback((canvas: HTMLCanvasElement) => {
     const context = canvas.getContext("webgpu") as GPUCanvasContext | null;
     if (context) thumbnailRendererRef.current?.release(context);
@@ -10216,7 +10243,7 @@ function Show3D() {
   // so a hidden settings row never hides an active effect such as denoise.
   const moreToolsActive = [
     showStats, overlayEditMode, denoiseEnabled, !isRgb && frequencyFilterIsActive, subpixelAlignEnabled,
-    !isRgb && hasPanelChoices && !colorShared, flipRows, flipCols, compareMode !== "off", rotationActive,
+    !isRgb && hasPanelChoices && !colorShared, flipRows, flipCols, flipSign, compareMode !== "off", rotationActive,
   ].filter(Boolean).length;
   /** Ring radius under the pointer as a fraction of Nyquist: the distance from the FFT centre over its half side. */
   const frequencyRingValueAt = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -10813,6 +10840,12 @@ function Show3D() {
                 <Typography sx={{ flex: 1, fontSize: 12, color: "inherit" }} title="Display-only horizontal flip for handedness checks; raw data and coordinates are unchanged.">Flip Cols</Typography>
                 <Switch checked={flipCols} onClick={(e) => e.stopPropagation()} onChange={(e) => setFlipCols(e.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Toggle horizontal column flip" } }} />
               </MenuItem>
+              {!isRgb && (
+                <MenuItem dense onClick={() => setFlipSign(!flipSign)} sx={{ fontSize: 12, gap: 1, color: flipSign ? themeColors.accent : themeColors.text }}>
+                  <Typography sx={{ flex: 1, fontSize: 12, color: "inherit" }} title="Flip sign: show −value. Display only; the stored frames are unchanged and nothing is resent.">Flip Sign</Typography>
+                  <Switch checked={flipSign} onClick={(e) => e.stopPropagation()} onChange={(e) => setFlipSign(e.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Toggle sign flip" } }} />
+                </MenuItem>
+              )}
               <MenuItem
                 dense
                 onClick={() => {
@@ -11270,7 +11303,7 @@ function Show3D() {
               imageAspect={(sharedPanelSource ? Math.max(1, numPanelCols || width) : Math.max(1, numPanelCols || Math.round(width / Math.max(1, nPanels || 1)))) / Math.max(1, height)}
               draw={drawThumbnail}
               release={releaseThumbnail}
-              drawKey={`${thumbnailDataVersion}|${cmap}|${logScale}|${width}x${height}|${nPanels}|${themeColors.bg}|${visiblePanelIndices[0] ?? 0}`}
+              drawKey={`${thumbnailDataVersion}|${cmap}|${flipSign}|${logScale}|${width}x${height}|${nPanels}|${themeColors.bg}|${visiblePanelIndices[0] ?? 0}`}
               retryKey={gpuResidency.ready}
               unavailableReason={thumbnailUnavailableReason}
               colors={{ text: themeColors.text, textMuted: themeColors.textMuted, border: themeColors.border, accent: themeColors.accent, controlBg: themeColors.controlBg }}
@@ -11714,7 +11747,7 @@ function Show3D() {
                   textAlign: "right",
                 }}>
                   <Typography sx={{ fontSize: 9, fontFamily: "monospace", fontVariantNumeric: "tabular-nums", color: "rgba(255,255,255,0.7)", whiteSpace: "nowrap", lineHeight: 1.2, overflow: "hidden", textOverflow: "ellipsis" }}>
-                    ({cursorInfo.row}, {cursorInfo.col}) {formatNumber(cursorInfo.value)}
+                    ({cursorInfo.row}, {cursorInfo.col}) {formatNumber(shownValue(cursorInfo.value, flipSign))}
                   </Typography>
                 </Box>
               );
@@ -11887,13 +11920,13 @@ function Show3D() {
                 {localPanelStats.map((st) => (
                   <Box key={st.panel} sx={{ display: "flex", gap: 2, alignItems: "center", flexWrap: "wrap", maxWidth: "100%" }}>
                     <Typography sx={{ fontSize: 11, color: themeColors.textMuted, minWidth: 80 }}>{panelTitleContent(st.panel)}</Typography>
-                    {statsReadouts(st)}
+                    {statsReadouts(shownStats(st, flipSign))}
                   </Box>
                 ))}
               </Box>
             ) : (
               <Box sx={{ mt: 0.5, px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center", flexWrap: "wrap", width: "100%", maxWidth: canvasW, boxSizing: "border-box" }}>
-                {statsReadouts(localStats ?? { mean: statsMean, min: statsMin, max: statsMax, std: statsStd })}
+                {statsReadouts(shownStats(localStats ?? { mean: statsMean, min: statsMin, max: statsMax, std: statsStd }, flipSign))}
               </Box>
             )
           )}
@@ -12187,24 +12220,23 @@ function Show3D() {
                         // space instead of being squashed by DF counts.
                         const panelDataRange = panelDataRanges[panel];
                         const panelRange = (panelDataRange && panelDataRange.max > panelDataRange.min) ? panelDataRange : { min: histMin, max: histMax };
-                        const vminPct = state.imageVminPct;
-                        const vmaxPct = state.imageVmaxPct;
+                        const shown = shownHistogramWindow(panelRange.min, panelRange.max, state.imageVminPct, state.imageVmaxPct, flipSign);
                         return (
                           <Histogram
                             key={`panel-hist-${panel}`}
-                            bins={panelHistogramBins[panel] ?? null}
-                            vminPct={vminPct}
-                            vmaxPct={vmaxPct}
-                            onRangeChange={(min, max) => changePanelHistogramRange(panel, min, max, true)}
-                            onRangePreview={(min, max) => changePanelHistogramRange(panel, min, max, false)}
-                            onRangeCommit={(min, max) => changePanelHistogramRange(panel, min, max, true)}
+                            bins={shownPanelHistogramBins[panel] ?? null}
+                            vminPct={shown.vminPct}
+                            vmaxPct={shown.vmaxPct}
+                            onRangeChange={(min, max) => changePanelHistogramRange(panel, ...storedClipPercent(min, max, flipSign), true)}
+                            onRangePreview={(min, max) => changePanelHistogramRange(panel, ...storedClipPercent(min, max, flipSign), false)}
+                            onRangeCommit={(min, max) => changePanelHistogramRange(panel, ...storedClipPercent(min, max, flipSign), true)}
                             width={110}
                             height={58}
                             valueDecimals={2}
                             labelFontFamily={UI_FONT}
                             theme={themeInfo.theme === "dark" ? "dark" : "light"}
-                            dataMin={panelRange.min}
-                            dataMax={panelRange.max}
+                            dataMin={shown.dataMin}
+                            dataMax={shown.dataMax}
                           />
                         );
                       })}
@@ -12212,6 +12244,7 @@ function Show3D() {
                     </Box>
                   );
                 }
+                const shown = shownHistogramWindow(histMin, histMax, imageVminPct, imageVmaxPct, flipSign);
                 return (
                 <Box sx={{
                   // Match Show2D histogram shell exactly so visual stays consistent
@@ -12221,19 +12254,19 @@ function Show3D() {
                   display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "flex-start", gap: 0.5,
                 }}>
                   <Histogram
-                    bins={imageHistogramBins}
-                    vminPct={imageVminPct}
-                    vmaxPct={imageVmaxPct}
-                    onRangeChange={(min, max) => commitImageHistogramRange(min, max)}
-                    onRangePreview={(min, max) => previewImageHistogramRange(min, max)}
-                    onRangeCommit={(min, max) => commitImageHistogramRange(min, max)}
+                    bins={shownImageHistogramBins}
+                    vminPct={shown.vminPct}
+                    vmaxPct={shown.vmaxPct}
+                    onRangeChange={(min, max) => commitImageHistogramRange(...storedClipPercent(min, max, flipSign))}
+                    onRangePreview={(min, max) => previewImageHistogramRange(...storedClipPercent(min, max, flipSign))}
+                    onRangeCommit={(min, max) => commitImageHistogramRange(...storedClipPercent(min, max, flipSign))}
                     width={110}
                     height={58}
                     valueDecimals={2}
                     labelFontFamily={UI_FONT}
                     theme={themeInfo.theme === "dark" ? "dark" : "light"}
-                    dataMin={histMin}
-                    dataMax={histMax}
+                    dataMin={shown.dataMin}
+                    dataMax={shown.dataMax}
                   />
                 </Box>
                 );
@@ -12404,7 +12437,7 @@ function Show3D() {
                   return (
                     <Box key={i} sx={{ px: 1, py: 0.5, bgcolor: themeColors.bgAlt, display: "flex", gap: 2, alignItems: "center", flexWrap: "wrap", border: isSelected ? `1px solid ${color}` : `1px solid transparent` }}>
                       <Box sx={{ width: 8, height: 8, bgcolor: color, borderRadius: "50%", flexShrink: 0 }} />
-                      {statsReadouts(stats, color)}
+                      {statsReadouts(shownStats(stats, flipSign), color)}
                     </Box>
                   );
                 })}

@@ -275,6 +275,34 @@ def test_state_round_trips_through_dict_and_file(tmp_path: pathlib.Path):
     other.free()
 
 
+def test_flip_sign_is_a_display_toggle_that_sends_one_boolean_and_no_pixels():
+    stack = _ramp(4, 32, offset=-0.25)
+    widget = Show3D(stack, verbose=False)
+    assert widget.flip_sign is False and widget.state_dict()["flip_sign"] is False
+    before = (widget._data.copy(), bytes(widget._offline_float_stack), widget.data_min, widget.data_max,
+              list(widget.auto_vmins), list(widget.auto_vmaxs))
+    sent = []
+    send = widget._send
+    widget._send = lambda msg, buffers=None: (sent.append((msg.get("state"), buffers)), send(msg, buffers))[1]
+    widget.flip_sign = True
+    # the whole transfer: one state update holding the boolean, no binary buffer
+    assert [(sorted(state), buffers) for state, buffers in sent] == [(["flip_sign"], [])]
+    np.testing.assert_array_equal(widget._data, before[0])
+    assert bytes(widget._offline_float_stack) == before[1]
+    assert (widget.data_min, widget.data_max, list(widget.auto_vmins), list(widget.auto_vmaxs)) == before[2:]
+    restored = Show3D(stack, verbose=False)
+    restored.load_state_dict(widget.state_dict())
+    assert restored.flip_sign is True
+    opened_flipped = Show3D(stack, flip_sign=True, verbose=False)
+    assert opened_flipped.flip_sign is True
+    np.testing.assert_array_equal(opened_flipped._data, before[0])
+    stream = Show3D.stream(stack, flip_sign=True)
+    assert stream.flip_sign is True
+    stream.close()
+    for viewer in (widget, restored, opened_flipped):
+        viewer.free()
+
+
 def test_saved_notebook_state_keeps_a_preview_instead_of_pixels():
     widget = Show3D(_ramp(), title="save", verbose=False)
     state = widget.get_state()
