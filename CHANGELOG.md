@@ -6,6 +6,10 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+## rc44 - 2026-11-11
+
+Needs quantem.gpu rc18 (`[cuda]` and `[mps]` extras).
+
 ### Show3DSlices opens tilted; `quantem-widget show3dslices`
 
 - `Show3DSlices(volume, view="tilted")` opens the 3D view tipped 18 deg toward the viewer from the side, with
