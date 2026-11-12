@@ -918,6 +918,22 @@ def test_show3d_folder_of_frames(tmp_path):
     assert (out / "series_3x16x20_exact.html").exists()
 
 
+
+def test_show3dslices_volume_page_opens_on_the_chosen_view(tmp_path):
+    out = tmp_path / "out"
+    np.save(tmp_path / "volume.npy", np.random.rand(6, 12, 14).astype(np.float32))
+    assert cli.main(["show3dslices", str(tmp_path / "volume.npy"), "--sampling", "15.12", "0.178", "0.178",
+                     "--units", "A", "--no-open", "--save-dir", str(out)]) == 0
+    page, = out.glob("volume_*.html")
+    state = _viewer_state(page, "volume")
+    assert (state["view"], state["slice_stretch"], state["volume_opacity"], state["slice_plane_opacity"],
+            state["orthographic"]) == ("tilted", 10.0, 0.6, 0.25, False)
+    assert state["voxel_size_A"] == pytest.approx([15.12, 0.178, 0.178])
+    assert cli.main(["show3dslices", str(tmp_path / "volume.npy"), "--view", "side", "--orthographic",
+                     "--volume-opacity", "0.4", "--title", "Side", "--no-open", "--save-dir", str(out)]) == 0
+    state = _viewer_state(next(out.glob("side_*.html")), "Side")
+    assert (state["view"], state["orthographic"], state["volume_opacity"]) == ("side", True, 0.4)
+
 @pytest.mark.parametrize(("argv", "message"), [
     (["show3d", "{in}/image_0.npy"], "image_0.npy is one 2D image; Show3D needs a stack file"),
     (["show2d", "{in}/image_0.npy", "--labels", "a", "b"], "--labels gives 2 for 1 image; give one per image"),

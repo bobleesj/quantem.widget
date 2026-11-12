@@ -129,7 +129,18 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         Draw calibrated scale bars when a sampling is known.
     slice_stretch : float
         Display stretch of the depth axis, 1 to 50, for volumes with far fewer
-        slices than lateral pixels.
+        slices than lateral pixels. Default 10.
+    view : str
+        Opening camera of the 3D view, the same as its buttons: ``"tilted"``
+        (default, 70 deg from the beam axis: depth columns upright, top face
+        visible), ``"top"`` (down the beam, like the top slice panel) or
+        ``"side"`` (side-on, like the oblique panel).
+    volume_opacity : float
+        Strength of the volume rendering in the 3D view (Vol Strength), 0 to 1. Default 0.6.
+    slice_plane_opacity : float
+        Opacity of the slice planes drawn in the 3D view, 0 to 1. Default 0.25.
+    orthographic : bool
+        Orthographic instead of perspective 3D projection. Default False.
     panel_width_px : int
         Display width per panel in CSS pixels; 0 uses the frontend default.
     show_fft : bool
@@ -193,7 +204,8 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     # the [slice, row, col] sampling every panel's scale bar reads
     voxel_size_A = traitlets.List(traitlets.Float(), default_value=[0.0, 0.0, 0.0]).tag(sync=True)
     show_scale_bar = traitlets.Bool(True).tag(sync=True)
-    slice_stretch = traitlets.Float(30.0).tag(sync=True)
+    slice_stretch = traitlets.Float(10.0).tag(sync=True)
+    view = traitlets.Unicode("tilted").tag(sync=True)
     panel_width_px = traitlets.Int(0).tag(sync=True)
     view_state = traitlets.Dict(default_value={}).tag(sync=True)
     show_controls = traitlets.Bool(True).tag(sync=True)
@@ -218,8 +230,8 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     slice_alignment_cached = traitlets.Bool(False).tag(sync=True)
     slice_alignment_status = traitlets.Unicode("").tag(sync=True)
     _slice_alignment_request = traitlets.Unicode("").tag(sync=True)
-    volume_opacity = traitlets.Float(0.5).tag(sync=True)
-    slice_plane_opacity = traitlets.Float(0.35).tag(sync=True)
+    volume_opacity = traitlets.Float(0.6).tag(sync=True)
+    slice_plane_opacity = traitlets.Float(0.25).tag(sync=True)
     dim_labels = traitlets.List(traitlets.Unicode(), default_value=["slice", "row", "col"]).tag(sync=True)
     playing = traitlets.Bool(False).tag(sync=True)
     reverse = traitlets.Bool(False).tag(sync=True)
@@ -236,7 +248,7 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         "show_colorbar", "image_vmin_pct", "image_vmax_pct", "show_slice_planes",
         "plane_visibility", "slice_alignment", "row_shift_px_per_slice", "col_shift_px_per_slice",
         "slice_alignment_cached", "volume_opacity", "slice_plane_opacity",
-        "voxel_size_A", "show_scale_bar", "slice_stretch", "panel_width_px", "view_state",
+        "voxel_size_A", "show_scale_bar", "slice_stretch", "view", "panel_width_px", "view_state",
         "col_index", "row_index", "slice_index", "oblique_angle", "oblique_profile_line", "fps", "loop",
         "reverse", "boomerang", "play_axis", "dim_labels",
     )
@@ -302,6 +314,12 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             raise traitlets.TraitError(f"voxel_size_A must be 3 finite values >= 0, got {value}")
         return value
 
+    @traitlets.validate("view")
+    def _validate_view(self, proposal: dict) -> str:
+        if proposal["value"] not in ("tilted", "top", "side"):
+            raise traitlets.TraitError(f'view must be "tilted", "top" or "side", got {proposal["value"]!r}')
+        return proposal["value"]
+
     @traitlets.validate("slice_stretch")
     def _validate_slice_stretch(self, proposal: dict) -> float:
         """Clamp to [1, 50]: below 1 the depth panel collapses, above 50 it fills the page."""
@@ -364,7 +382,11 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         sampling: float | Sequence[float] | None = None,
         units: str | Sequence[str] | None = None,
         show_scale_bar: bool = True,
-        slice_stretch: float = 30.0,
+        slice_stretch: float = 10.0,
+        view: str = "tilted",
+        volume_opacity: float = 0.6,
+        slice_plane_opacity: float = 0.25,
+        orthographic: bool = False,
         panel_width_px: int = 0,
         show_fft: bool = False,
         fft_window: bool = False,
@@ -422,6 +444,10 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             self.voxel_size_A = voxel_size_A
             self.show_scale_bar = bool(show_scale_bar)
             self.slice_stretch = float(slice_stretch)
+            self.view = view
+            self.volume_opacity = float(volume_opacity)
+            self.slice_plane_opacity = float(slice_plane_opacity)
+            self.orthographic = bool(orthographic)
             self.panel_width_px = int(panel_width_px)
             self.show_fft = bool(show_fft)
             self.fft_window = bool(fft_window)
