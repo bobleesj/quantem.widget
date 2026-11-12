@@ -6,6 +6,16 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+### Show3DSlices opens tilted; `quantem-widget show3dslices`
+
+- `Show3DSlices(volume, view="tilted")` opens the 3D view tipped 18 deg toward the viewer from the side, with
+  perspective; `view="top"` and `view="side"` match the Top and Side buttons, and a new Tilt button sets the
+  tilted view. Clicking a view button records it, so Reset returns there.
+- New defaults: `slice_stretch=10` (was 30), `volume_opacity=0.6`, `slice_plane_opacity=0.25`; all three and
+  `orthographic` are keywords.
+- `quantem-widget show3dslices volume.npy --sampling SLICE_A ROW_A COL_A --units A` writes the offline page, with
+  `--view`, `--volume-opacity`, `--slice-plane-opacity`, `--orthographic`, `--slice-stretch`, `--encoding`.
+
 ### Renamed: SSB is direct ptychography (no aliases)
 
 The maintainer, 11 Nov 2026: "we don't want to use the term SSB, use Direct Ptycho". Every
