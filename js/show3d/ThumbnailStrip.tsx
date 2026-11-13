@@ -263,7 +263,7 @@ export function ThumbnailStrip(props: ThumbnailStripProps) {
             {cellsInWindow(win, frames, grid, newestFirst).map(({ frame, cell }) => {
               const selected = frame === currentFrame;
               // frames count from 1 as the slider does; a label that is only the 0-based index adds nothing
-              const custom = labels?.[frame] && labels[frame] !== String(frame) ? labels[frame] : "";
+              const custom = labels?.[frame] && labels[frame] !== String(frame) && labels[frame] !== String(frame + 1) ? labels[frame] : "";   // never the number again
               return (
                 <Box key={frame} data-frame={frame} aria-label={`Frame ${frame + 1} thumbnail`}
                   title={custom ? `Frame ${frame + 1}: ${custom}` : `Frame ${frame + 1}`}
