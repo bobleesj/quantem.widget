@@ -36,6 +36,15 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ### Fixed
 
+- A standalone Show3DSlices page (from `export_html`) had no Export button: it showed only with a Python
+  kernel attached. It now shows Export as a Show3D page does, with "HTML exact float32" (the dtype of the
+  volume), which saves the page itself with its embedded volume, byte for byte, and the current view (slice,
+  colormap, contrast, cut). A page exported with `encoding="uint8"` offers "HTML encoded uint8".
+- Show3DSlices stopped playback when the oblique cut was grabbed (its line, an end, the Angle or Position
+  slider). Playback now keeps running through the drag; when it plays the cut itself (Side or All), the cut
+  stays where the hand holds it and moves on after release. Playing All also left the top slice frozen
+  (each step of the cut reset it); both now move together. Show3D's Profile line already kept playing while
+  dragged; a browser test now covers both viewers.
 - Show3DSlices dropped Smooth while the slice moved on a zoomed-in panel: dragging or stepping the slice
   slider, or playing, painted each slice with the nearest source pixel, and the panel stayed blocky after
   the first step. With Smooth on it now paints as the panel at rest does (the native slice, scaled with

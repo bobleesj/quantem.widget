@@ -29,7 +29,18 @@ import StopIcon from "@mui/icons-material/Stop";
 import { useTheme } from "../theme";
 import { VolumeRenderer, CameraState, DEFAULT_CAMERA } from "./webgpu-volume";
 import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI, drawColorbar } from "../figure";
-import { asFloat32, extractBytes, extractVolumeArray, formatNumber, preserveRestoredWidgetModelsOnSave, type VolumeArray } from "../format";
+import {
+  applyStandaloneWidgetViewState,
+  asFloat32,
+  downloadBlob,
+  extractBytes,
+  extractVolumeArray,
+  formatNumber,
+  preserveRestoredWidgetModelsOnSave,
+  standaloneHtmlWithCurrentWidgetState,
+  standaloneWidgetStaticHtmlFromDocument,
+  type VolumeArray,
+} from "../format";
 import { findDataRange, applyLogScale, percentileClip, signedLog1p, sliderRange } from "../display/stats";
 import { MetadataSection } from "../widgetInfo";
 import { dequantizeUint8 } from "../display/quantization";
@@ -37,7 +48,7 @@ import { InfoTooltip } from "../shared/InfoTooltip";
 import { RenderPathBadge } from "../shared/RenderPathBadge";
 import { remountOnGPULoss } from "../shared/gpuLossRemount";
 import { KeyboardShortcuts } from "../shared/KeyboardShortcuts";
-import { exportTitleSlug, formatEstimatedHtmlSize } from "../shared/exportFormat";
+import { exportTitleSlug, formatEstimatedHtmlSize, formatSavedBytes } from "../shared/exportFormat";
 import { HTML_PICKER_TYPE, type PendingSave, pickSaveHandle, useSaveExportPayload } from "../shared/exportSave";
 import { pointToSegmentDistance } from "../shared/geometry";
 import { shouldIgnoreWidgetShortcut } from "../shared/widgetShortcuts";
@@ -659,8 +670,23 @@ const SHOW3DSLICES_FFT_RESULT_CACHE_MAX_ENTRIES = 24;
 
 const FFT_SNAP_RADIUS = 5;
 
+// The view a re-saved standalone page keeps: the traits Python saves as the widget state.
+const SHOW3DSLICES_STANDALONE_VIEW_STATE_KEYS = [
+  "title", "show_title", "page_idx", "page_labels",
+  "active_panel", "panel_titles", "cmap", "log_scale", "auto_contrast", "vmin", "vmax",
+  "show_controls", "controls_collapsed", "show_crosshair", "show_fft", "fft_window",
+  "fft_colormap", "fft_log_scale", "fft_auto", "orthographic", "smooth", "flip",
+  "show_colorbar", "image_vmin_pct", "image_vmax_pct", "show_slice_planes",
+  "plane_visibility", "slice_alignment", "row_shift_px_per_slice", "col_shift_px_per_slice",
+  "slice_alignment_cached", "volume_opacity", "slice_plane_opacity",
+  "voxel_size_A", "show_scale_bar", "slice_stretch", "view", "panel_width_px", "view_state",
+  "col_index", "row_index", "slice_index", "oblique_angle", "oblique_profile_line", "fps", "loop",
+  "reverse", "boomerang", "play_axis", "dim_labels",
+] as const;
+
 function Show3DSlices() {
   const model = useModel();
+  React.useLayoutEffect(() => applyStandaloneWidgetViewState(model), [model]);
   React.useEffect(() => preserveRestoredWidgetModelsOnSave(model), [model]);
 
   // Theme detection (offline HTML exports force a light/white background)
@@ -1010,15 +1036,21 @@ function Show3DSlices() {
     if (loopRangeRafRef.current != null) cancelAnimationFrame(loopRangeRafRef.current);
   }, []);
   const commitSliceValuesRef = React.useRef<() => void>(() => {});
-  const pausePlaybackForEdit = React.useCallback(() => {
-    if (playRafRef.current != null) {
-      cancelAnimationFrame(playRafRef.current);
-      playRafRef.current = null;
-    }
-    lastPlayTsRef.current = null;
-    playAccumulatorRef.current = 0;
-    if (playing) setPlaying(false);
-  }, [playing, setPlaying]);
+  // While a press moves the oblique cut (its line, an endpoint, the Angle or Position slider), playback
+  // keeps running but leaves the cut where the hand puts it; the cut resumes its playback on release.
+  const obliqueHeldRef = React.useRef(false);
+  const holdObliquePlayback = () => { obliqueHeldRef.current = true; };
+  React.useEffect(() => {
+    const release = () => { obliqueHeldRef.current = false; };
+    window.addEventListener("pointerup", release, true);
+    window.addEventListener("pointercancel", release, true);
+    window.addEventListener("mouseup", release, true);
+    return () => {
+      window.removeEventListener("pointerup", release, true);
+      window.removeEventListener("pointercancel", release, true);
+      window.removeEventListener("mouseup", release, true);
+    };
+  }, []);
 
   const volumeCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const volumeRendererRef = React.useRef<VolumeRenderer | null>(null);
@@ -1232,6 +1264,29 @@ function Show3DSlices() {
   };
   const handleExportMenuClose = () => {
     setExportMenuAnchor(null);
+  };
+  // A standalone page has no kernel to export from: it saves itself, the embedded volume with the
+  // current view, exactly as Show3D does. A full export embeds the volume in its own type (exact);
+  // an offline one carries the 256-level uint8 copy.
+  const canDownloadCurrentHtml = !exportEnabled;
+  const standaloneHtmlLabel = offline
+    ? `HTML encoded uint8 (${quantizedExportSize})`
+    : `HTML exact ${volumeDtype || "float32"} (${formatEstimatedHtmlSize(volumeBytes?.byteLength ?? syncedVoxelCount * 4)})`;
+  const handleStandaloneHtmlDownload = () => {
+    setExportMenuAnchor(null);
+    const filename = makeExportFilename(title, numSlices, numRows, numCols, offline ? "uint8" : "full");
+    try {
+      const html = `<!doctype html>\n${standaloneHtmlWithCurrentWidgetState(
+        model,
+        standaloneWidgetStaticHtmlFromDocument(),
+        SHOW3DSLICES_STANDALONE_VIEW_STATE_KEYS,
+      )}`;
+      const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+      downloadBlob(blob, filename);
+      setLocalExportStatus(`Downloaded ${filename} to browser Downloads (${formatSavedBytes(blob.size)})`);
+    } catch (err) {
+      setLocalExportStatus(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   };
   const handleExportSelect = async (encoding: "full" | "uint8") => {
     setExportMenuAnchor(null);
@@ -2755,6 +2810,7 @@ function Show3DSlices() {
         sliceValuesRef.current[0] = value;
         return;
       }
+      if (obliqueHeldRef.current) return;
       obliquePlaybackStateRef.current = { ...obliquePlaybackStateRef.current, current: value };
       updateObliqueFromNormalOffset(value);
     };
@@ -3136,15 +3192,13 @@ function Show3DSlices() {
       window.clearTimeout(clickJumpTimerRef.current);
       clickJumpTimerRef.current = null;
     }
-    if (axis === 0 && playing && (playbackAxis === 1 || playbackAxis === 3)) {
-      pausePlaybackForEdit();
-    }
+    if (axis === 0 && playing && (playbackAxis === 1 || playbackAxis === 3)) holdObliquePlayback();
     const hit = obliqueHitTest(event, axis);
     if (hit?.target) {
       const { start, stop } = obliqueSegment;
       event.preventDefault();
       event.stopPropagation();
-      pausePlaybackForEdit();
+      holdObliquePlayback();
       if (hit.target === "line") {
         obliquePositionDragRef.current = null;
         setLiveObliqueOffset(null);
@@ -3612,8 +3666,14 @@ function Show3DSlices() {
   const sliderPaintRafRef = React.useRef<number | null>(null);
   const pendingContrastRangeRef = React.useRef<[number, number] | null>(null);
   const contrastPaintRafRef = React.useRef<number | null>(null);
+  // Take only the indices whose trait changed: playback of All moves the cut, which commits the row and
+  // column, while the top slice it plays lives in liveSliderRef; resetting all three froze the top slice.
+  const committedSliceRef = React.useRef<number[]>([sliceIndex, rowIndex, colIndex]);
   React.useEffect(() => {
-    const next = [sliceIndex, rowIndex, colIndex];
+    const committed = [sliceIndex, rowIndex, colIndex];
+    const previous = committedSliceRef.current;
+    const next = liveSliderRef.current.map((value, axis) => (committed[axis] !== previous[axis] ? committed[axis] : value));
+    committedSliceRef.current = committed;
     liveSliderRef.current = next;
     setLiveSlider(next);
   }, [sliceIndex, rowIndex, colIndex]);
@@ -3833,7 +3893,7 @@ function Show3DSlices() {
   };
   const handleObliqueAnglePointerDownCapture = (event: React.PointerEvent<HTMLSpanElement>) => {
     if (event.button !== 0) return;
-    pausePlaybackForEdit();
+    holdObliquePlayback();
     trackSliderPress(event, (fraction) => Math.round(clampNumber(
       obliqueAngleSliderMin + fraction * (obliqueAngleSliderMax - obliqueAngleSliderMin), obliqueAngleMinBound, obliqueAngleMaxBound,
     )), (value) => updateObliqueAngleWithinBounds(value));
@@ -3856,7 +3916,7 @@ function Show3DSlices() {
   const obliqueOffsetMax = Math.floor(obliqueCurrentOffset + obliqueDeltaMax);
   const obliqueOffset = liveObliqueOffset ?? clampNumber(Math.round(obliqueCurrentOffset), obliqueOffsetMin, obliqueOffsetMax);
   const beginObliquePositionDrag = () => {
-    pausePlaybackForEdit();
+    holdObliquePlayback();
     const currentOffset = obliqueCenterOffset(numCols, numRows, obliqueAngle, obliqueSegment.start, obliqueSegment.stop);
     const [minDelta, maxDelta] = obliqueSegmentOffsetBounds(numCols, numRows, obliqueAngle, obliqueSegment.start, obliqueSegment.stop, OBLIQUE_PROFILE_EDGE_INSET);
     obliquePositionDragRef.current = {
@@ -4093,7 +4153,7 @@ function Show3DSlices() {
         <>
       <Typography sx={{ ...controlLabel }}>FFT</Typography>
       <Switch checked={showFft} onChange={(event) => setShowFft(event.target.checked)} size="small" sx={switchStyles.small} slotProps={switchInputSlot("Toggle FFT power spectrum panels")} />
-      {exportEnabled && (
+      {(exportEnabled || canDownloadCurrentHtml) && (
         <>
         <Button
           size="small"
@@ -4116,12 +4176,13 @@ function Show3DSlices() {
           {...themedMenuProps}
           slotProps={{ ...themedMenuProps.slotProps, list: { "aria-label": "Export standalone HTML options" } }}
         >
-          <MenuItem onClick={() => handleExportSelect("full")}>Exact float32 ({exactExportSize})</MenuItem>
-          <MenuItem onClick={() => handleExportSelect("uint8")}>Quantized uint8 ({quantizedExportSize})</MenuItem>
+          {exportEnabled && <MenuItem onClick={() => handleExportSelect("full")}>Exact float32 ({exactExportSize})</MenuItem>}
+          {exportEnabled && <MenuItem onClick={() => handleExportSelect("uint8")}>Quantized uint8 ({quantizedExportSize})</MenuItem>}
+          {canDownloadCurrentHtml && <MenuItem onClick={handleStandaloneHtmlDownload}>{standaloneHtmlLabel}</MenuItem>}
         </Menu>
         </>
       )}
-      {exportEnabled && (localExportStatus || exportStatus) && (
+      {(exportEnabled || canDownloadCurrentHtml) && (localExportStatus || exportStatus) && (
         <Typography
           sx={{
             ...controlLabel,
