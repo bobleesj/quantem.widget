@@ -123,9 +123,9 @@ def drift_corrected(stack: np.ndarray, drift: Mapping, *, frame_times_s: Sequenc
 
     The picked frames move back by their measured ``shift_px``; the others by the fitted velocity,
     at their own time when ``frame_times_s`` gives one per frame, else at their frame index.
-    A Fourier shift: sub-pixel, and the edges wrap around. Batched FFTs in torch on ``device``
-    (``"auto"``: CUDA, then Metal, then the CPU only when there is no GPU), a few frames at a time so a
-    long stack fits a small GPU.
+    A Fourier shift: sub-pixel, and the edges wrap around. quantem.gpu's own (``quantem.gpu.drift.series.moved``,
+    float64, as ``Drift.corrected``) when it is installed; without it the same shift in this module's torch,
+    batched. Either on ``device`` (``"auto"``: CUDA, then Metal, then the CPU only when there is no GPU).
 
     Examples
     --------
@@ -147,6 +147,14 @@ def drift_corrected(stack: np.ndarray, drift: Mapping, *, frame_times_s: Sequenc
         else:
             shifts[frame] = velocity * (frame - frames[0])
     target = torch.device(resolve_device(device))
+    from quantem.widget.adapters import gpu as gpu_adapter
+
+    if gpu_adapter.gpu_moved is not None:          # quantem.gpu's shift, image(r - d): back by the specimen's shift
+        out = np.empty(stack.shape, dtype=np.float32)
+        for frame in range(stack.shape[0]):
+            image = torch.as_tensor(np.ascontiguousarray(stack[frame], dtype=np.float32), device=target)
+            out[frame] = gpu_adapter.gpu_moved(image, -shifts[frame]).cpu().numpy()
+        return out
     rows = torch.fft.fftfreq(stack.shape[1], device=target, dtype=torch.float64)[:, None]
     cols = torch.fft.fftfreq(stack.shape[2], device=target, dtype=torch.float64)[None, :]
     out = np.empty(stack.shape, dtype=np.float32)
