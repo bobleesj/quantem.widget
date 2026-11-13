@@ -6,6 +6,9 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- `quantem-widget build` builds the widgets' JavaScript in a source checkout installed with `pip install -e`, from any
+  folder; it installs the Node packages on the first run. `quantem-widget build --watch` rebuilds on every save.
+
 ## rc44 - 2026-11-11
 
 Needs quantem.gpu rc18 (`[cuda]` and `[mps]` extras).

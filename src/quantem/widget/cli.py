@@ -9,6 +9,8 @@
     quantem-widget show4dstem ./masters/ --backend webgpu --html   # HDF5-backed WebGPU browser folder
     quantem-widget show4dstem a_master.h5 b_master.h5 --html   # packed offline HTML per master
     quantem-widget github tutorial_github.ipynb --no-execute   # GitHub-displayable notebook copy
+    quantem-widget build                                       # source checkout: build the widgets' JavaScript
+    quantem-widget build --watch                               # rebuild each time a source file is saved
 
 ``show4dstem`` orchestrates master discovery and loading (quantem.gpu when it
 is installed, else the widget's dense reader), the ``Show4DSTEM`` widget and its
@@ -19,6 +21,8 @@ pictures of each widget so GitHub's notebook preview can display it.
 ``show2d`` and ``show3d`` read image files through ``quantem.widget.io`` and
 write the widget's own ``export_html`` page: the same file the toolbar Export
 button saves, which opens offline, on phones and inside an ``<iframe>``.
+``build`` is for an editable install of a source checkout, whose JavaScript is
+not in the repository: it installs the Node packages once and runs the build.
 """
 import argparse
 import base64
@@ -46,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="quantem-widget",
         description=("Write images as a shareable Show2D or Show3D HTML page, open 4D-STEM masters in "
-                     "Show4DSTEM, or make a widget notebook GitHub-displayable."),
+                     "Show4DSTEM, make a widget notebook GitHub-displayable, or build a source checkout."),
     )
     # A missing command is a usage error (exit 2), as for quantem-gpu.
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -63,6 +67,10 @@ def main(argv: list[str] | None = None) -> int:
     # widget-state, keep the auto-snapshot widget render (re-encoded JPEG) + print outputs.
     _add_github_args(subparsers.add_parser(
         "github", help="Make a widget notebook GitHub-displayable (strip offline state, snapshots to JPEG)."))
+    build = subparsers.add_parser(
+        "build", help="Build the widgets' JavaScript in a source checkout (pip install -e); --watch rebuilds on save.")
+    build.add_argument("--watch", action="store_true",
+                       help="Keep running and rebuild each widget when one of its source files is saved.")
     args = parser.parse_args(argv)
     # What a user can fix (a path, an argument, a missing package, too little memory) prints one
     # line and exits 1; anything else is a bug and keeps its traceback.
@@ -75,12 +83,44 @@ def main(argv: list[str] | None = None) -> int:
             return _show3d(args)
         if args.command == "show3dslices":
             return _show3dslices(args)
+        if args.command == "build":
+            return _build(args)
         return _show4dstem(args)
     except (OSError, ValueError, ImportError, MemoryError, NotImplementedError) as error:
         if isinstance(error, ImportError) and (error.name or "").startswith("quantem.widget"):
             raise  # a broken import inside this package, not a missing install
         print(f"quantem-widget: {' '.join(str(error).split()) or type(error).__name__}", file=sys.stderr)
         return 1
+
+
+# ---------------------------------------------------------------------------
+def _build(args: argparse.Namespace) -> int:
+    """Build the widgets' JavaScript bundles in the source checkout this package is installed from.
+
+    The bundles under ``static/`` are not in the repository, so an editable install shows no widget until
+    they are built, and shows stale ones after a source edit. This runs ``npm ci`` when ``node_modules``
+    is missing, then ``npm run build`` (with ``--watch``: until interrupted), from any working directory.
+    Returns npm's exit code.
+    """
+    checkout = pathlib.Path(__file__).resolve().parents[3]
+    if not (checkout / "package.json").is_file() or not (checkout / "scripts" / "build.mjs").is_file():
+        raise ValueError(
+            "this quantem.widget was installed from a wheel, which already holds its built JavaScript. "
+            "To rebuild, clone the repository and install it with pip install -e.")
+    npm = shutil.which("npm")
+    if npm is None:
+        raise OSError("npm was not found. Install Node.js 20 or newer (https://nodejs.org), open a new terminal "
+                      "and run quantem-widget build again.")
+    if not (checkout / "node_modules").is_dir():
+        installed = subprocess.run([npm, "ci"], cwd=checkout).returncode
+        if installed:
+            return installed
+    command = [npm, "run", "build", "--", "--watch"] if args.watch else [npm, "run", "build"]
+    try:
+        return subprocess.run(command, cwd=checkout).returncode
+    except KeyboardInterrupt:
+        # Ctrl+C is how a watch ends
+        return 0
 
 
 # ---------------------------------------------------------------------------

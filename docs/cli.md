@@ -15,6 +15,8 @@ quantem-widget show4dstem a_master.h5 b_master.h5         # several masters    -
 quantem-widget show4dstem ./masters/ --html               # 4D-STEM            -> shareable offline HTML
 quantem-widget show4dstem a.qem b.qem --html              # native QEM files   -> browser viewer folder
 quantem-widget github tutorial_github.ipynb --no-execute  # optional static copy for GitHub preview
+quantem-widget build                                      # source checkout    -> build the widgets' JavaScript
+quantem-widget build --watch                              # source checkout    -> rebuild on every save
 ```
 
 Other widgets (ShowPtycho) and whole notebooks export from
@@ -29,6 +31,7 @@ Python: `widget.export_html(...)`, or `jupyter nbconvert --to html notebook.ipyn
 | `quantem-widget show4dstem <master(s) / folder>` | one or more `*_master.h5` | a live Show4DSTEM notebook (or `--html`) |
 | `quantem-widget show4dstem <file.qem ...> --html` | one or more native `.qem` files | a WebGPU folder that reads the encoded acquisitions |
 | `quantem-widget github <notebook.ipynb>` | an optional static copy of a notebook | strips widget state and embeds compressed pictures for GitHub's notebook preview |
+| `quantem-widget build [--watch]` | a source checkout installed with `pip install -e` (needs Node.js 20 or newer) | the widgets' JavaScript bundles; installs the Node packages on the first run; `--watch` rebuilds on save |
 
 **HDF5 acquisitions** open a live, kernel-backed notebook by default, at full
 detector sampling. Supported acquisitions stay encoded on the GPU when the

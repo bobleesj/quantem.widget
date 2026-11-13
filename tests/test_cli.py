@@ -976,3 +976,31 @@ def test_show2d_writes_color_images_and_refuses_them_as_uint8(tmp_path, capsys):
     assert _viewer_state(out / "color_8x8_exact.html", "color")["is_rgb"] == [True]
     assert cli.main(["show2d", str(rgb), "--encoding", "uint8", "--no-open", "--save-dir", str(out)]) == 1
     assert "full encoding (true color)" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("watch, expected", [(False, ["npm", "run", "build"]),
+                                             (True, ["npm", "run", "build", "--", "--watch"])])
+def test_build_runs_npm_in_the_checkout_and_installs_packages_once(monkeypatch, tmp_path, watch, expected):
+    """build finds the checkout from the package, runs npm ci only without node_modules, then the build."""
+    checkout = pathlib.Path(cli.__file__).resolve().parents[3]
+    calls = []
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "npm")
+    monkeypatch.setattr(cli.subprocess, "run", lambda command, cwd: calls.append((command, cwd)) or SimpleNamespace(returncode=0))
+    monkeypatch.setattr(pathlib.Path, "is_dir", lambda self: self.name != "node_modules")
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["build", "--watch"] if watch else ["build"]) == 0
+    assert calls == [(["npm", "ci"], checkout), (expected, checkout)]
+    calls.clear()
+    monkeypatch.setattr(pathlib.Path, "is_dir", lambda self: True)
+    assert cli.main(["build"]) == 0
+    assert calls == [(["npm", "run", "build"], checkout)]
+
+
+def test_build_says_what_is_missing(monkeypatch, capsys):
+    """No npm, or a wheel install with nothing to build: one line and exit 1, no traceback."""
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+    assert cli.main(["build"]) == 1
+    assert "Install Node.js 20 or newer" in capsys.readouterr().err
+    monkeypatch.setattr(pathlib.Path, "is_file", lambda self: False)
+    assert cli.main(["build"]) == 1
+    assert "installed from a wheel" in capsys.readouterr().err
