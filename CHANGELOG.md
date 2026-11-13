@@ -8,6 +8,8 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 - `quantem-widget build` builds the widgets' JavaScript in a source checkout installed with `pip install -e`, from any
   folder; it installs the Node packages on the first run. `quantem-widget build --watch` rebuilds on every save.
+- `quantem-widget update` fast-forwards the quantem.gpu and quantem.widget source checkouts on their own branches and
+  builds; it changes nothing when a checkout has local commits or edits in the way.
 
 ## rc44 - 2026-11-11
 

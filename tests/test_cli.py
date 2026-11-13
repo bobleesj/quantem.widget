@@ -1004,3 +1004,43 @@ def test_build_says_what_is_missing(monkeypatch, capsys):
     monkeypatch.setattr(pathlib.Path, "is_file", lambda self: False)
     assert cli.main(["build"]) == 1
     assert "installed from a wheel" in capsys.readouterr().err
+
+
+def _git(checkout, *arguments):
+    import subprocess
+    return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *arguments], cwd=checkout,
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+def test_update_fast_forwards_the_checkout_then_builds_and_refuses_a_diverged_one(monkeypatch, tmp_path, capsys):
+    """update pulls the checkout the package lives in on its own branch, builds, and leaves a diverged one alone."""
+    origin, checkout = tmp_path / "origin", tmp_path / "checkout"
+    origin.mkdir()
+    _git(origin, "init", "-q", "-b", "work")
+    (origin / "pyproject.toml").write_text("one")
+    _git(origin, "add", "."); _git(origin, "commit", "-q", "-m", "one")
+    _git(tmp_path, "clone", "-q", str(origin), str(checkout))
+    (origin / "notes.txt").write_text("two")
+    _git(origin, "add", "."); _git(origin, "commit", "-q", "-m", "two")
+    package = checkout / "src" / "quantem" / "widget"
+    package.mkdir(parents=True)
+    monkeypatch.setattr(cli, "__file__", str(package / "cli.py"))
+    monkeypatch.setattr(cli.importlib.util, "find_spec", lambda name: None)
+    builds = []
+    monkeypatch.setattr(cli, "_build", lambda args: builds.append(args.watch) or 0)
+    old, new = _git(checkout, "rev-parse", "--short", "HEAD"), _git(origin, "rev-parse", "--short", "HEAD")
+    assert cli.main(["update"]) == 0
+    out = capsys.readouterr().out
+    assert f"quantem.widget: work {old} -> {new}" in out and "quantem.gpu: not a source checkout here" in out
+    assert builds == [False] and "Restart the Jupyter kernel" in out
+    assert cli.main(["update"]) == 0
+    assert f"quantem.widget: work {new}, already newest" in capsys.readouterr().out
+    # a local commit and a new one upstream: no fast-forward exists, so nothing moves and nothing is built
+    (checkout / "local.txt").write_text("mine")
+    _git(checkout, "add", "local.txt"); _git(checkout, "commit", "-q", "-m", "mine")
+    (origin / "notes.txt").write_text("three")
+    _git(origin, "add", "."); _git(origin, "commit", "-q", "-m", "three")
+    mine = _git(checkout, "rev-parse", "HEAD")
+    assert cli.main(["update"]) == 1
+    assert "could not be fast-forwarded" in capsys.readouterr().err
+    assert _git(checkout, "rev-parse", "HEAD") == mine and builds == [False, False]

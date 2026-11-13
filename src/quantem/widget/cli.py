@@ -11,6 +11,7 @@
     quantem-widget github tutorial_github.ipynb --no-execute   # GitHub-displayable notebook copy
     quantem-widget build                                       # source checkout: build the widgets' JavaScript
     quantem-widget build --watch                               # rebuild each time a source file is saved
+    quantem-widget update                                      # source checkouts: pull quantem.gpu and quantem.widget, build
 
 ``show4dstem`` orchestrates master discovery and loading (quantem.gpu when it
 is installed, else the widget's dense reader), the ``Show4DSTEM`` widget and its
@@ -23,12 +24,15 @@ write the widget's own ``export_html`` page: the same file the toolbar Export
 button saves, which opens offline, on phones and inside an ``<iframe>``.
 ``build`` is for an editable install of a source checkout, whose JavaScript is
 not in the repository: it installs the Node packages once and runs the build.
+``update`` brings the quantem.gpu and quantem.widget checkouts to their branches'
+newest commits (fast-forward only) and builds.
 """
 import argparse
 import base64
 import copy
 import functools
 import http.server
+import importlib.util
 import json
 import os
 import pathlib
@@ -71,6 +75,8 @@ def main(argv: list[str] | None = None) -> int:
         "build", help="Build the widgets' JavaScript in a source checkout (pip install -e); --watch rebuilds on save.")
     build.add_argument("--watch", action="store_true",
                        help="Keep running and rebuild each widget when one of its source files is saved.")
+    subparsers.add_parser(
+        "update", help="Pull the quantem.gpu and quantem.widget source checkouts (fast-forward only), then build.")
     args = parser.parse_args(argv)
     # What a user can fix (a path, an argument, a missing package, too little memory) prints one
     # line and exits 1; anything else is a bug and keeps its traceback.
@@ -85,6 +91,8 @@ def main(argv: list[str] | None = None) -> int:
             return _show3dslices(args)
         if args.command == "build":
             return _build(args)
+        if args.command == "update":
+            return _update()
         return _show4dstem(args)
     except (OSError, ValueError, ImportError, MemoryError, NotImplementedError) as error:
         if isinstance(error, ImportError) and (error.name or "").startswith("quantem.widget"):
@@ -121,6 +129,57 @@ def _build(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         # Ctrl+C is how a watch ends
         return 0
+
+
+def _update() -> int:
+    """Bring the quantem.gpu and quantem.widget source checkouts to their branches' newest commits, then build.
+
+    Each checkout stays on its branch and is only fast-forwarded: local commits or edits that block the pull stop
+    the update with the checkout named, and nothing is merged, stashed or built. quantem.gpu is found from the
+    installed package and skipped (with a line saying so) when it is not an editable checkout. A checkout whose
+    ``pyproject.toml`` changed is installed again so new dependencies arrive. Works from any folder.
+    """
+    widget = pathlib.Path(__file__).resolve().parents[3]
+    if not (widget / ".git").exists():
+        raise ValueError(
+            "this quantem.widget was installed from a wheel, not a source checkout. Update it with pip: "
+            "pip install --upgrade quantem.widget")
+    if shutil.which("git") is None:
+        raise OSError("git was not found. Install Git, open a new terminal and run quantem-widget update again.")
+    checkouts = [("quantem.widget", widget)]
+    gpu = importlib.util.find_spec("quantem.gpu")
+    gpu_checkout = pathlib.Path(gpu.origin).resolve().parents[3] if gpu is not None and gpu.origin else None
+    if gpu_checkout is not None and (gpu_checkout / ".git").exists():
+        # quantem.gpu first: the widget's build reads its kernels
+        checkouts.insert(0, ("quantem.gpu", gpu_checkout))
+    else:
+        print("quantem.gpu: not a source checkout here, left as installed", flush=True)
+    for name, checkout in checkouts:
+        branch, before = _git(checkout, "rev-parse", "--abbrev-ref", "HEAD"), _git(checkout, "rev-parse", "--short", "HEAD")
+        pyproject = (checkout / "pyproject.toml").read_bytes()
+        pulled = subprocess.run(["git", "pull", "--ff-only", "--quiet"], cwd=checkout, capture_output=True, text=True)
+        if pulled.returncode:
+            raise ValueError(
+                f"{name} ({checkout}, branch {branch}) could not be fast-forwarded: {pulled.stderr.strip()} "
+                "Nothing was changed there and nothing was built.")
+        after = _git(checkout, "rev-parse", "--short", "HEAD")
+        # flushed so each line stays above the build output it precedes when the terminal is a pipe
+        print(f"{name}: {branch} {before} -> {after}" if after != before else f"{name}: {branch} {before}, already newest",
+              flush=True)
+        if (checkout / "pyproject.toml").read_bytes() != pyproject:
+            print(f"{name}: its dependencies changed, installing it again", flush=True)
+            installed = subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "-e", str(checkout)]).returncode
+            if installed:
+                return installed
+    built = _build(argparse.Namespace(watch=False))
+    if not built:
+        print("Updated. Restart the Jupyter kernel to use the new code.")
+    return built
+
+
+def _git(checkout: pathlib.Path, *arguments: str) -> str:
+    """One line of ``git`` output from ``checkout`` (a commit, a branch name)."""
+    return subprocess.run(["git", *arguments], cwd=checkout, capture_output=True, text=True, check=True).stdout.strip()
 
 
 # ---------------------------------------------------------------------------
