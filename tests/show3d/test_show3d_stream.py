@@ -148,3 +148,21 @@ def test_stream_requires_native_pixels_and_append_requires_a_stream():
     with pytest.raises(RuntimeError, match="Show3D.stream"):
         plain.append(np.zeros((4, 4)))
     plain.close()
+
+
+def test_appending_to_an_integer_stack_continues_in_float32():
+    start = np.random.default_rng(0).integers(0, 255, size=(3, 8, 8)).astype(np.uint8)
+    view = Show3D.stream(start)
+    assert view._stack_dtype == "uint8"
+    sent = _capture(view)
+    _ready(view)
+    frame = np.full((8, 8), 300.5, dtype=np.float32)  # a value an 8-bit stack cannot hold
+    view.append(frame)
+    assert view._stream_wait_sent(5)
+    assert view._stack_dtype == "float32" and view._data.dtype == np.float32 and view.n_slices == 4
+    np.testing.assert_array_equal(view._data[:3], start.astype(np.float32))
+    np.testing.assert_array_equal(view._data[3], frame)
+    # the stack was sent once more as float32 before the frame went out
+    state = view.get_state(key="_offline_float_stack")
+    assert memoryview(state["_offline_float_stack"]).nbytes == 4 * 8 * 8 * 4
+    assert [body["start"] for body, _ in _frames(sent)] == [3]

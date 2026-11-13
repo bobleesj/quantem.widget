@@ -13,8 +13,11 @@ new `rcN` heading when that rc is published to TestPyPI.
   stack (100 MB) the kernel holds 3 MB instead of 908 MB for the widget, the page 130 MB of arrays instead of
   432 MB and the GPU 202 MB instead of 504 MB, with identical pixels. New synced trait `volume_dtype`;
   `volume_bytes` is a view of the volume.
-- Show3D syncs its stack as a view of its array instead of a second copy: 507 MB instead of 907 MB in the kernel
-  on the same stack.
+- Show3D keeps a uint8, int8, uint16 or int16 stack in its own type in the kernel (no copy) and in the page,
+  and converts one frame at a time (exact): on the same stack 129 MB instead of 907 MB in the kernel and
+  295 MB of page arrays instead of 446 MB, with identical pixels. A float32 stack is synced as a view instead
+  of a second copy. The GPU still holds each frame as float32. Appending to an integer stack with
+  `Show3D.stream` continues in float32.
 - Volume uploads no longer pad rows to 256 bytes and go to the GPU a few slices at a time; a volume deeper than
   256 slices or wider than 2048 voxels stays in a texture.
 - Numbers and method: `docs/2026-11-13-show3d-memory.md`.

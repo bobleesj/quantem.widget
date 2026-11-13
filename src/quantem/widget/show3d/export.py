@@ -268,11 +268,11 @@ class Show3DExport:
         if self.is_rgb and self._rgb_data is not None:
             rgba = np.clip(self._rgb_data[idx] * 255.0, 0, 255).astype(np.uint8)
         else:
-            frame = self._data[idx]
+            frame = np.asarray(self._data[idx], dtype=np.float32)
             if self.diff_mode == "previous":
-                frame = frame - self._data[idx - 1] if idx > 0 else np.zeros_like(frame)
+                frame = frame - np.asarray(self._data[idx - 1], dtype=np.float32) if idx > 0 else np.zeros_like(frame)
             elif self.diff_mode == "first":
-                frame = frame - self._data[0]
+                frame = frame - np.asarray(self._data[0], dtype=np.float32)
             rgba = colorize(self._normalize_frame(frame) / 255.0, self.cmap)
         image = Image.fromarray(rgba)
         if fmt == "pdf":

@@ -92,8 +92,16 @@ def _display_ready_color(data: np.ndarray) -> np.ndarray:
     return np.clip(data, 0.0, 1.0)
 
 
-def _validated_float32(stack: np.ndarray, panel_name: str) -> np.ndarray:
-    """Cast to float32 and reject NaN/inf before and after the cast.
+def exact_in_browser(stack: np.ndarray) -> bool:
+    """True for a sample type the kernel and the page hold as it is, every value exact.
+
+    An 8-bit stack then costs one byte per pixel in the kernel and in the page instead of four.
+    """
+    return stack.dtype.name in ("uint8", "int8", "uint16", "int16") and stack.dtype.isnative
+
+
+def _validated_stack(stack: np.ndarray, panel_name: str) -> np.ndarray:
+    """The stack in its own integer type, or cast to float32 with NaN/inf rejected before and after the cast.
 
     float64 values beyond 3.4e38 silently overflow to inf on cast and would
     poison every min/max and percentile downstream.
@@ -103,6 +111,8 @@ def _validated_float32(stack: np.ndarray, panel_name: str) -> np.ndarray:
             f"{panel_name}: complex data not accepted. Convert first: "
             "np.abs(arr) for magnitude or np.angle(arr) for phase."
         )
+    if exact_in_browser(stack):
+        return stack
     if not _all_finite(stack):
         raise ValueError(
             f"{panel_name} contains NaN or inf. Clean first: np.nan_to_num(arr, nan=0, posinf=0, neginf=0)."
@@ -319,6 +329,8 @@ class Show3D(
     # stack, exact float32 (live widget, full export) or uint8 (quantized export).
     _offline_stack = traitlets.Bytes(b"").tag(sync=True)
     _offline_float_stack = traitlets.Any(b"").tag(sync=True)  # bytes, or a view of the stack (no copy)
+    # Sample type of _offline_float_stack: float32, or the stack's own integer type (every value exact)
+    _stack_dtype = traitlets.Unicode("float32").tag(sync=True)
     _offline_min = traitlets.Float(0.0).tag(sync=True)
     _offline_max = traitlets.Float(1.0).tag(sync=True)
     _offline_mins = traitlets.List(traitlets.Float(), default_value=[]).tag(sync=True)
@@ -981,7 +993,7 @@ class Show3D(
                 raise ValueError(f"Panel {index}: empty stack shape {stack.shape}. All dims must be >= 1.")
             if index > 0 and bool(is_rgb) != bool(panels[0][1]):
                 raise ValueError("Show3D panels must be all grayscale or all RGB")
-            stack = _display_ready_color(stack) if is_rgb else _validated_float32(stack, f"Panel {index}")
+            stack = _display_ready_color(stack) if is_rgb else _validated_stack(stack, f"Panel {index}")
             if index > 0 and stack.shape[1:3] != panels[0][0].shape[1:3]:
                 raise ValueError(
                     f"Panel {index} image shape {stack.shape[1:3]} must match panel 0 {panels[0][0].shape[1:3]}; "
@@ -1051,6 +1063,8 @@ class Show3D(
             self.shared_panel_source = False
             self._multi_panel_bin = 0
             data = np.concatenate(arrays, axis=2) if len(arrays) > 1 else arrays[0]
+        if not is_rgb and data.dtype != np.float32 and not exact_in_browser(data):
+            data = data.astype(np.float32)  # panels of different integer types joined to a wider one
         self._panel_width = int(arrays[0].shape[2])
         self.num_panel_cols = self._panel_width if len(arrays) > 1 else 0
         self.is_rgb = bool(is_rgb)
@@ -1099,7 +1113,10 @@ class Show3D(
         The diff modes overwrite the range with a zero-centred one; the copy in
         ``_data_min_off``/``_data_max_off`` is what turning a diff mode off restores.
         """
-        stack_min, stack_max = torch.aminmax(torch.from_numpy(self._data))
+        if self._data.dtype == np.float32:
+            stack_min, stack_max = torch.aminmax(torch.from_numpy(self._data))
+        else:
+            stack_min, stack_max = self._data.min(), self._data.max()
         self.data_min = float(stack_min)
         self.data_max = float(stack_max)
         self._data_min_off = self.data_min
@@ -1118,7 +1135,7 @@ class Show3D(
         data, is_rgb = _resolve_rgb_stack(data)
         if 0 in data.shape:
             raise ValueError(f"Empty stack: shape {data.shape}. All dims must be >= 1.")
-        data = _display_ready_color(data) if is_rgb else _validated_float32(data, "Stack")
+        data = _display_ready_color(data) if is_rgb else _validated_stack(data, "Stack")
         if self._roi_plot_timer is not None:
             self._roi_plot_timer.cancel()
             self._roi_plot_timer = None
