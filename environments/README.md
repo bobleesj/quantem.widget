@@ -12,13 +12,14 @@ Nothing else: the environment brings Python, Git, Node.js, JupyterLab and PyTorc
 
 ## Install
 
-Open a **Miniforge Prompt**, go to an empty folder, and paste this one line:
+Open a **Miniforge Prompt**, go to an empty folder, and paste:
 
 ```bash
-curl -LO https://raw.githubusercontent.com/bobleesj/quantem.widget/arina-pc/environments/arina-pc.yml && conda env create -f arina-pc.yml && call conda activate arina-pc && git clone -b arina-pc https://github.com/bobleesj/quantem.gpu.git && git clone -b arina-pc https://github.com/bobleesj/quantem.widget.git && pip install -e "quantem.gpu[cuda]" -e quantem.widget && widget build && jupyter lab quantem.widget/environments/browse.ipynb
+curl -LO https://raw.githubusercontent.com/bobleesj/quantem.widget/arina-pc/environments/install.bat && install.bat
 ```
 
-It takes several minutes. JupyterLab opens `browse.ipynb` when it is done.
+It prints five numbered steps and takes several minutes. JupyterLab opens `browse.ipynb` when it is done.
+Run `install.bat` again at any time to repair or update the installation: finished steps are skipped.
 
 ## Browse a scan
 
@@ -53,8 +54,9 @@ Then restart the notebook kernel.
 
 | What you see | What to do |
 |---|---|
+| Any step of the install stops | Read its last lines, fix that, run `install.bat` again |
+| `No module named ...` | The wrong Python is active: open a new Miniforge Prompt, `conda activate arina-pc`, run `install.bat` again |
 | `conda` is not recognized | Use the Miniforge Prompt, not the plain Command Prompt |
-| `CondaValueError: prefix already exists` | The environment is already there: run `conda activate arina-pc`, then the part of the install line after it |
 | `out of memory` when loading | The scan is too large for the card once compressed, or another notebook holds the card: shut down other kernels and try again |
 | The viewer area stays empty | Run `widget build`, restart the kernel, reload the browser tab |
 | `widget update` says a checkout could not be fast-forwarded | That folder has local changes; nothing was changed. Keep or undo them, then run it again |

@@ -1,0 +1,2 @@
+# cmd.exe needs CRLF in batch files, also when one is downloaded raw
+*.bat -text
