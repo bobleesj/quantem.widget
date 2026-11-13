@@ -76,7 +76,7 @@ viewer = Show4DSTEM(array, offline=True)
 viewer.export_html("show4dstem.html")
 ```
 
-Use the CLI `quantem-widget show4dstem ... --backend webgpu --html` folder export for
+Use the CLI `widget show4dstem ... --backend webgpu --html` folder export for
 a standalone browser viewer over large HDF5 acquisitions.
 
 ## Use the selected scan region in analysis
@@ -343,7 +343,7 @@ Quick decision rule:
   curation, and collaborator screening.
 - Use `interactive` only when the exported browser page must still recompute new
   detector ROIs from raw 4D data.
-- Use the CLI `quantem-widget show4dstem ... --backend webgpu --html --detector-bin 1 --dtype uint8`
+- Use the CLI `widget show4dstem ... --backend webgpu --html --detector-bin 1 --dtype uint8`
   for a terminal-made full-detector browser artifact that reads source H5 files.
 - Use `--dtype uint16` when a no-notebook user needs the wider detector-count
   range and accepts the larger browser/GPU memory footprint.
@@ -395,7 +395,7 @@ widget.export_html(
 Equivalent CLI for users who do not want a notebook:
 
 ```bash
-quantem-widget show4dstem /data/session --backend webgpu --html --count 7 --detector-bin 1 --dtype uint8 --save-dir ~/Downloads
+widget show4dstem /data/session --backend webgpu --html --count 7 --detector-bin 1 --dtype uint8 --save-dir ~/Downloads
 ```
 
 Both `scan_bin` and `detector_bin` use mean binning, not summing. This keeps display
@@ -451,8 +451,8 @@ precomputed `profile.bin`/`com.bin` sidecars; those are generated products, not
 the fast click-to-open path.
 
 ```bash
-quantem-widget show4dstem /path/to/h5_family --backend webgpu --html --detector-bin 1 --count 1
-quantem-widget show4dstem /path/to/h5_family --backend webgpu --html --detector-bin 1 --count 7
+widget show4dstem /path/to/h5_family --backend webgpu --html --detector-bin 1 --count 1
+widget show4dstem /path/to/h5_family --backend webgpu --html --detector-bin 1 --count 7
 ```
 
 The folder writes `Show4DSTEM.command`, a hidden `.viewer/` server/viewer

@@ -1,23 +1,23 @@
 # Command line
 
-Installing `quantem.widget` adds the `quantem-widget` command. `show2d` and `show3d`
+Installing `quantem.widget` adds the `widget` command. `show2d` and `show3d`
 turn image files into one shareable HTML page, `show4dstem` opens 4D-STEM
 acquisitions or creates a viewer notebook, and `github` makes a widget notebook
 displayable in GitHub's static preview.
 
 ```bash
-quantem-widget show2d a.dm4 b.tif c.png                   # images            -> one Show2D gallery page
-quantem-widget show2d ./survey/ --columns 4               # folder of images  -> one Show2D gallery page
-quantem-widget show3d stack.tif                           # (frames, rows, cols) file -> one Show3D page
-quantem-widget show3d ./frames/                           # folder of frames  -> one Show3D page
-quantem-widget show4dstem ./masters/                      # *_master.h5        -> live Show4DSTEM notebook
-quantem-widget show4dstem a_master.h5 b_master.h5         # several masters    -> one comparison viewer
-quantem-widget show4dstem ./masters/ --html               # 4D-STEM            -> shareable offline HTML
-quantem-widget show4dstem a.qem b.qem --html              # native QEM files   -> browser viewer folder
-quantem-widget github tutorial_github.ipynb --no-execute  # optional static copy for GitHub preview
-quantem-widget build                                      # source checkout    -> build the widgets' JavaScript
-quantem-widget build --watch                              # source checkout    -> rebuild on every save
-quantem-widget update                                     # source checkouts   -> pull quantem.gpu and quantem.widget, build
+widget show2d a.dm4 b.tif c.png                   # images            -> one Show2D gallery page
+widget show2d ./survey/ --columns 4               # folder of images  -> one Show2D gallery page
+widget show3d stack.tif                           # (frames, rows, cols) file -> one Show3D page
+widget show3d ./frames/                           # folder of frames  -> one Show3D page
+widget show4dstem ./masters/                      # *_master.h5        -> live Show4DSTEM notebook
+widget show4dstem a_master.h5 b_master.h5         # several masters    -> one comparison viewer
+widget show4dstem ./masters/ --html               # 4D-STEM            -> shareable offline HTML
+widget show4dstem a.qem b.qem --html              # native QEM files   -> browser viewer folder
+widget github tutorial_github.ipynb --no-execute  # optional static copy for GitHub preview
+widget build                                      # source checkout    -> build the widgets' JavaScript
+widget build --watch                              # source checkout    -> rebuild on every save
+widget update                                     # source checkouts   -> pull quantem.gpu and quantem.widget, build
 ```
 
 Other widgets (ShowPtycho) and whole notebooks export from
@@ -27,13 +27,13 @@ Python: `widget.export_html(...)`, or `jupyter nbconvert --to html notebook.ipyn
 
 | Command | Input | Output |
 |---|---|---|
-| `quantem-widget show2d <files / folder>` | 2D images (`.dm3/.dm4`, `.emd`, `.tif`, `.png`, `.jpg`, `.npy`) | one Show2D HTML page, one panel per image |
-| `quantem-widget show3d <stack / files / folder>` | a `.npy` or `.tif` stack, several stacks, 2D frame files, or a folder of frames | one Show3D HTML page |
-| `quantem-widget show4dstem <master(s) / folder>` | one or more `*_master.h5` | a live Show4DSTEM notebook (or `--html`) |
-| `quantem-widget show4dstem <file.qem ...> --html` | one or more native `.qem` files | a WebGPU folder that reads the encoded acquisitions |
-| `quantem-widget github <notebook.ipynb>` | an optional static copy of a notebook | strips widget state and embeds compressed pictures for GitHub's notebook preview |
-| `quantem-widget build [--watch]` | a source checkout installed with `pip install -e` (needs Node.js 20 or newer) | the widgets' JavaScript bundles; installs the Node packages on the first run; `--watch` rebuilds on save |
-| `quantem-widget update` | the quantem.gpu and quantem.widget source checkouts (needs Git) | each fast-forwarded on its own branch, then built; stops without changing anything when a checkout has local commits or edits in the way |
+| `widget show2d <files / folder>` | 2D images (`.dm3/.dm4`, `.emd`, `.tif`, `.png`, `.jpg`, `.npy`) | one Show2D HTML page, one panel per image |
+| `widget show3d <stack / files / folder>` | a `.npy` or `.tif` stack, several stacks, 2D frame files, or a folder of frames | one Show3D HTML page |
+| `widget show4dstem <master(s) / folder>` | one or more `*_master.h5` | a live Show4DSTEM notebook (or `--html`) |
+| `widget show4dstem <file.qem ...> --html` | one or more native `.qem` files | a WebGPU folder that reads the encoded acquisitions |
+| `widget github <notebook.ipynb>` | an optional static copy of a notebook | strips widget state and embeds compressed pictures for GitHub's notebook preview |
+| `widget build [--watch]` | a source checkout installed with `pip install -e` (needs Node.js 20 or newer) | the widgets' JavaScript bundles; installs the Node packages on the first run; `--watch` rebuilds on save |
+| `widget update` | the quantem.gpu and quantem.widget source checkouts (needs Git) | each fast-forwarded on its own branch, then built; stops without changing anything when a checkout has local commits or edits in the way |
 
 **HDF5 acquisitions** open a live, kernel-backed notebook by default, at full
 detector sampling. Supported acquisitions stay encoded on the GPU when the
@@ -59,9 +59,9 @@ writable folder.
 Use the CLI when you want a quick browser artifact from raw masters:
 
 ```bash
-quantem-widget show4dstem scan_001_master.h5 --backend webgpu --html --detector-bin 1
-quantem-widget show4dstem ./session_masters --backend webgpu --html --count 7 --detector-bin 1 --save-dir ~/Downloads
-quantem-widget show4dstem scan_001_master.h5 scan_002_master.h5 --backend webgpu --html --detector-bin 1
+widget show4dstem scan_001_master.h5 --backend webgpu --html --detector-bin 1
+widget show4dstem ./session_masters --backend webgpu --html --count 7 --detector-bin 1 --save-dir ~/Downloads
+widget show4dstem scan_001_master.h5 scan_002_master.h5 --backend webgpu --html --detector-bin 1
 ```
 
 `--detector-bin N` replaces each N x N detector block by its mean, rounded to the
@@ -76,7 +76,7 @@ Use `--backend webgpu --html --detector-bin 1` when the user wants the full nati
 detector sampling path without opening Jupyter:
 
 ```bash
-quantem-widget show4dstem /data/session --backend webgpu --html --count 7 --detector-bin 1 --dtype uint8 --save-dir ~/Downloads
+widget show4dstem /data/session --backend webgpu --html --count 7 --detector-bin 1 --dtype uint8 --save-dir ~/Downloads
 ```
 
 That command writes a browser folder with anonymous H5 symlinks plus
@@ -103,7 +103,7 @@ table.
 Pass existing `.qem` files directly when exporting encoded acquisitions:
 
 ```bash
-quantem-widget show4dstem a.qem b.qem --html --save-dir ./viewer
+widget show4dstem a.qem b.qem --html --save-dir ./viewer
 ```
 
 This route writes a WebGPU viewer folder and links the unchanged inputs under
@@ -123,11 +123,11 @@ page opens with no Python kernel and no network, on a laptop, on a phone, or
 inside another HTML page. It renders with WebGPU when the browser has it.
 
 ```bash
-quantem-widget show2d before.dm4 after.dm4 --labels before after --title "Anneal 300C"
-quantem-widget show2d ./survey/ --pattern "*.emd" --columns 4 --size small
-quantem-widget show3d drift_series.tif --title "Drift series" --fps 10
-quantem-widget show3d ./tilt_series/ --encoding uint8 --cmap gray
-quantem-widget show3d run_a.npy run_b.npy --title "Run A vs B"    # two stacks, side by side
+widget show2d before.dm4 after.dm4 --labels before after --title "Anneal 300C"
+widget show2d ./survey/ --pattern "*.emd" --columns 4 --size small
+widget show3d drift_series.tif --title "Drift series" --fps 10
+widget show3d ./tilt_series/ --encoding uint8 --cmap gray
+widget show3d run_a.npy run_b.npy --title "Run A vs B"    # two stacks, side by side
 ```
 
 What each input becomes:
@@ -199,13 +199,13 @@ Write without opening a browser, into a known folder, and read the one line it
 prints:
 
 ```bash
-quantem-widget show3d ./frames/ --title "Drift series" --no-open --save-dir ./report
+widget show3d ./frames/ --title "Drift series" --no-open --save-dir ./report
 # wrote ./report/drift_series_40x512x512_exact.html (55.4 MB, full float32)
 ```
 
 - Success exits 0 and prints `wrote <path> (<size> MB, <packing>)` on stdout.
 - A problem you can fix (a missing file, a label count, a page above
-  `--max-mb`) exits 1 with one `quantem-widget: ...` line on stderr naming the flag
+  `--max-mb`) exits 1 with one `widget: ...` line on stderr naming the flag
   that fixes it. Anything else is a bug and keeps its traceback.
 - `--title` sets the file name, so a script can predict it.
 - Before reporting what a page shows, open it in a browser and check
@@ -215,7 +215,7 @@ See [Agent-assisted development](agent-prompts.md) for a copyable prompt.
 
 ## GitHub preview copy
 
-GitHub's notebook renderer does not run widget JavaScript. `quantem-widget github`
+GitHub's notebook renderer does not run widget JavaScript. `widget github`
 edits a notebook copy in place: it strips the offline widget state, keeps each
 widget's Python-rendered scientific preview (or captures the full UI in a
 browser when no preview exists), re-encodes the pictures as JPEG and leaves the
@@ -224,7 +224,7 @@ first:
 
 ```bash
 cp analysis.ipynb analysis_github.ipynb
-quantem-widget github analysis_github.ipynb --no-execute
+widget github analysis_github.ipynb --no-execute
 ```
 
 ## Options
@@ -257,7 +257,7 @@ box and **Apple Metal (MPS)** on a Mac. `--backend webgpu` hands the compute to
 the browser instead of the Python process. On a MacBook:
 
 ```bash
-quantem-widget show4dstem ./masters/ --backend webgpu --html --count 1 --detector-bin 1
+widget show4dstem ./masters/ --backend webgpu --html --count 1 --detector-bin 1
 ```
 
 uses browser WebGPU and writes a double-clickable HDF5-backed folder without

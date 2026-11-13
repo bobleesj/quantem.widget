@@ -144,7 +144,7 @@ DISTRIBUTION = {"PIL": "pillow", "IPython": "ipython"}
 OPTIONAL = {
     "quantem": "quantem.gpu, and quantem core where it installs, guarded at the top of their adapter modules",
     "ipyfilechooser": "FolderPicker, used by quantem.live",
-    "playwright": "quantem-widget github widget screenshots",
+    "playwright": "widget github widget screenshots",
     "tqdm": "progress bars when it is installed",
     "ase": "DiffractionSim crystals; ASE arrives with quantem core, imported inside the functions that need it",
 }

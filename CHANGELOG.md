@@ -6,10 +6,14 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
-- `quantem-widget build` builds the widgets' JavaScript in a source checkout installed with `pip install -e`, from any
-  folder; it installs the Node packages on the first run. `quantem-widget build --watch` rebuilds on every save.
-- `quantem-widget update` fast-forwards the quantem.gpu and quantem.widget source checkouts on their own branches and
-  builds; it changes nothing when a checkout has local commits or edits in the way.
+- The command is `widget` (was `quantem-widget`), with no alias: `widget show2d`, `widget show3d`, `widget show3dslices`,
+  `widget show4dstem`, `widget github`.
+- `widget build` builds the widgets' JavaScript in a source checkout installed with `pip install -e`, from any folder;
+  it installs the Node packages on the first run. `widget build --watch` rebuilds on every save.
+- `widget update` fast-forwards the quantem.gpu and quantem.widget source checkouts on their own branches and builds;
+  it changes nothing when a checkout has local commits or edits in the way.
+- `environments/arina-pc.yml`: one conda environment (Python, Git, Node.js, JupyterLab, PyTorch for CUDA 13) for a
+  Windows PC with an NVIDIA card that runs both source checkouts.
 
 ## rc44 - 2026-11-11
 

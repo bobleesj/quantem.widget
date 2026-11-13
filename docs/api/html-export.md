@@ -9,7 +9,7 @@
    exports a whole notebook with its saved widget state (add `--execute` to
    rerun it first). Use this for reports and
    tutorials that combine text, figures, and multiple widgets.
-3. **GitHub preview notebook**: `quantem-widget github notebook.ipynb --no-execute`
+3. **GitHub preview notebook**: `widget github notebook.ipynb --no-execute`
    keeps a notebook readable on GitHub by replacing live widgets with compressed
    images of the widget UI.
 
@@ -95,7 +95,7 @@ When the exact data is too large for one file, Show2D and Show3D refuse above
 `max_mb` and name the smaller options (`encoding="uint8"`, `image_bin=2` or
 `4`); pass `max_mb=None` to force the size. Show4DSTEM interactive exports
 also stay one file, with the packed counts inside the page. The CLI WebGPU
-route (`quantem-widget show4dstem ... --backend webgpu --html`) instead keeps the data
+route (`widget show4dstem ... --backend webgpu --html`) instead keeps the data
 beside the page and serves it with `Show4DSTEM.command`: `index.html`,
 `Show4DSTEM.command`, `.viewer/`, and
 anonymous `dataset_NN_master.h5` / `dataset_NN_data_*.h5` links. Double-click
@@ -133,7 +133,7 @@ For raw HDF5 masters, prefer the CLI WebGPU folder route when the user wants
 native detector sampling without a notebook:
 
 ```bash
-quantem-widget show4dstem /data/session --backend webgpu --html --count 7 --detector-bin 1 --dtype uint8
+widget show4dstem /data/session --backend webgpu --html --count 7 --detector-bin 1 --dtype uint8
 ```
 
 Choose `dtype="uint8"` for compact browse payloads and `dtype="uint16"` when
@@ -185,10 +185,10 @@ HTML export and GitHub preview solve different problems:
 |---|---|---:|---|
 | normal `.ipynb` saved from Jupyter | notebook with widget state | yes, in Jupyter | continuing work |
 | `jupyter nbconvert --to html notebook.ipynb` | standalone HTML page | yes, in a browser | sharing an interactive report |
-| `quantem-widget github notebook.ipynb --no-execute` | optional notebook copy with compressed widget pictures | no | GitHub notebook preview |
+| `widget github notebook.ipynb --no-execute` | optional notebook copy with compressed widget pictures | no | GitHub notebook preview |
 
 GitHub does not run widget JavaScript. Use the hosted documentation, Colab,
-Jupyter, or the nbconvert HTML for real interaction. The `quantem-widget github` command is
+Jupyter, or the nbconvert HTML for real interaction. The `widget github` command is
 only for a separate non-interactive notebook copy for GitHub's native renderer;
 never run it in place on the canonical tutorial notebooks.
 

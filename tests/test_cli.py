@@ -405,22 +405,22 @@ def test_user_errors_print_one_line_and_bugs_keep_their_traceback(tmp_path, monk
     monkeypatch.setattr(reader, "ceiling", lambda device=None: 1000)
     assert cli.main(["show4dstem", str(tmp_path / "scan.npy"), "--html", "--no-open", "--save-dir", str(tmp_path / "out")]) == 1
     lines = capsys.readouterr().err.splitlines()
-    assert lines[0].startswith("quantem-widget: skipped scan: scan.npy: the dense (4, 4, 8, 8) array needs")
-    assert lines[1:] == ["quantem-widget: every master failed to export (see messages above)"]
+    assert lines[0].startswith("widget: skipped scan: scan.npy: the dense (4, 4, 8, 8) array needs")
+    assert lines[1:] == ["widget: every master failed to export (see messages above)"]
     assert cli.main(["show4dstem", str(tmp_path / "missing_master.h5"), "--no-open"]) == 1
-    assert capsys.readouterr().err.startswith("quantem-widget: ")
+    assert capsys.readouterr().err.startswith("widget: ")
 
     def raises(error):
         def command(args):
             raise error
         return command
 
-    monkeypatch.setattr(cli, "_prepare_github", raises(ImportError("quantem-widget github needs Playwright: pip install playwright")))
+    monkeypatch.setattr(cli, "_prepare_github", raises(ImportError("widget github needs Playwright: pip install playwright")))
     assert cli.main(["github", str(tmp_path / "x.ipynb")]) == 1
-    assert capsys.readouterr().err == "quantem-widget: quantem-widget github needs Playwright: pip install playwright\n"
+    assert capsys.readouterr().err == "widget: widget github needs Playwright: pip install playwright\n"
     monkeypatch.setattr(cli, "_prepare_github", raises(MemoryError()))
     assert cli.main(["github", str(tmp_path / "x.ipynb")]) == 1
-    assert capsys.readouterr().err == "quantem-widget: MemoryError\n"
+    assert capsys.readouterr().err == "widget: MemoryError\n"
     for bug in (TypeError("unsupported operand"), ImportError("cannot import name 'x'", name="quantem.widget.show2d")):
         monkeypatch.setattr(cli, "_prepare_github", raises(bug))
         with pytest.raises(type(bug)):
@@ -792,7 +792,7 @@ def test_show4dstem_html_serve_reports_every_file_and_the_url_before_blocking(tm
 def test_show4dstem_serve_without_html_is_refused_in_one_line(tmp_path, capsys):
     """--serve only applies to an --html export; a notebook run must not ignore it silently."""
     assert cli.main(["show4dstem", str(tmp_path), "--serve", "--no-open"]) == 1
-    assert capsys.readouterr().err == "quantem-widget: --serve opens an --html export over HTTP; add --html.\n"
+    assert capsys.readouterr().err == "widget: --serve opens an --html export over HTTP; add --html.\n"
 
 
 def test_show4dstem_cli_html_bin_announces_the_detector_binning(tmp_path, monkeypatch, capsys):
@@ -949,7 +949,7 @@ def test_page_commands_refuse_in_one_line_naming_the_flag(tmp_path, capsys, argv
     argv = [arg.replace("{in}", str(tmp_path / "in")) for arg in argv]
     assert cli.main([*argv, "--no-open", "--save-dir", str(tmp_path / "out")]) == 1
     error = capsys.readouterr().err
-    assert error.startswith("quantem-widget: ") and message in error and error.count("\n") == 1
+    assert error.startswith("widget: ") and message in error and error.count("\n") == 1
     assert not list((tmp_path / "out").glob("*.html")) if (tmp_path / "out").exists() else True
 
 

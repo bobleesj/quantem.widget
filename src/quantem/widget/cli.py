@@ -1,17 +1,17 @@
 """``quantem`` command-line interface for the jobs that need no notebook.
 
-    quantem-widget show2d a.dm4 b.tif c.npy --no-open          # images -> one shareable Show2D HTML page
-    quantem-widget show2d ./survey/ --columns 4 --no-open      # a folder of images -> one gallery page
-    quantem-widget show3d ./frames/ --no-open                  # a folder of frames -> one Show3D HTML page
-    quantem-widget show3d stack.tif --encoding uint8 --no-open # one (frames, rows, cols) file -> Show3D HTML
-    quantem-widget show3dslices volume.npy --sampling 15.12 0.178 0.178 --units A --no-open  # volume -> Show3DSlices
-    quantem-widget show4dstem ./masters/                       # *_master.h5 -> live Show4DSTEM notebook
-    quantem-widget show4dstem ./masters/ --backend webgpu --html   # HDF5-backed WebGPU browser folder
-    quantem-widget show4dstem a_master.h5 b_master.h5 --html   # packed offline HTML per master
-    quantem-widget github tutorial_github.ipynb --no-execute   # GitHub-displayable notebook copy
-    quantem-widget build                                       # source checkout: build the widgets' JavaScript
-    quantem-widget build --watch                               # rebuild each time a source file is saved
-    quantem-widget update                                      # source checkouts: pull quantem.gpu and quantem.widget, build
+    widget show2d a.dm4 b.tif c.npy --no-open          # images -> one shareable Show2D HTML page
+    widget show2d ./survey/ --columns 4 --no-open      # a folder of images -> one gallery page
+    widget show3d ./frames/ --no-open                  # a folder of frames -> one Show3D HTML page
+    widget show3d stack.tif --encoding uint8 --no-open # one (frames, rows, cols) file -> Show3D HTML
+    widget show3dslices volume.npy --sampling 15.12 0.178 0.178 --units A --no-open  # volume -> Show3DSlices
+    widget show4dstem ./masters/                       # *_master.h5 -> live Show4DSTEM notebook
+    widget show4dstem ./masters/ --backend webgpu --html   # HDF5-backed WebGPU browser folder
+    widget show4dstem a_master.h5 b_master.h5 --html   # packed offline HTML per master
+    widget github tutorial_github.ipynb --no-execute   # GitHub-displayable notebook copy
+    widget build                                       # source checkout: build the widgets' JavaScript
+    widget build --watch                               # rebuild each time a source file is saved
+    widget update                                      # source checkouts: pull quantem.gpu and quantem.widget, build
 
 ``show4dstem`` orchestrates master discovery and loading (quantem.gpu when it
 is installed, else the widget's dense reader), the ``Show4DSTEM`` widget and its
@@ -52,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
     """Entry point for the ``quantem`` console script. Parse args, dispatch to a
     subcommand, return a process exit code."""
     parser = argparse.ArgumentParser(
-        prog="quantem-widget",
+        prog="widget",
         description=("Write images as a shareable Show2D or Show3D HTML page, open 4D-STEM masters in "
                      "Show4DSTEM, make a widget notebook GitHub-displayable, or build a source checkout."),
     )
@@ -97,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError, ImportError, MemoryError, NotImplementedError) as error:
         if isinstance(error, ImportError) and (error.name or "").startswith("quantem.widget"):
             raise  # a broken import inside this package, not a missing install
-        print(f"quantem-widget: {' '.join(str(error).split()) or type(error).__name__}", file=sys.stderr)
+        print(f"widget: {' '.join(str(error).split()) or type(error).__name__}", file=sys.stderr)
         return 1
 
 
@@ -118,7 +118,7 @@ def _build(args: argparse.Namespace) -> int:
     npm = shutil.which("npm")
     if npm is None:
         raise OSError("npm was not found. Install Node.js 20 or newer (https://nodejs.org), open a new terminal "
-                      "and run quantem-widget build again.")
+                      "and run widget build again.")
     if not (checkout / "node_modules").is_dir():
         installed = subprocess.run([npm, "ci"], cwd=checkout).returncode
         if installed:
@@ -145,7 +145,7 @@ def _update() -> int:
             "this quantem.widget was installed from a wheel, not a source checkout. Update it with pip: "
             "pip install --upgrade quantem.widget")
     if shutil.which("git") is None:
-        raise OSError("git was not found. Install Git, open a new terminal and run quantem-widget update again.")
+        raise OSError("git was not found. Install Git, open a new terminal and run widget update again.")
     checkouts = [("quantem.widget", widget)]
     gpu = importlib.util.find_spec("quantem.gpu")
     gpu_checkout = pathlib.Path(gpu.origin).resolve().parents[3] if gpu is not None and gpu.origin else None
@@ -291,7 +291,7 @@ def _cell_has_widget_view_output(cell: dict) -> bool:
 
 
 def _cell_has_full_ui_output(cell: dict) -> bool:
-    """Return true when ``quantem-widget github`` already embedded the full widget UI."""
+    """Return true when ``widget github`` already embedded the full widget UI."""
     return _cell_has_marked_image(cell, "github_full_ui")
 
 
@@ -647,7 +647,7 @@ def _capture_full_ui(html: pathlib.Path, n_expected: int) -> list[bytes | None]:
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
-        raise ImportError("quantem-widget github needs Playwright to screenshot each widget: pip install playwright") from exc
+        raise ImportError("widget github needs Playwright to screenshot each widget: pip install playwright") from exc
     shots: list[bytes | None] = []
     launch_kwargs = {}
     for candidate in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
@@ -858,7 +858,7 @@ def _add_page_args(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_show2d_args(parser: argparse.ArgumentParser) -> None:
-    """Arguments of ``quantem-widget show2d``: image files, or one folder, to a Show2D page."""
+    """Arguments of ``widget show2d``: image files, or one folder, to a Show2D page."""
     parser.add_argument("path", nargs="+",
                         help="Image files (.dm3/.dm4, .emd, .tif, .png, .jpg, .npy), or one folder of them.")
     parser.add_argument("--pattern", default="*", help="Folder input: glob selecting the images (default *).")
@@ -867,7 +867,7 @@ def _add_show2d_args(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_show3d_args(parser: argparse.ArgumentParser) -> None:
-    """Arguments of ``quantem-widget show3d``: a stack file, 2D frame files or one folder of frames, to a Show3D page."""
+    """Arguments of ``widget show3d``: a stack file, 2D frame files or one folder of frames, to a Show3D page."""
     parser.add_argument("path", nargs="+",
                         help=("One (frames, rows, cols) .npy or .tif stack, several stacks (one panel each), "
                               "several 2D image files (one frame each), or one folder of frames."))
@@ -947,7 +947,7 @@ def _write_page(widget, args: argparse.Namespace) -> int:
 
 
 def _show2d(args: argparse.Namespace) -> int:
-    """``quantem-widget show2d``: every image becomes one panel of a Show2D page."""
+    """``widget show2d``: every image becomes one panel of a Show2D page."""
     from quantem.widget import Show2D, io
 
     title, files = _input_paths(args.path, args.pattern)
@@ -980,7 +980,7 @@ def _read_stack_file(path: pathlib.Path):
 
 
 def _show3d(args: argparse.Namespace) -> int:
-    """``quantem-widget show3d``: one stack per panel, or 2D files and folder frames played in order."""
+    """``widget show3d``: one stack per panel, or 2D files and folder frames played in order."""
     import numpy as np
 
     from quantem.widget import Show3D
@@ -1019,7 +1019,7 @@ def _show3d(args: argparse.Namespace) -> int:
 
 
 def _add_show3dslices_args(parser: argparse.ArgumentParser) -> None:
-    """Arguments of ``quantem-widget show3dslices``, named as the Show3DSlices keywords they set."""
+    """Arguments of ``widget show3dslices``, named as the Show3DSlices keywords they set."""
     parser.add_argument("path", help="One (slices, rows, cols) .npy or .tif volume; slice 0 is the beam entrance.")
     parser.add_argument("--save-dir", default=None, dest="save_dir", help="Output folder (default ~/Downloads).")
     parser.add_argument("--title", default=None, help="Page and widget title; also names the file (default: the file name).")
@@ -1046,7 +1046,7 @@ def _add_show3dslices_args(parser: argparse.ArgumentParser) -> None:
 
 
 def _show3dslices(args: argparse.Namespace) -> int:
-    """``quantem-widget show3dslices``: one volume file to a Show3DSlices page."""
+    """``widget show3dslices``: one volume file to a Show3DSlices page."""
     import numpy as np
 
     from quantem.widget import Show3DSlices
@@ -1194,7 +1194,7 @@ def _select_show4dstem_masters(masters: list[str], args: argparse.Namespace) -> 
 def _is_show4dstem_generated_master_link(path: pathlib.Path) -> bool:
     """Return whether *path* is a symlink created by a CLI WebGPU export.
 
-    Rerunning ``quantem-widget show4dstem <source-folder> --save-dir <source-folder>``
+    Rerunning ``widget show4dstem <source-folder> --save-dir <source-folder>``
     must select the original masters, not the anonymous ``dataset_XX``
     links placed in its owned ``*_show4dstem_webgpu`` output folder.
     """
@@ -1597,7 +1597,7 @@ def _render_4dstem(masters: list[str], args: argparse.Namespace) -> list[pathlib
             widget.export_html(str(out), title=args.title or stem, dtype=pack_dtype)
             outputs.append(out)
         except (RuntimeError, ValueError, OSError, MemoryError) as error:
-            print(f"quantem-widget: skipped {stem}: {error}", file=sys.stderr)
+            print(f"widget: skipped {stem}: {error}", file=sys.stderr)
     if not outputs:
         raise ValueError("every master failed to export (see messages above)")
     return outputs

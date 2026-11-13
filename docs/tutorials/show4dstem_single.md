@@ -40,7 +40,7 @@ Use the CLI when you want the same dataset in a local browser without keeping
 a notebook kernel alive:
 
 ```bash
-quantem-widget show4dstem /data/session/scan_001_master.h5 --backend webgpu --html
+widget show4dstem /data/session/scan_001_master.h5 --backend webgpu --html
 ```
 
 This keeps native detector sampling and uses the compact browser browse dtype.
