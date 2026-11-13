@@ -1382,6 +1382,7 @@ function Show3D() {
   const [cmap, setCmap] = useModelState<string>("cmap");
   const [thumbnails, setThumbnails] = useModelState<boolean>("thumbnails");
   const [thumbnailColumns, setThumbnailColumns] = useModelState<number>("thumbnail_columns");
+  const [newestFirst] = useModelState<boolean>("newest_first");
   // The model-backed setter can emit its React update after another synced
   // trait in the same control event. Direct WebGPU repaint paths must use the
   // palette selected by this event, not the palette from the previous render.
@@ -11280,6 +11281,7 @@ function Show3D() {
               driftBusy={driftBusy}
               driftStatus={driftStatus}
               drift={drift && Array.isArray((drift as { shift_px?: unknown }).shift_px) ? (drift as unknown as DriftReadout) : null}
+              newestFirst={!!newestFirst}
             />
           )}
           <Box

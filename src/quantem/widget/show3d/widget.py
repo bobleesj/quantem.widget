@@ -221,6 +221,10 @@ class Show3D(
         the viewer and the data keep native pixels.
     thumbnail_columns : {1, 2, 3}, default 2
         Thumbnails across the strip; the strip header switches it too.
+    newest_first : bool, optional
+        The newest frame at the top of the thumbnail strip, so frames that arrive live need no scrolling; on with
+        ``mode="stream"``, off otherwise unless given. Only the strip's order changes: frame numbers, the slider
+        and the frames picked for Find drift stay as they are.
     show_fft : bool
         Show the FFT of the current frame.
     fft_layout : {"bottom", "right", "overlay"}
@@ -430,6 +434,8 @@ class Show3D(
     # Frame thumbnails in a scrollable strip left of the viewer: hover shows a frame, click goes to it.
     thumbnails = traitlets.Bool(False).tag(sync=True)
     thumbnail_columns = traitlets.Int(2).tag(sync=True)
+    # the newest frame at the top of the strip, as a live stream needs (no scrolling down to what just arrived)
+    newest_first = traitlets.Bool(False).tag(sync=True)
 
     @traitlets.validate("thumbnail_columns")
     def _validate_thumbnail_columns(self, proposal: dict) -> int:
@@ -787,6 +793,7 @@ class Show3D(
         avg_window: int = 1,
         thumbnails: bool | None = None,
         thumbnail_columns: int = 2,
+        newest_first: bool | None = None,
         show_fft: bool = False,
         fft_layout: str = "bottom",
         fft_overlay_zoom: float = 1.0,
@@ -889,6 +896,7 @@ class Show3D(
             self.avg_window = int(avg_window)
             self.thumbnails = stream_mode if thumbnails is None else bool(thumbnails)
             self.thumbnail_columns = thumbnail_columns
+            self.newest_first = stream_mode if newest_first is None else bool(newest_first)
             self.show_fft = bool(show_fft)
             self.fft_layout = fft_layout
             self.fft_overlay_zoom = fft_overlay_zoom
@@ -1226,7 +1234,7 @@ class Show3D(
         "percentile_high", "percentile_low", "image_vmin_pct", "image_vmax_pct", "contrast_preset",
         "vmin", "vmax", "link_contrast", "link_panels", "view_state", "vmin_per_panel", "vmax_per_panel",
         "show_title", "show_stats", "show_controls", "controls_collapsed", "columns",
-        "panel_gap_px", "show_panel_titles", "show_zoom_indicator", "thumbnails", "thumbnail_columns", "show_fft", "fft_layout",
+        "panel_gap_px", "show_panel_titles", "show_zoom_indicator", "thumbnails", "thumbnail_columns", "newest_first", "show_fft", "fft_layout",
         "fft_overlay_position", "fft_overlay_size", "fft_overlay_zoom", "show_kymograph", "fft_window",
         "pixel_size", "pixel_unit", "smooth", "image_rotation", "rotation_scope", "frame_rotations",
         "flip_horizontal", "flip_vertical", "show_scale_bar", "panel_width_px", "fps", "avg_window", "loop",

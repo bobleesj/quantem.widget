@@ -51,6 +51,8 @@ export type ThumbnailStripProps = {
   driftBusy?: boolean;
   /** The last Find drift result, drawn as a chart under the thumbnails. */
   drift?: DriftReadout | null;
+  /** The newest frame first (at the top), as a live stream needs; frame numbers and picking are unchanged. */
+  newestFirst?: boolean;
 };
 
 /**
@@ -194,7 +196,7 @@ export function ThumbnailStrip(props: ThumbnailStripProps) {
             display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gridAutoRows: `${cell}px`, gap: `${GAP}px`,
             width: "100%",
           }}>
-          {Array.from({ length: frames }, (_, frame) => {
+          {Array.from({ length: frames }, (_, position) => (props.newestFirst ? frames - 1 - position : position)).map((frame) => {
             const selected = frame === currentFrame;
             // frames count from 1 as the slider does; a label that is only the 0-based index adds nothing
             const custom = labels?.[frame] && labels[frame] !== String(frame) ? labels[frame] : "";
