@@ -60,7 +60,7 @@ Show4DSTEM(loaded)
 
 The same call fits every common GPU size, because the encoded acquisition is a
 small fraction of the dense array. Memory pressure comes from what you read or
-reconstruct from it, such as large bounded reads or SSB workspaces.
+reconstruct from it, such as large bounded reads or direct ptychography workspaces.
 
 Check the GPU before and after a large load with `quantem.widget.profile()`:
 

@@ -4,6 +4,7 @@
     quantem-widget show2d ./survey/ --columns 4 --no-open      # a folder of images -> one gallery page
     quantem-widget show3d ./frames/ --no-open                  # a folder of frames -> one Show3D HTML page
     quantem-widget show3d stack.tif --encoding uint8 --no-open # one (frames, rows, cols) file -> Show3D HTML
+    quantem-widget show3dslices volume.npy --sampling 15.12 0.178 0.178 --units A --no-open  # volume -> Show3DSlices
     quantem-widget show4dstem ./masters/                       # *_master.h5 -> live Show4DSTEM notebook
     quantem-widget show4dstem ./masters/ --backend webgpu --html   # HDF5-backed WebGPU browser folder
     quantem-widget show4dstem a_master.h5 b_master.h5 --html   # packed offline HTML per master
@@ -53,6 +54,8 @@ def main(argv: list[str] | None = None) -> int:
         "show2d", help="Write image file(s) or a folder of images as one Show2D HTML page."))
     _add_show3d_args(subparsers.add_parser(
         "show3d", help="Write a stack file, image files or a folder of frames as one Show3D HTML page."))
+    _add_show3dslices_args(subparsers.add_parser(
+        "show3dslices", help="Write one (slices, rows, cols) volume as a Show3DSlices HTML page (3D view, top and side)."))
     _add_show4dstem_args(subparsers.add_parser(
         "show4dstem",
         help="Render 4D-STEM master(s) as Show4DSTEM (live notebook, or --html)."))
@@ -70,6 +73,8 @@ def main(argv: list[str] | None = None) -> int:
             return _show2d(args)
         if args.command == "show3d":
             return _show3d(args)
+        if args.command == "show3dslices":
+            return _show3dslices(args)
         return _show4dstem(args)
     except (OSError, ValueError, ImportError, MemoryError, NotImplementedError) as error:
         if isinstance(error, ImportError) and (error.name or "").startswith("quantem.widget"):
@@ -910,6 +915,64 @@ def _show3d(args: argparse.Namespace) -> int:
         raise ValueError("mix of 2D images and stacks; pass only stacks (one panel each) or only 2D frames")
     try:
         return _write_page(widget, args)
+    finally:
+        widget.close()
+
+
+def _add_show3dslices_args(parser: argparse.ArgumentParser) -> None:
+    """Arguments of ``quantem-widget show3dslices``, named as the Show3DSlices keywords they set."""
+    parser.add_argument("path", help="One (slices, rows, cols) .npy or .tif volume; slice 0 is the beam entrance.")
+    parser.add_argument("--save-dir", default=None, dest="save_dir", help="Output folder (default ~/Downloads).")
+    parser.add_argument("--title", default=None, help="Page and widget title; also names the file (default: the file name).")
+    parser.add_argument("--cmap", default="gray", help="Colormap (default gray).")
+    parser.add_argument("--vmin", type=float, default=None, help="Display contrast floor, in volume units.")
+    parser.add_argument("--vmax", type=float, default=None, help="Display contrast ceiling, in volume units.")
+    parser.add_argument("--sampling", type=float, nargs="+", default=None,
+                        help="Voxel size in --units: one value for every axis, or three for (slice, row, col).")
+    parser.add_argument("--units", default=None, help="Unit of --sampling, A or nm (default A).")
+    parser.add_argument("--slice-stretch", type=float, default=10.0, dest="slice_stretch",
+                        help="Display stretch of the depth axis, 1 to 50 (default 10).")
+    parser.add_argument("--view", default="tilted", choices=("tilted", "top", "side"),
+                        help="Opening camera of the 3D view: tilted (default, depth columns upright), top or side.")
+    parser.add_argument("--volume-opacity", type=float, default=0.6, dest="volume_opacity",
+                        help="Vol Strength of the 3D view, 0 to 1 (default 0.6).")
+    parser.add_argument("--slice-plane-opacity", type=float, default=0.25, dest="slice_plane_opacity",
+                        help="Opacity of the slice planes in the 3D view, 0 to 1 (default 0.25).")
+    parser.add_argument("--orthographic", action="store_true", help="Orthographic 3D projection (default perspective).")
+    parser.add_argument("--encoding", default="full", choices=("full", "uint8"),
+                        help="full keeps exact float32 voxels (default); uint8 packs the volume over its own range.")
+    parser.add_argument("--no-open", action="store_true", help="Write the page but do not open a browser.")
+    parser.add_argument("--serve", action="store_true",
+                        help="Open the page from a local HTTP server instead of file:// (a tunnelable URL).")
+
+
+def _show3dslices(args: argparse.Namespace) -> int:
+    """``quantem-widget show3dslices``: one volume file to a Show3DSlices page."""
+    import numpy as np
+
+    from quantem.widget import Show3DSlices
+
+    path = pathlib.Path(args.path).expanduser()
+    if not path.is_file():
+        raise FileNotFoundError(f"not found: {path}")
+    item = _read_stack_file(path)
+    volume = np.asarray(getattr(item, "array", item))
+    if volume.ndim != 3:
+        raise ValueError(f"{path.name} has shape {volume.shape}; Show3DSlices takes one (slices, rows, cols) volume")
+    if args.sampling is not None and len(args.sampling) not in (1, 3):
+        raise ValueError(f"--sampling takes one value or three (slice, row, col), got {len(args.sampling)}")
+    sampling = None if args.sampling is None else (args.sampling[0] if len(args.sampling) == 1 else tuple(args.sampling))
+    widget = Show3DSlices(volume, title=args.title or path.stem, cmap=args.cmap, vmin=args.vmin, vmax=args.vmax,
+                          sampling=sampling, units=args.units, slice_stretch=args.slice_stretch, view=args.view,
+                          volume_opacity=args.volume_opacity, slice_plane_opacity=args.slice_plane_opacity,
+                          orthographic=args.orthographic)
+    try:
+        out = _out_dir(args.save_dir) / widget._default_html_export_path(quantized=args.encoding == "uint8").name
+        widget.export_html(out, title=args.title, encoding=args.encoding)
+        print(f"wrote {out} ({out.stat().st_size / (1024 * 1024):.1f} MB, {args.encoding})", flush=True)
+        if not args.no_open:
+            _open_html(out, serve=args.serve, no_open=False)
+        return 0
     finally:
         widget.close()
 

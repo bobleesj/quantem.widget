@@ -49,7 +49,7 @@ its widget-manager runtime and opens with the network disconnected.
 | Maps with physical coordinates | [Plot2D](plot2d.ipynb) |
 | Time traces and metrics | [Show1D](show1d.ipynb) |
 | Scan positions and virtual detectors | [Show4DSTEM](show4dstem.ipynb) |
-| SSB phase and aberrations | [ShowPtycho workflow guide](showptycho.md) |
+| Direct ptychography phase and aberrations | [ShowPtycho workflow guide](showptycho.md) |
 
 These are separate workflows, not additional prerequisites for the two-step
 demo. ShowPtycho's linked page is a workflow guide, not a newly validated

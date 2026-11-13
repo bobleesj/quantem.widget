@@ -256,7 +256,7 @@ def show4dstem_gold(
     name = "Gold 4D-STEM bin8 preview"
     sampling = [float(value) * scan_stride if axis < 2 else float(value) for axis, value in enumerate(metadata["sampling"])]
     units = [str(unit) for unit in metadata["units"]]
-    # the sidecar's optics travel with the dataset under the .qem flat names, so Compute SSB reads them from it
+    # the sidecar's optics travel with the dataset under the .qem flat names, so Show4DSTEM.direct_phase() reads them from it
     optics = {"voltage_kV": metadata.get("voltage_kV"), "semiangle_mrad": metadata.get("probe_semiangle_mrad")}
     if gpu_adapter.is_acquisition(loaded):
         with loaded:

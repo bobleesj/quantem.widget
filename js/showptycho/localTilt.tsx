@@ -267,7 +267,7 @@ export function useLocalTiltWorkspace({ Panel, tc, ui, overviewSize, zoom, setZo
   const canReset=!!activeRegion||[resultZoom,...Object.values(individualZoom)].some(view=>view.zoom!==1||view.panX!==0||view.panY!==0);
   if(!configJson)return null;
   const toggle=<Box component="label" sx={{...label,display:'inline-flex',alignItems:'center'}}
-    title={available?'Show regional SSB alongside the full field':'Return to the full scan to edit local regions'}>
+    title={available?'Show regional direct ptychography alongside the full field':'Return to the full scan to edit local regions'}>
     Local Tilt<Switch size="small" inputProps={{'aria-label':'Local Tilt'}} checked={enabled&&available}
       disabled={!available} onChange={e=>setEnabled(e.target.checked)}/>
   </Box>;
@@ -338,7 +338,7 @@ export function useLocalTiltWorkspace({ Panel, tc, ui, overviewSize, zoom, setZo
         <Typography sx={{...value,color:tc.textMuted,mt:1}}>Tilt (row, col), mrad. One joint fit per region; uncertainty is not estimated.</Typography>
       </Box>;
   const comparison=panels.map((p:any)=>{
-    const fit=fits.find((f:any)=>`${f.label} · SSB`===p.meta.label);
+    const fit=fits.find((f:any)=>`${f.label} · Direct`===p.meta.label);
     const uncertainty=Number.isFinite(fit?.seed_sd_mrad)?` · SD ${fit.seed_sd_mrad.toFixed(3)}`:'';
     const region=regions.find(r=>r.id===fit?.id);
     if(fit&&!region)return null;

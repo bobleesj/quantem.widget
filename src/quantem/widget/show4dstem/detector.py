@@ -4,7 +4,7 @@ The widget owns the geometry of every virtual detector (``detector_mask``);
 ``quantem.gpu.detector`` uses the same definitions, which the parity tests
 check, so a viewer ROI and ``detector.bf`` / ``detector.adf`` are
 pixel-identical. The bright-field disk is quantem.gpu's
-``detector.bright_field_disk``, the disk SSB reads. This module turns the
+``detector.bright_field_disk``, the disk direct ptychography reads. This module turns the
 widget's ROI traits into masks and hands them to a detector session.
 """
 

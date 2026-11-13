@@ -1,4 +1,4 @@
-"""ShowPtycho: view a ptychographic reconstruction, and tune SSB aberrations on a quantem.gpu session.
+"""ShowPtycho: view a ptychographic reconstruction, and tune direct ptychography aberrations on a quantem.gpu session.
 
 Given an array (a phase image, or a complex object wave), the widget shows the phase, the
 amplitude of a complex wave, their FFT and histograms with a calibrated scale bar, on any
@@ -49,8 +49,8 @@ STARS_FILENAME = "showptycho_stars.json"
 CALIBRATION_FILENAME = "calibration.json"
 CALIBRATION_IMAGE_FILENAME = "calibration_phase.png"
 # every stored record names its layout; a reader takes the current value only
-CALIBRATION_SCHEMA = "quantem.ssb-calibration/8"
-STARS_SCHEMA = "quantem.ssb-stars/5"
+CALIBRATION_SCHEMA = "quantem.direct-calibration/9"
+STARS_SCHEMA = "quantem.direct-stars/6"
 MIN_CROP_SPAN = 32
 # Damping strengths a slider drags: the browser sends them and shows them itself.
 _BROWSER_STRENGTHS = ("phase_damp", "amplitude_damp", "smoothness_inv_A")
@@ -113,29 +113,29 @@ def nonzero_higher_order(aberrations: dict) -> dict:
 
 
 class ShowPtycho(anywidget.AnyWidget):
-    """Ptychographic reconstruction viewer, and SSB aberration explorer over a ``quantem.gpu.DirectPtycho`` session.
+    """Ptychographic reconstruction viewer, and direct ptychography aberration explorer over a ``quantem.gpu.DirectPtycho`` session.
 
     Parameters
     ----------
     data : array_like, quantem Dataset2d or quantem.gpu.DirectPtycho
         A 2D reconstruction (NumPy, torch, CuPy or anything ``np.asarray`` takes) or a prepared
-        SSB session. A ``Dataset2d`` gives its array and its sampling (a keyword that
+        Direct ptychography session. A ``Dataset2d`` gives its array and its sampling (a keyword that
         contradicts it raises). A real array is the phase (rad); a complex array is the object wave, shown as
         its phase (``angle``) and amplitude (``abs``). Tensors and CuPy arrays stay on their
         device until the 2D result is drawn. Arrays need no quantem.gpu; the aberration controls then stay
-        hidden and one line says what they need. An SSB session, normally after
+        hidden and one line says what they need. A direct ptychography session, normally after
         ``ptycho.aberrations()`` (quantem's default fit, model-based and tilt-corrected), is
         reused for its resident bright-field evidence and exclusively driven while the widget is
-        open. Joint fit, Refit SSB and Fit Regions use the same default fifth-order fit on both
+        open. Joint fit, Refit and Fit Regions use the same default fifth-order fit on both
         CUDA and MPS. A supplied broad fit retains its higher-order correction.
     sampling : float or (row, col), optional
-        Pixel size of an array in ``units``; it draws the scale bar and calibrates the FFT. An SSB
+        Pixel size of an array in ``units``; it draws the scale bar and calibrates the FFT. A direct ptychography
         session carries its own scan sampling.
     units : str, optional
         Length unit of ``sampling``: any length of ``quantem.widget.units``
         (``"angstrom"``, ``"Å"``, ``"A"``, ``"nm"``, ``"pm"``, ...); angstrom when omitted.
     save_dir : str or Path, optional
-        SSB session: where ``calibration.json`` and ``showptycho_stars.json`` are written; the
+        Direct ptychography session: where ``calibration.json`` and ``showptycho_stars.json`` are written; the
         working directory by default. A saved correction of the same
         acquisition, scan region and launch calibration is restored before the
         first preview.
@@ -153,7 +153,7 @@ class ShowPtycho(anywidget.AnyWidget):
         Open with the FFT panel visible.
     method : {"phase_of_mean", "phase", "complex"} or None, optional
         Direct reconstruction method. None restores a compatible saved method,
-        otherwise uses ``"phase_of_mean"``, conventional SSB (the phase of the
+        otherwise uses ``"phase_of_mean"``, conventional direct ptychography (the phase of the
         mean wave). An explicit method is never replaced by a save.
         Phase and complex are experimental CUDA methods using the same fitted
         optics; complex estimates log-amplitude and phase but displays phase.
@@ -178,7 +178,7 @@ class ShowPtycho(anywidget.AnyWidget):
         An explicit value overrides saved sampling, retaining the joint fit.
     local_tilt : bool or dict, optional
         True adds region selection to the existing viewer. Fit Regions jointly
-        optimizes aberrations, tilt and depth with the SSB backend, then crops
+        optimizes aberrations, tilt and depth with the direct ptychography backend, then crops
         each region from its full-scan reconstruction. Detector geometry and
         rotation stay common. A dict can supply ``scan_shape`` and ``regions``
         (id, label and bounds in row-start, row-stop, col-start, col-stop order).
@@ -193,7 +193,7 @@ class ShowPtycho(anywidget.AnyWidget):
         Saving retains the fitted tilt regardless of this display setting.
 
     A session opened from its master (``DirectPtycho.open("scan_master.h5", ...)``) records the file as its
-    ``source_path``: the toolbar then offers Crop and Refit SSB, which reloads only the selected
+    ``source_path``: the toolbar then offers Crop and Refit, which reloads only the selected
     scan region and fits it afresh, and every saved calibration and star names the file.
     """
 
@@ -215,14 +215,14 @@ class ShowPtycho(anywidget.AnyWidget):
 
     _esm = pathlib.Path(__file__).parent.parent / "static" / "showptycho.js"
 
-    # slider ranges: the physical span of the SSB fit's default search
+    # slider ranges: the physical span of the direct ptychography fit's default search
     C10_min_nm = traitlets.Float(-40.0).tag(sync=True)
     C10_max_nm = traitlets.Float(40.0).tag(sync=True)
     scan_detector_rotation_min_deg = traitlets.Float(-180.0).tag(sync=True)
     scan_detector_rotation_max_deg = traitlets.Float(180.0).tag(sync=True)
     # the physical scan-to-detector rotation as the slider holds it; files store it in [0, 360)
     scan_detector_rotation_deg = traitlets.Float(0.0).tag(sync=True)
-    # SSB phase is ambiguous by sign; the user picks the convention matching the expected contrast.
+    # Direct ptychography phase is ambiguous by sign; the user picks the convention matching the expected contrast.
     # Display only: never part of a numerical handoff.
     display_negate_phase = traitlets.Bool(False).tag(sync=True)
     # The phase panel's colormap and contrast window (rad), kept in step by the browser so Save
@@ -235,7 +235,7 @@ class ShowPtycho(anywidget.AnyWidget):
     fitted_C12_nm = traitlets.Float(0.0).tag(sync=True)
     fitted_phi12_deg = traitlets.Float(0.0).tag(sync=True)
     fitted_loss = traitlets.Float(None, allow_none=True).tag(sync=True)
-    # The kept fit's model agreement (higher is better) and its gain over standard SSB, None before a fit.
+    # The kept fit's model agreement (higher is better) and its gain over standard direct ptychography, None before a fit.
     fitted_sample_agreement = traitlets.Float(None, allow_none=True).tag(sync=True)
     fitted_tilt_fit_gain = traitlets.Float(None, allow_none=True).tag(sync=True)
     fitted_scan_detector_rotation_deg = traitlets.Float(0.0).tag(sync=True)
@@ -251,7 +251,7 @@ class ShowPtycho(anywidget.AnyWidget):
     scan_sampling_A = traitlets.List(traitlets.Float(), default_value=[]).tag(sync=True)
     # one-shot seed the browser reads at mount; the FFT switch takes over
     initial_fft_on = traitlets.Bool(False).tag(sync=True)
-    # SSB alias-order output sampling, not image interpolation
+    # Direct ptychography alias-order output sampling, not image interpolation
     upsample = traitlets.Union(
         [traitlets.Int(), traitlets.Enum(["auto"])], default_value="auto",
     ).tag(sync=True)
@@ -278,46 +278,46 @@ class ShowPtycho(anywidget.AnyWidget):
     num_bright_field_pixels = traitlets.Int(0).tag(sync=True)
     # higher-order panel: {C21_nm, phi21_deg, ..., C30_nm, ..., C50_nm, ...}
     higher_order_aberrations_json = traitlets.Unicode("{}").tag(sync=True)
-    # browser-side WebGPU SSB source, set by the folder export
+    # browser-side WebGPU direct ptychography source, set by the folder export
     webgpu_preview_enabled = traitlets.Bool(False).tag(sync=True)
     webgpu_cal_json = traitlets.Unicode("").tag(sync=True)
     webgpu_h5_source_json = traitlets.Unicode("").tag(sync=True)
-    # browser SSB status; only an exported folder runs SSB in the browser (a live notebook asks Python)
+    # browser direct ptychography status; only an exported folder runs direct ptychography in the browser (a live notebook asks Python)
     webgpu_preview_status = traitlets.Unicode("").tag(sync=True)
     webgpu_standalone = traitlets.Bool(False).tag(sync=True)
-    # crop and refit: rebuilds SSB from the raw scan region, not a display crop
+    # crop and refit: rebuilds direct ptychography from the raw scan region, not a display crop
     scan_rows = traitlets.Int(0).tag(sync=True)
     scan_cols = traitlets.Int(0).tag(sync=True)
     crop_refit_available = traitlets.Bool(False).tag(sync=True)
     crop_refit_status = traitlets.Unicode("").tag(sync=True)
     crop_refit_request_json = traitlets.Unicode("").tag(sync=True)
-    # thick-sample SSB: {"sample_tilt_mrad": [row, col], "depth_spread_nm"}; depth spread 0 is standard SSB
+    # thick-sample direct ptychography: {"sample_tilt_mrad": [row, col], "depth_spread_nm"}; depth spread 0 is standard direct ptychography
     sample_json = traitlets.Unicode("{}").tag(sync=True)
-    # Preview only: keep the fitted tilt when comparing against zero-tilt SSB.
+    # Preview only: keep the fitted tilt when comparing against zero-tilt direct ptychography.
     tilt_correction = traitlets.Bool(True).tag(sync=True)
     sample_available = traitlets.Bool(False).tag(sync=True)
     sample_fit_request = traitlets.Int(0).tag(sync=True)
     sample_fit_status = traitlets.Unicode("").tag(sync=True)
     sample_fit_json = traitlets.Unicode("").tag(sync=True)
     # an array input has no session: the browser hides the aberration controls and shows session_note
-    ssb_session = traitlets.Bool(True).tag(sync=True)
+    ptycho_session = traitlets.Bool(True).tag(sync=True)
     session_note = traitlets.Unicode("").tag(sync=True)
     # float32 amplitude of a complex object wave, row-major like phase_bytes; empty for a phase
     amplitude_bytes = traitlets.Bytes(b"").tag(sync=True)
 
     @property
-    def ssb_parameters(self) -> dict:
-        """Displayed shared optics for subsequent SSB calculations.
+    def ptycho_parameters(self) -> dict:
+        """Displayed shared optics for subsequent direct ptychography calculations.
 
         Sample tilt and depth spread belong to individual fits, so they are
         excluded. Coefficients use nm and degrees; rotation is in degrees.
 
         Examples
         --------
-        >>> parameters = viewer.ssb_parameters
+        >>> parameters = viewer.ptycho_parameters
         >>> parameters["aberrations"]["C10_nm"]
         """
-        if self._ssb is None:
+        if self._direct is None:
             return {}
         higher = json.loads(self.higher_order_aberrations_json or "{}")
         return {
@@ -327,7 +327,7 @@ class ShowPtycho(anywidget.AnyWidget):
 
     @property
     def source_path(self) -> str | None:
-        """The SSB session's acquisition file on this machine, or None for an array session.
+        """The direct ptychography session's acquisition file on this machine, or None for an array session.
 
         Held in memory for a handoff that loads the same data (myptycho's ``from_viewer``); the
         saved records name it portably instead (``source``: file name and relative path).
@@ -345,9 +345,9 @@ class ShowPtycho(anywidget.AnyWidget):
             before taking a snapshot.
         include_phase : bool, default False
             Reconstruct the full phase at this model using the prepared session.
-            The ``ssb_phase`` entry is an independent NumPy array in radians
+            The ``direct_phase`` entry is an independent NumPy array in radians
             covering the measured ``scan_shape`` times ``upsample``:
-            positions quantem.gpu padded for its FFT are removed. No second SSB
+            positions quantem.gpu padded for its FFT are removed. No second direct ptychography
             session or aberration search is created.
 
         Returns
@@ -357,7 +357,7 @@ class ShowPtycho(anywidget.AnyWidget):
             ``calibration.json`` Save writes; ``id`` and ``generated_at_utc``
             are None until saved. Regional records contain their own jointly fitted
             aberrations, scan-frame tilt, depth spread and full-acquisition scan bounds.
-            ``region_fit["bounds"]`` remains relative to the SSB session.
+            ``region_fit["bounds"]`` remains relative to the direct ptychography session.
             Display contrast, zoom and the tilt-comparison toggle do not change
             this model. No file is written and no optimization runs. Without
             ``include_phase``, every entry is JSON serializable.
@@ -367,9 +367,9 @@ class ShowPtycho(anywidget.AnyWidget):
         >>> model = viewer.calibration(region="Region 2")
         >>> model["sample_tilt_mrad"]
         """
-        if self._ssb is None:
+        if self._direct is None:
             raise ValueError(
-                "Open ShowPtycho on an SSB session to reuse its calibration."
+                "Open ShowPtycho on a direct ptychography session to reuse its calibration."
             )
         if self._region_busy:
             raise RuntimeError(
@@ -387,9 +387,9 @@ class ShowPtycho(anywidget.AnyWidget):
                     f"Region {region!r} is not unique or fitted. Choose a current region label or ID."
                 )
             fit = matches[0]
-        state = self._ssb.state()
+        state = self._direct.state()
         sample = self._sample() if self.sample_available else None
-        aberrations = self.ssb_parameters["aberrations"]
+        aberrations = self.ptycho_parameters["aberrations"]
         # The overview reports the loss Save stores: the accepted model with its
         # fitted tilt, whatever the tilt-comparison view or the last drag showed.
         loss = None if fit is not None else self._accepted_loss(aberrations, sample)
@@ -409,7 +409,7 @@ class ShowPtycho(anywidget.AnyWidget):
             )
         record = json.loads(json.dumps(record, allow_nan=False))
         if include_phase:
-            phase, _ = self._ssb.preview(
+            phase, _ = self._direct.preview(
                 record["aberrations"],
                 sample_tilt_mrad=record["sample_tilt_mrad"] or (0.0, 0.0),
                 depth_spread_nm=record["depth_spread_nm"] or 0.0,
@@ -418,15 +418,15 @@ class ShowPtycho(anywidget.AnyWidget):
                 compute_loss=False,
             )
             rows, cols = state["input_scan_shape"]
-            record["ssb_phase"] = self._ssb.crop_native(
+            record["direct_phase"] = self._direct.crop_native(
                 phase, (0, rows, 0, cols), record["upsample"])
         return record
 
     def _region_reference(self) -> dict:
         """Shared optics and output sampling that regional images were computed at."""
-        if self._ssb is None:
+        if self._direct is None:
             return {}
-        return {**self.ssb_parameters, "upsample": self._output_factor}
+        return {**self.ptycho_parameters, "upsample": self._output_factor}
 
     def _on_region_optics_change(self, change) -> None:
         """Invalidate local results when their shared optics or output sampling change."""
@@ -465,7 +465,7 @@ class ShowPtycho(anywidget.AnyWidget):
 
     @property
     def region_fits(self) -> list[dict]:
-        """Current SSB fit records, including ``sample_tilt_mrad`` in (row, col).
+        """Current direct ptychography fit records, including ``sample_tilt_mrad`` in (row, col).
 
         Raises
         ------
@@ -503,7 +503,7 @@ class ShowPtycho(anywidget.AnyWidget):
         state["regions"] = selected
         state["fits"] = [fit for fit in state.get("fits", []) if fit["id"] in retained]
         state["map"] = [fit for fit in state.get("map", []) if fit["id"] in retained]
-        labels = {name for region in selected for name in (region["label"], f"{region['label']} · SSB")}
+        labels = {name for region in selected for name in (region["label"], f"{region['label']} · Direct")}
         metadata = json.loads(self.local_tilt_images_json)
         sampling = {entry["label"]: entry["sampling_A"] for entry in metadata}
         with self.hold_sync():
@@ -518,7 +518,7 @@ class ShowPtycho(anywidget.AnyWidget):
     def region_images(self) -> dict[str, np.ndarray]:
         """Copies of the current named phase arrays at their original dtype.
 
-        Native SSB results are cropped from full-scan reconstructions using
+        Native direct ptychography results are cropped from full-scan reconstructions using
         each region's jointly fitted optics, tilt and depth. Custom callbacks
         may supply their own phases. Arrays precede float32 display transport.
         Changing the selection makes this property raise until images for that
@@ -539,7 +539,7 @@ class ShowPtycho(anywidget.AnyWidget):
     ) -> list[dict]:
         """Jointly fit optics, tilt and depth in the current rectangles.
 
-        With a live SSB session this uses QuantEM directly, keeps the overview
+        With a live direct ptychography session this uses QuantEM directly, keeps the overview
         calibration unchanged and displays crops of full-scan reconstructions.
         A custom callback may override the fitting for supplied image arrays.
 
@@ -554,7 +554,7 @@ class ShowPtycho(anywidget.AnyWidget):
         Returns
         -------
         list[dict]
-            Current SSB fit records with local tilt in (row, col) mrad.
+            Current direct ptychography fit records with local tilt in (row, col) mrad.
 
         Examples
         --------
@@ -689,7 +689,7 @@ class ShowPtycho(anywidget.AnyWidget):
     ) -> None:
         self._method_explicit = method is not None
         method = "phase_of_mean" if method is None else method
-        is_array = not gpu_adapter.is_ssb(data)
+        is_array = not gpu_adapter.is_direct_ptycho(data)
         if method != "phase_of_mean" and is_array:
             raise ValueError("Reconstruction methods need a DirectPtycho session; an array is already reconstructed.")
         if method != "phase_of_mean" and (local_tilt or fit_regions or reconstruct_regions):
@@ -704,11 +704,11 @@ class ShowPtycho(anywidget.AnyWidget):
             if not valid:
                 raise ValueError("upsample must be 'auto' or an integer from 1, 2, 3, 4, 8; use upsample='auto'.")
             if is_array:
-                raise ValueError("upsample needs an SSB session; an array is already reconstructed.")
+                raise ValueError("upsample needs a direct ptychography session; an array is already reconstructed.")
         restore_regions = local_tilt is True
         if local_tilt is True:
             if is_array:
-                raise ValueError("local_tilt=True needs a live SSB session. Pass ShowPtycho(ptycho, local_tilt=True).")
+                raise ValueError("local_tilt=True needs a live direct ptychography session. Pass ShowPtycho(ptycho, local_tilt=True).")
             rows, cols = data.input_scan_shape
             local_tilt = {
                 "scan_shape": [rows, cols],
@@ -734,7 +734,7 @@ class ShowPtycho(anywidget.AnyWidget):
         if is_array:
             data = device_array(data)  # a tensor or CuPy array stays on its GPU until the 2D result is drawn
         if not is_array and sampling is not None:
-            raise ValueError("sampling describes an array; an SSB session carries its own scan_sampling_A.")
+            raise ValueError("sampling describes an array; a direct ptychography session carries its own scan_sampling_A.")
         super().__init__()
         self.method = method
         self.compute_loss = compute_loss
@@ -752,7 +752,7 @@ class ShowPtycho(anywidget.AnyWidget):
         self.detector_weighting = "uniform" if detector_weighting is None else detector_weighting
         self._launch_calibration = None
         self._launch_calibration_shown = False
-        self._ssb = None if is_array else data
+        self._direct = None if is_array else data
         self._region_fit_parameters: dict = {}
         self._region_fit_options: dict = {"trials": 200}
         self._pinned: list[dict] = []
@@ -811,17 +811,17 @@ class ShowPtycho(anywidget.AnyWidget):
                 self.amplitude_bytes = drawn["amplitude"].tobytes()
             if given is not None and None not in given:  # both steps known: one open axis leaves the image uncalibrated
                 self.object_sampling_A = [float(step) for step in given]
-            self.ssb_session = False
+            self.ptycho_session = False
             self.session_note = session_note()
             return
-        self._ssb = gpu_adapter.DirectSession(data)
+        self._direct = gpu_adapter.DirectSession(data)
         self._owned_crop_session = None  # the session Crop and Refit made, closed when the next crop replaces it
         if local_tilt is not None and fit_regions is None and reconstruct_regions is None:
             self._region_callbacks = {
                 "fit": self._fit_native_regions, "reconstruct": self._fit_native_regions}
             self.local_tilt_can_fit = True
             self.local_tilt_can_reconstruct = True
-        state = self._ssb.state()
+        state = self._direct.state()
         self.regularization_available = state["backend"] == "cuda"
         self._check_method()
         self._source_path = state["source_path"]
@@ -831,17 +831,17 @@ class ShowPtycho(anywidget.AnyWidget):
         self._stars_path = save_root / STARS_FILENAME
         self._calibration_path = save_root / CALIBRATION_FILENAME
         self._calibration_image_path = save_root / CALIBRATION_IMAGE_FILENAME
-        self._calibration_identity = self._ssb.calibration_identity()
+        self._calibration_identity = self._direct.calibration_identity()
         self.stars_path = str(self._stars_path.resolve())
         self.upsample_available = state["backend"] in ("cuda", "mps")
-        from quantem.gpu.optics.physics import ssb_upsample_factor, ssb_upsample_requirement
+        from quantem.gpu.optics.physics import direct_auto_upsample, direct_upsample_requirement
 
         try:
-            self.auto_upsample = ssb_upsample_factor(
+            self.auto_upsample = direct_auto_upsample(
                 voltage_kV=state["voltage_kV"], semiangle_mrad=state["semiangle_mrad"],
                 scan_sampling_A=state["scan_sampling_A"],
             )
-            required = ssb_upsample_requirement(
+            required = direct_upsample_requirement(
                 voltage_kV=state["voltage_kV"], semiangle_mrad=state["semiangle_mrad"],
                 scan_sampling_A=state["scan_sampling_A"],
             )
@@ -851,11 +851,11 @@ class ShowPtycho(anywidget.AnyWidget):
         except ValueError as exc:
             # Invalid calibration still opens at native sampling.
             self.auto_sampling_note = (
-                f"Automatic SSB output sampling is unavailable: {exc} "
+                f"Automatic direct ptychography output sampling is unavailable: {exc} "
                 "Showing native sampling (upsample=1); set upsample to 2, 3, 4 or 8 for finer output.")
             self.upsample = 1
             print(f"ShowPtycho: {self.auto_sampling_note}")
-        self.sample_available = True  # CUDA and MPS, the SSB backends, both fit the thick-sample model
+        self.sample_available = True  # CUDA and MPS, the direct ptychography backends, both fit the thick-sample model
         self.scan_sampling_A = state["scan_sampling_A"]
         restored = None
         if restore and self._calibration_path.is_file():
@@ -918,7 +918,7 @@ class ShowPtycho(anywidget.AnyWidget):
             if self._method_explicit and saved_method != self.method:
                 raise ValueError("the requested reconstruction method differs from the saved review")
             self._check_method(saved_method)
-            self._ssb.restore_calibration(saved)
+            self._direct.restore_calibration(saved)
         except (OSError, ValueError, KeyError, TypeError) as exc:
             self.calibration_status = f"Saved fit not restored: {exc}. Use Joint fit, then Save."
             return
@@ -958,18 +958,18 @@ class ShowPtycho(anywidget.AnyWidget):
             )]
             images = {}
             for fit in fits:
-                phase, _ = self._ssb.preview(
+                phase, _ = self._direct.preview(
                     fit["aberrations"], sample_tilt_mrad=fit["sample_tilt_mrad"],
                     depth_spread_nm=fit["depth_spread_nm"],
                     upsample=self._output_factor,
                     compute_loss=False,
                 )
-                images[f"{fit['label']} · SSB"] = self._ssb.crop_native(
+                images[f"{fit['label']} · Direct"] = self._direct.crop_native(
                     phase, fit["bounds"], self._output_factor)
             self.local_tilt_json = json.dumps({
                 "scan_shape": list(self._source_scan_shape), "regions": regions,
                 "fits": fits, "map": fits,
-                "reference_parameters": self.ssb_parameters,
+                "reference_parameters": self.ptycho_parameters,
             }, allow_nan=False)
             if images:
                 self.set_region_images(images, sampling_A=self.scan_sampling_A[0] / self._output_factor)
@@ -981,7 +981,7 @@ class ShowPtycho(anywidget.AnyWidget):
     def _fit_native_regions(self, regions: list[dict], *, only_changed: bool = False,
                             force_region: str | None = None,
                             progress: Callable[[dict], None] | None = None) -> dict:
-        """Use the current full-scan SSB backend without notebook callbacks."""
+        """Use the current full-scan direct ptychography backend without notebook callbacks."""
         state = json.loads(self.local_tilt_json)
         previous = {fit["id"]: fit for fit in state.get("fits", [])}
         retained = {
@@ -990,19 +990,19 @@ class ShowPtycho(anywidget.AnyWidget):
             and region["id"] != force_region and region["id"] in previous
             and previous[region["id"]]["bounds"] == region["bounds"]
             and previous[region["id"]]["label"] == region["label"]
-            and f"{region['label']} · SSB" in self._region_images
+            and f"{region['label']} · Direct" in self._region_images
         }
         changed = [region for region in regions if region["id"] not in retained]
-        result = self._ssb.fit_regions(
-            changed, self.ssb_parameters,
+        result = self._direct.fit_regions(
+            changed, self.ptycho_parameters,
             upsample=self._output_factor,
             progress=progress, **self._region_fit_options)
         updated = {fit["id"]: fit for fit in result["fits"]}
         result["fits"] = [updated.get(region["id"], retained.get(region["id"])) for region in regions]
-        result["images"].update({f"{fit['label']} · SSB": self._region_images[f"{fit['label']} · SSB"]
+        result["images"].update({f"{fit['label']} · Direct": self._region_images[f"{fit['label']} · Direct"]
                                  for fit in retained.values()})
         result["images"] = {
-            f"{region['label']} · SSB": result["images"][f"{region['label']} · SSB"]
+            f"{region['label']} · Direct": result["images"][f"{region['label']} · Direct"]
             for region in regions
         }
         result.update(regions=regions, map=result["fits"], fitted_region_count=len(changed))
@@ -1025,10 +1025,10 @@ class ShowPtycho(anywidget.AnyWidget):
             if not all(np.isfinite(v) for v in [*optics.values(), *sample["sample_tilt_mrad"], sample["depth_spread_nm"]]):
                 raise ValueError("Use finite regional optical and sample parameters.")
             model = sample if sample["depth_spread_nm"] > 0 else {}
-            phase, loss = self._ssb.preview(
+            phase, loss = self._direct.preview(
                 optics, **model, upsample=self._output_factor,
                 compute_loss=self.compute_loss and bool(request.get("committed")))
-            crop = self._ssb.crop_native(phase, fit["bounds"], self._output_factor)
+            crop = self._direct.crop_native(phase, fit["bounds"], self._output_factor)
             fitted = fit.get("fitted_parameters", {
                 "aberrations": fit["aberrations"], "sample_tilt_mrad": fit["sample_tilt_mrad"],
                 "depth_spread_nm": fit["depth_spread_nm"],
@@ -1040,7 +1040,7 @@ class ShowPtycho(anywidget.AnyWidget):
             state["fits"] = [fit if item["id"] == fit["id"] else item for item in state["fits"]]
             state["map"] = state["fits"]
             images = dict(self._region_images)
-            images[f"{fit['label']} · SSB"] = crop
+            images[f"{fit['label']} · Direct"] = crop
             with self.hold_sync():
                 self.set_region_images(images, sampling_A=self.scan_sampling_A[0] / self._output_factor)
                 self.local_tilt_json = json.dumps(state, allow_nan=False)
@@ -1055,10 +1055,10 @@ class ShowPtycho(anywidget.AnyWidget):
         spans at least +-180 deg so negative microscope conventions need no mental +180; the C10 range
         widens to include an outlier fit so the reference is always reachable.
         """
-        state = self._ssb.state()
+        state = self._direct.state()
         rotation = state["scan_detector_rotation_deg"]
         fitted = state["aberrations"]
-        self._ssb.set_scan_detector_rotation(rotation)
+        self._direct.set_scan_detector_rotation(rotation)
         # Publish one complete model before any observer can request a preview.
         # This also covers initial sample adoption and crop-refit replacements.
         self._adopting = True
@@ -1101,7 +1101,7 @@ class ShowPtycho(anywidget.AnyWidget):
         only within one objective, so the trials are ordered by objective, in the order the fit ran them, and best
         first within each.
         """
-        finite = [trial for trial in self._ssb.trials() if finite_or_none(trial["loss"]) is not None]
+        finite = [trial for trial in self._direct.trials() if finite_or_none(trial["loss"]) is not None]
         objectives = list(dict.fromkeys(trial["objective"] for trial in finite))
         ranked = sorted(finite, key=lambda trial: (objectives.index(trial["objective"]), float(trial["loss"])))
         payload = [{"rank": rank, **trial, "loss": float(trial["loss"])} for rank, trial in enumerate(ranked[:max_trials])]
@@ -1113,7 +1113,7 @@ class ShowPtycho(anywidget.AnyWidget):
         return {name: float(self._last_result.get(name, value)) for name, value in fitted.items()}
 
     def _sample(self) -> dict | None:
-        """The Sample panel as ``{sample_tilt_mrad, depth_spread_nm}``, or None for standard SSB (depth spread 0)."""
+        """The Sample panel as ``{sample_tilt_mrad, depth_spread_nm}``, or None for standard direct ptychography (depth spread 0)."""
         values = json.loads(self.sample_json or "{}")
         depth_spread_nm = float(values.get("depth_spread_nm", 0.0))
         if depth_spread_nm <= 0.0:
@@ -1165,11 +1165,11 @@ class ShowPtycho(anywidget.AnyWidget):
         moved = [] if previous is None else [name for name in model if previous.get(name, model[name]) != model[name]]
         if not moved and same_options and getattr(self, "_drag_control", None):
             moved = [self._drag_control]
-        dragging = not compute_loss and same_options and len(moved) == 1 and getattr(self._ssb, "drag_windows", False)
+        dragging = not compute_loss and same_options and len(moved) == 1 and getattr(self._direct, "drag_windows", False)
         if dragging:
-            phase, loss = self._ssb.drag(moved[0], model, **options), None
+            phase, loss = self._direct.drag(moved[0], model, **options), None
         else:
-            phase, loss = self._ssb.preview(model, compute_loss=compute_loss and self.compute_loss, **options)
+            phase, loss = self._direct.preview(model, compute_loss=compute_loss and self.compute_loss, **options)
         rotating = self.scan_detector_rotation_deg != getattr(self, "_drag_rotation", self.scan_detector_rotation_deg)
         self._drag_model, self._drag_options_key = model, options_key
         self._drag_rotation = self.scan_detector_rotation_deg
@@ -1192,13 +1192,13 @@ class ShowPtycho(anywidget.AnyWidget):
             self.result_json = json.dumps(self._last_result)
         if dragging:
             # one window node per frame, after the frame has left
-            self._ssb.advance()
-        elif (compute_loss or not (same_options or rotating)) and getattr(self._ssb, "drag_windows", False):
+            self._direct.advance()
+        elif (compute_loss or not (same_options or rotating)) and getattr(self._direct, "drag_windows", False):
             # a release, the first frame, a method switch or other settings (not a rotation drag frame): windows
             # along the slider just used and the three main ones build while the sliders rest, so the next grab
             # starts on window frames (no work once they exist for these inputs)
             controls = dict.fromkeys(moved + ["C10_nm", "C12_nm", "phi12_deg"])
-            self._ssb.prepare(controls, model, **options)
+            self._direct.prepare(controls, model, **options)
             self._schedule_window_build()
 
     def _schedule_window_build(self) -> None:
@@ -1206,7 +1206,7 @@ class ShowPtycho(anywidget.AnyWidget):
         from tornado.ioloop import IOLoop
 
         def build():
-            self._window_build = not self._ssb.advance()
+            self._window_build = not self._direct.advance()
             if self._window_build:
                 IOLoop.current().call_later(0.0, build)
 
@@ -1227,7 +1227,7 @@ class ShowPtycho(anywidget.AnyWidget):
 
     def _on_preview_message(self, widget, content: dict, buffers) -> None:
         """Receive a bounded preview command without the generic trait throttle."""
-        if content.get("type") == "ssb-preview":
+        if content.get("type") == "direct-preview":
             self._on_request(content["request"])
 
     def _on_request(self, request: dict) -> None:
@@ -1265,7 +1265,7 @@ class ShowPtycho(anywidget.AnyWidget):
                 rotation = request.get("scan_detector_rotation_deg")
                 if rotation is not None and rotation != self.scan_detector_rotation_deg:
                     self.scan_detector_rotation_deg = float(rotation)
-                    self._ssb.set_scan_detector_rotation(float(rotation))
+                    self._direct.set_scan_detector_rotation(float(rotation))
         finally:
             self._adopting = False
             self._property_lock = previous_lock
@@ -1311,7 +1311,7 @@ class ShowPtycho(anywidget.AnyWidget):
         """
         if self._adopting:
             return
-        self._ssb.set_scan_detector_rotation(float(change["new"]))
+        self._direct.set_scan_detector_rotation(float(change["new"]))
         from_browser = change["name"] in self._property_lock
         self._reconstruct_displayed(compute_loss=not from_browser)
 
@@ -1340,14 +1340,14 @@ class ShowPtycho(anywidget.AnyWidget):
         if not change["new"]:
             return
         if not self.sample_available:
-            self.sample_fit_status = "Tilt fit failed: needs a CUDA or MPS SSB session."
+            self.sample_fit_status = "Tilt fit failed: needs a CUDA or MPS direct ptychography session."
             return
         self.sample_fit_status = "Fitting initial optics, tilt and depth..."
         def show_initial(result):
             self._adopt_session(initial=False, compute_loss=False, restore_tilt=True)
             self.sample_fit_status = "Initial phase ready · refining through fifth order..."
         try:
-            result = self._ssb.aberrations(
+            result = self._direct.aberrations(
                 search="standard",
                 tilt=True, check_rotation=False, compare_standard=False, verbose=False,
                 on_initial_fit=show_initial)
@@ -1365,7 +1365,7 @@ class ShowPtycho(anywidget.AnyWidget):
                 "sample_tilt_mrad": [tilt_row, tilt_col],
                 "depth_spread_nm": result["depth_spread_nm"],
             })
-        propagator_tilt = self._ssb.propagator_tilt_mrad((tilt_row, tilt_col), self.scan_detector_rotation_deg)
+        propagator_tilt = self._direct.propagator_tilt_mrad((tilt_row, tilt_col), self.scan_detector_rotation_deg)
         self.sample_fit_json = json.dumps({
             **result["aberrations"], "sample_tilt_mrad": [tilt_row, tilt_col], "propagator_tilt_mrad": propagator_tilt,
             "depth_spread_nm": result["depth_spread_nm"], "tilt_fit_gain": result["tilt_fit_gain"],
@@ -1377,7 +1377,7 @@ class ShowPtycho(anywidget.AnyWidget):
         )
 
     def _on_crop_refit_request(self, change) -> None:
-        """Fit SSB on one scan crop and make it the widget's session.
+        """Fit direct ptychography on one scan crop and make it the widget's session.
 
         ``quantem.gpu.DirectPtycho.select_region`` builds the crop session from the current session's evidence
         (borrowed resident counts, or the crop decoded from the source), with the same acquisition
@@ -1395,40 +1395,40 @@ class ShowPtycho(anywidget.AnyWidget):
                 raise ValueError("scan_region must be (row_start, row_stop, col_start, col_stop)")
             trials = int(request.get("trials", 200))
             if trials < 1:
-                raise ValueError("SSB refit needs at least one optimization trial.")
+                raise ValueError("Direct ptychography refit needs at least one optimization trial.")
             if not self.crop_refit_available or not self._source_path:
                 raise RuntimeError("Crop refit is unavailable: open the session from its master, DirectPtycho.open(<master.h5>, ...).")
             origin_row, _, origin_col, _ = self._scan_region
             row_start, row_stop, col_start, col_stop = (int(value) for value in region)
             region = (origin_row + row_start, origin_row + row_stop, origin_col + col_start, origin_col + col_stop)
-            rows, cols = self._ssb.state()["input_scan_shape"]
+            rows, cols = self._direct.state()["input_scan_shape"]
             if not (0 <= row_start < row_stop <= rows and 0 <= col_start < col_stop <= cols):
                 raise ValueError(f"scan crop [{row_start}:{row_stop}, {col_start}:{col_stop}] is outside the {rows}x{cols} scan")
             if row_stop - row_start < MIN_CROP_SPAN or col_stop - col_start < MIN_CROP_SPAN:
                 raise ValueError(
-                    f"SSB refit crops must be at least {MIN_CROP_SPAN}x{MIN_CROP_SPAN}; got {row_stop - row_start}x{col_stop - col_start}."
+                    f"Direct ptychography refit crops must be at least {MIN_CROP_SPAN}x{MIN_CROP_SPAN}; got {row_stop - row_start}x{col_stop - col_start}."
                 )
-            self.crop_refit_status = f"Loading [{region[0]}:{region[1]}, {region[2]}:{region[3]}] and fitting SSB ({trials} trials)..."
+            self.crop_refit_status = f"Loading [{region[0]}:{region[1]}, {region[2]}:{region[3]}] and fitting direct ptychography ({trials} trials)..."
             # quantem.gpu.DirectPtycho.select_region keeps the acquisition identity, preprocessing provenance, flip,
             # detector calibration and the whole scan's bright-field disk; only the scan positions change
-            rebuilt = self._ssb.select_region(
+            rebuilt = self._direct.select_region(
                 (row_start, row_stop, col_start, col_stop), aberrations=self._current(),
                 scan_detector_rotation_deg=self.scan_detector_rotation_deg)
             try:
                 rebuilt.aberrations(search="standard",
                                     tilt=True, check_rotation=False, trials=trials, verbose=False)
             except BaseException:
-                rebuilt.ssb.close()
+                rebuilt.direct.close()
                 raise
         except (RuntimeError, ValueError, OSError, MemoryError) as exc:
             # a refused request, an unreadable file or a solver failure; a code bug still raises
             self.crop_refit_status = f"Crop refit failed: {exc}"
             return
         if self._owned_crop_session is not None:
-            self._owned_crop_session.ssb.close()  # an earlier crop this widget made; the caller's session stays open
-        self._ssb = self._owned_crop_session = rebuilt
+            self._owned_crop_session.direct.close()  # an earlier crop this widget made; the caller's session stays open
+        self._direct = self._owned_crop_session = rebuilt
         self._scan_region = region
-        self._calibration_identity = self._ssb.calibration_identity()
+        self._calibration_identity = self._direct.calibration_identity()
         self._adopt_session(initial=False)
         self.crop_refit_status = f"Refit complete: [{region[0]}:{region[1]}, {region[2]}:{region[3]}], {trials} trials."
 
@@ -1481,7 +1481,7 @@ class ShowPtycho(anywidget.AnyWidget):
                 self._write_stars()
 
     def _calibration(self, aberrations: dict, scan_detector_rotation_deg: float, display_negate_phase: bool, loss) -> dict:
-        """One SSB calibration under the vocabulary's names: what ``calibration.json`` and every star hold.
+        """One direct ptychography calibration under the vocabulary's names: what ``calibration.json`` and every star hold.
 
         Aberrations are nm and degrees (``C10_nm``, ``C12_nm``, ``phi12_deg`` and the non-zero higher
         orders ``C21_nm`` / ``phi21_deg`` ...), the rotation is the physical angle in [0, 360) with
@@ -1493,7 +1493,7 @@ class ShowPtycho(anywidget.AnyWidget):
         """
         from quantem.gpu.direct_ptycho.persistence import portable_source
 
-        state = self._ssb.state()
+        state = self._direct.state()
         return {
             "aberrations": {name: float(value) for name, value in aberrations.items()
                             # a higher-order term is kept with its azimuth only while its magnitude is non-zero
@@ -1508,7 +1508,7 @@ class ShowPtycho(anywidget.AnyWidget):
         }
 
     def _calibration_record(self, aberrations: dict, sample: dict | None, loss) -> dict:
-        """The one ``quantem.ssb-calibration`` record: what ``calibration()`` returns and Save writes.
+        """The one ``quantem.direct-calibration`` record: what ``calibration()`` returns and Save writes.
 
         ``_calibration``'s optics and geometry with the Sample panel beside them (``sample_tilt_mrad``
         in the scan frame, ``propagator_tilt_mrad`` along the detector axes, ``depth_spread_nm``), the
@@ -1516,7 +1516,7 @@ class ShowPtycho(anywidget.AnyWidget):
         bright-field radius, the regional views and the acquisition identity. ``id`` and
         ``generated_at_utc`` are None until Save writes the record.
         """
-        state = self._ssb.state()
+        state = self._direct.state()
         local_tilt = None
         if self.local_tilt_json:
             try:
@@ -1528,7 +1528,7 @@ class ShowPtycho(anywidget.AnyWidget):
             "schema": CALIBRATION_SCHEMA, "id": None, "generated_at_utc": None, "notes": self.notes,
             **self._calibration(aberrations, self.scan_detector_rotation_deg, self.display_negate_phase, loss),
             "sample_tilt_mrad": list(sample["sample_tilt_mrad"]) if sample else None,
-            "propagator_tilt_mrad": self._ssb.propagator_tilt_mrad(sample["sample_tilt_mrad"], self.scan_detector_rotation_deg)
+            "propagator_tilt_mrad": self._direct.propagator_tilt_mrad(sample["sample_tilt_mrad"], self.scan_detector_rotation_deg)
             if sample else None,
             "depth_spread_nm": sample["depth_spread_nm"] if sample else None,
             "upsample": self._output_factor,
@@ -1551,7 +1551,7 @@ class ShowPtycho(anywidget.AnyWidget):
         """
         if not self.compute_loss:
             return None
-        _, loss = self._ssb.preview(
+        _, loss = self._direct.preview(
             aberrations, compute_loss=True,
             upsample=self._output_factor,
             **self._reconstruction_options(),
@@ -1569,7 +1569,7 @@ class ShowPtycho(anywidget.AnyWidget):
 
     def _on_save(self, change) -> None:
         """The Save button: ``save_calibration()`` once the first preview has drawn."""
-        if self._ssb is None or self._last_phase is None or not self.result_json:
+        if self._direct is None or self._last_phase is None or not self.result_json:
             return
         self.save_calibration()
 
@@ -1594,15 +1594,15 @@ class ShowPtycho(anywidget.AnyWidget):
         --------
         >>> path = viewer.save_calibration()
         """
-        if self._ssb is None:
-            raise ValueError("save_calibration() writes an SSB session's model; open ShowPtycho on an SSB session.")
+        if self._direct is None:
+            raise ValueError("save_calibration() writes a direct ptychography session's model; open ShowPtycho on a direct ptychography session.")
         if self._region_busy:
             raise RuntimeError("Regional fitting is running. Wait for completion before saving.")
         aberrations = self._current()
         sample = self._sample() if self.sample_available else None
         higher_order = json.loads(self.higher_order_aberrations_json or "{}")
         loss = self._accepted_loss({**higher_order, **aberrations}, sample)
-        self._ssb.store({**higher_order, **aberrations}, loss, sample=sample)
+        self._direct.store({**higher_order, **aberrations}, loss, sample=sample)
         payload = {**self._calibration_record({**higher_order, **aberrations}, sample, loss),
                    "id": uuid.uuid4().hex[:12], "generated_at_utc": utc_now()}
         write_json(self._calibration_path, payload)
@@ -1632,10 +1632,10 @@ class ShowPtycho(anywidget.AnyWidget):
         self.calibration_image_path = str(self._calibration_image_path.resolve())
 
     def freeze(self):
-        """Keep the displayed phase visible while detaching its live SSB controls.
+        """Keep the displayed phase visible while detaching its live direct ptychography controls.
 
         The session's owner can then close it and release GPU data. This does
-        not close a shared SSB session or change the displayed scientific array.
+        not close a shared direct ptychography session or change the displayed scientific array.
         Contrast, zoom and FFT inspection remain available.
 
         Returns
@@ -1648,7 +1648,7 @@ class ShowPtycho(anywidget.AnyWidget):
         >>> viewer.freeze()
         >>> ptycho.close()
         """
-        if self._ssb is None:
+        if self._direct is None:
             return self
         for callback, names in (
             (self._on_upsample, ["upsample"]),
@@ -1670,27 +1670,27 @@ class ShowPtycho(anywidget.AnyWidget):
             self._region_callbacks = {"fit": None, "reconstruct": None}
             self.local_tilt_can_fit = self.local_tilt_can_reconstruct = False
         self.object_sampling_A = [step / self._output_factor for step in self.scan_sampling_A]
-        self._ssb = None
-        self.ssb_session = self.sample_available = self.upsample_available = False
+        self._direct = None
+        self.ptycho_session = self.sample_available = self.upsample_available = False
         self.regularization_available = False
         self.crop_refit_available = False
-        self.session_note = "Saved SSB phase. Open a new SSB review to edit aberrations."
+        self.session_note = "Saved direct ptychography phase. Open a new direct ptychography review to edit aberrations."
         return self
 
     def export(self, path: str | pathlib.Path | None = None, *, title: str | None = None) -> pathlib.Path:
-        """Write a browser folder that reviews this SSB with no kernel: ``index.html``, exact bright-field
+        """Write a browser folder that reviews this direct ptychography with no kernel: ``index.html``, exact bright-field
         counts under ``source/``, the calibration under ``snapshots/`` and a double-click ``ShowPtycho.command``.
 
         ``path`` defaults to ``<stem>_showptycho`` beside the source master (or ``showptycho_export`` in the
-        working directory). The browser rebuilds the SSB reducers on its GPU from the stored counts, so
+        working directory). The browser rebuilds the direct ptychography reducers on its GPU from the stored counts, so
         C10, C12, phi12, rotation and the BF count all move live without Python.
         An unchanged whole-scan QEM source is reused without re-encoding; other sessions export
         exact BF columns. Sources are hardlinked when possible, otherwise symlinked or copied.
         A symlinked folder still needs its external source; ``snapshots/manifest.json`` records the link.
         The browser's WebGPU FFT takes 1, 2, 4 or 8x: an automatic 3x is exported at 4x, and one line says so.
         """
-        if self._ssb is None:
-            raise ValueError("export() writes an SSB review folder from a session's bright-field counts; this widget shows an array.")
+        if self._direct is None:
+            raise ValueError("export() writes a direct ptychography review folder from a session's bright-field counts; this widget shows an array.")
         if self.method != "phase_of_mean":
             raise ValueError("Regularized reconstruction needs a live CUDA session. Use save_calibration() to save its method and strengths; standalone browser export supports method='phase_of_mean' only.")
         return write_showptycho_folder(self, path, title)
@@ -1708,7 +1708,7 @@ class ShowPtycho(anywidget.AnyWidget):
 
     def __repr__(self) -> str:
         """What the widget shows (array kind, size, sampling) or, for a session, the pins and full BF count."""
-        if self._ssb is None:
+        if self._direct is None:
             kind = "object wave" if self.amplitude_bytes else "phase"
             sampling = f"{self.object_sampling_A[-1]:g} Å/px" if self.object_sampling_A else "no sampling"
             return f"ShowPtycho({kind} {self.phase_height}x{self.phase_width}, {sampling})"

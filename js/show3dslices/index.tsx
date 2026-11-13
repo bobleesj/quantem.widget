@@ -631,15 +631,22 @@ const MAX_CANVAS_TARGET = 800;
 const SLICE_PANEL_TOP_ALIGN_PX = 20;
 const AXES = ["top", "oblique"] as const;
 const PANEL_NAMES = ["XY", "Oblique"] as const;
-// Show3DSlices opens in the same orientation as the main top slice panel:
-// columns left-to-right and rows top-to-bottom.
-const SHOW3DSLICES_DEFAULT_CAMERA: CameraState = {
-  ...DEFAULT_CAMERA,
-  yaw: Math.PI,
-  pitch: 0,
-  roll: Math.PI,
+// The camera each named view opens with. Top matches the main slice panel
+// (col right, row down); Side matches the oblique panel (col right, slice
+// down); Tilted looks 70 deg from the beam axis, 20 deg short of side-on, so
+// depth columns stand upright and the top face shows: a multislice volume reads best so.
+type VolumeView = "tilted" | "top" | "side";
+const VOLUME_VIEW_CAMERAS: Record<VolumeView, Pick<CameraState, "yaw" | "pitch" | "roll">> = {
+  tilted: { yaw: 0, pitch: Math.PI * 70 / 180, roll: Math.PI },
+  top: { yaw: Math.PI, pitch: 0, roll: Math.PI },
+  side: { yaw: 0, pitch: Math.PI * 0.49, roll: 0 },
 };
+const viewCamera = (view: string): CameraState => ({
+  ...DEFAULT_CAMERA,
+  ...(VOLUME_VIEW_CAMERAS[view as VolumeView] ?? VOLUME_VIEW_CAMERAS.tilted),
+});
 const VOLUME_VIEW_PRESETS = [
+  { value: "tilted", label: "Tilt", description: "tilted view, slab tipped toward you" },
   { value: "top", label: "Top", description: "top (XY) view" },
   { value: "side", label: "Side", description: "oblique vertical plane view" },
 ] as const;
@@ -795,14 +802,16 @@ function Show3DSlices() {
     panX: readNumber(value?.panX, fallback.panX),
     panY: readNumber(value?.panY, fallback.panY),
   });
+  const [view, setView] = useModelState<string>("view");
+  const homeCamera = React.useMemo(() => viewCamera(view), [view]);
   const normalizeCameraState = (value: Partial<CameraState> | undefined): CameraState => ({
-    ...SHOW3DSLICES_DEFAULT_CAMERA,
-    yaw: readNumber(value?.yaw, SHOW3DSLICES_DEFAULT_CAMERA.yaw),
-    pitch: Math.max(-Math.PI * 0.49, Math.min(Math.PI * 0.49, readNumber(value?.pitch, SHOW3DSLICES_DEFAULT_CAMERA.pitch))),
-    roll: readNumber(value?.roll, SHOW3DSLICES_DEFAULT_CAMERA.roll ?? 0),
-    distance: Math.max(0.5, Math.min(10, readNumber(value?.distance, SHOW3DSLICES_DEFAULT_CAMERA.distance))),
-    panX: readNumber(value?.panX, SHOW3DSLICES_DEFAULT_CAMERA.panX),
-    panY: readNumber(value?.panY, SHOW3DSLICES_DEFAULT_CAMERA.panY),
+    ...homeCamera,
+    yaw: readNumber(value?.yaw, homeCamera.yaw),
+    pitch: Math.max(-Math.PI * 0.49, Math.min(Math.PI * 0.49, readNumber(value?.pitch, homeCamera.pitch))),
+    roll: readNumber(value?.roll, homeCamera.roll ?? 0),
+    distance: Math.max(0.5, Math.min(10, readNumber(value?.distance, homeCamera.distance))),
+    panX: readNumber(value?.panX, homeCamera.panX),
+    panY: readNumber(value?.panY, homeCamera.panY),
   });
   const [showFft, setShowFft] = useModelState<boolean>("show_fft");
   const [orthographic, setOrthographic] = useModelState<boolean>("orthographic");
@@ -2074,24 +2083,29 @@ function Show3DSlices() {
   };
 
   const handleVolumeDoubleClick = () => {
-    liveCameraRef.current = SHOW3DSLICES_DEFAULT_CAMERA;
-    setCamera(SHOW3DSLICES_DEFAULT_CAMERA);
-    persistViewState(undefined, undefined, SHOW3DSLICES_DEFAULT_CAMERA);
+    liveCameraRef.current = homeCamera;
+    setCamera(homeCamera);
+    persistViewState(undefined, undefined, homeCamera);
   };
 
-  const setVolumeView = (view: "top" | "side") => {
-    const distance = liveCameraRef.current.distance || camera.distance || SHOW3DSLICES_DEFAULT_CAMERA.distance;
-    // Match the 2D slice panels rather than mathematical world-up:
-    // Top: col right, row down. Side: col right, slice down.
-    const presets: Record<"top" | "side", Pick<CameraState, "yaw" | "pitch" | "roll">> = {
-      top: { yaw: Math.PI, pitch: 0, roll: Math.PI },
-      side: { yaw: 0, pitch: Math.PI * 0.49, roll: 0 },
-    };
-    const next = { ...SHOW3DSLICES_DEFAULT_CAMERA, ...presets[view], distance, panX: 0, panY: 0 };
+  const setVolumeView = (nextView: VolumeView) => {
+    const distance = liveCameraRef.current.distance || camera.distance || homeCamera.distance;
+    const next = { ...viewCamera(nextView), distance };
+    setView(nextView);
     liveCameraRef.current = next;
     setCamera(next);
     persistViewState(undefined, undefined, next);
   };
+  // a view set from Python after the widget is shown moves the camera; the
+  // first run is skipped so a restored camera survives a reopen
+  const viewMountedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!viewMountedRef.current) { viewMountedRef.current = true; return; }
+    if (liveCameraRef.current.yaw === homeCamera.yaw && liveCameraRef.current.pitch === homeCamera.pitch && (liveCameraRef.current.roll ?? 0) === (homeCamera.roll ?? 0)) return;
+    liveCameraRef.current = homeCamera;
+    setCamera(homeCamera);
+    persistViewState(undefined, undefined, homeCamera);
+  }, [homeCamera]);
 
   const rollVolumeView = (direction: -1 | 1) => {
     const current = liveCameraRef.current;
@@ -2106,7 +2120,9 @@ function Show3DSlices() {
   // -------------------------------------------------------------------------
   const volumeResizeRafRef = React.useRef(0);
 
-  const handleVolumeResizeStart = (event: React.MouseEvent) => {
+  // Pointer events, so a finger or a pen drags the grip as a mouse does.
+  const handleVolumeResizeStart = (event: React.PointerEvent) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
     event.stopPropagation(); event.preventDefault();
     setVolumeResizing(true);
     volumeResizeStartRef.current = { x: event.clientX, y: event.clientY, size: volumeCanvasSize };
@@ -2115,7 +2131,7 @@ function Show3DSlices() {
   React.useEffect(() => {
     if (!volumeResizing) return;
     let latestSize = volumeCanvasSize;
-    const onMove = (event: MouseEvent) => {
+    const onMove = (event: PointerEvent) => {
       const start = volumeResizeStartRef.current;
       if (!start) return;
       const delta = Math.max(event.clientX - start.x, event.clientY - start.y);
@@ -2140,12 +2156,13 @@ function Show3DSlices() {
       setVolumeResizing(false);
       volumeResizeStartRef.current = null;
     };
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-    return () => { document.removeEventListener("mousemove", onMove); document.removeEventListener("mouseup", onUp); };
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onUp);
+    return () => { document.removeEventListener("pointermove", onMove); document.removeEventListener("pointerup", onUp); document.removeEventListener("pointercancel", onUp); };
   }, [persistViewState, volumeCanvasSize, volumeResizing]);
 
-  const cameraChanged = camera.yaw !== SHOW3DSLICES_DEFAULT_CAMERA.yaw || camera.pitch !== SHOW3DSLICES_DEFAULT_CAMERA.pitch || (camera.roll ?? 0) !== (SHOW3DSLICES_DEFAULT_CAMERA.roll ?? 0) || camera.distance !== SHOW3DSLICES_DEFAULT_CAMERA.distance || camera.panX !== SHOW3DSLICES_DEFAULT_CAMERA.panX || camera.panY !== SHOW3DSLICES_DEFAULT_CAMERA.panY;
+  const cameraChanged = camera.yaw !== homeCamera.yaw || camera.pitch !== homeCamera.pitch || (camera.roll ?? 0) !== (homeCamera.roll ?? 0) || camera.distance !== homeCamera.distance || camera.panX !== homeCamera.panX || camera.panY !== homeCamera.panY;
 
   // Reset Zoom is intentionally narrow: slice and FFT zoom/pan only. Camera,
   // contrast, colormap, and playback loop state have their own controls/state.
@@ -3480,7 +3497,7 @@ function Show3DSlices() {
   // -------------------------------------------------------------------------
   // Canvas resize (matching Show2D)
   // -------------------------------------------------------------------------
-  const handleResizeStart = (event: React.MouseEvent, axis: number = 0) => {
+  const handleResizeStart = (event: React.PointerEvent, axis: number = 0) => {
     event.stopPropagation();
     event.preventDefault();
     const target = axis > 0 ? "side" : "primary";
@@ -3516,12 +3533,14 @@ function Show3DSlices() {
       setIsResizing(false);
       setResizeStart(null);
     };
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", handleMouseUp);
+    document.addEventListener("pointermove", handleMouseMove);
+    document.addEventListener("pointerup", handleMouseUp);
+    document.addEventListener("pointercancel", handleMouseUp);
     return () => {
       if (rafId) cancelAnimationFrame(rafId);
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
+      document.removeEventListener("pointermove", handleMouseMove);
+      document.removeEventListener("pointerup", handleMouseUp);
+      document.removeEventListener("pointercancel", handleMouseUp);
     };
   }, [isResizing, persistViewState, resizeStart]);
 
@@ -3911,6 +3930,8 @@ function Show3DSlices() {
     cursor: "nwse-resize", opacity: 0.6,
     background: `linear-gradient(135deg, transparent 50%, ${themeColors.accent} 50%)`,
     touchAction: "none",
+    // A finger needs about 44 px: the grip stays 16 px drawn, its hit area grows on touch screens.
+    "@media (pointer: coarse)": { opacity: 0.9, "&::before": { content: '""', position: "absolute", inset: -14 } },
     zIndex: 5,
     "&:hover": { opacity: 1 },
   };
@@ -4190,7 +4211,7 @@ function Show3DSlices() {
                   <Button
                     size="small"
                     sx={{ ...compactButton, position: "absolute", top: 4, right: 4, minWidth: 0, px: 0.75, bgcolor: "rgba(255,255,255,0.75)", "&:hover": { bgcolor: "rgba(255,255,255,0.9)" } }}
-                    onClick={(event) => { event.stopPropagation(); liveCameraRef.current = SHOW3DSLICES_DEFAULT_CAMERA; setCamera(SHOW3DSLICES_DEFAULT_CAMERA); persistViewState(undefined, undefined, SHOW3DSLICES_DEFAULT_CAMERA); }}
+                    onClick={(event) => { event.stopPropagation(); liveCameraRef.current = homeCamera; setCamera(homeCamera); persistViewState(undefined, undefined, homeCamera); }}
                     aria-label="Reset 3D camera view"
                     title="Reset 3D camera view"
                   >
@@ -4198,7 +4219,7 @@ function Show3DSlices() {
                   </Button>
                 )}
                 <Box
-                  onMouseDown={handleVolumeResizeStart}
+                  onPointerDown={handleVolumeResizeStart}
                   sx={resizeHandleSx}
                 />
               </Box>
@@ -4328,7 +4349,7 @@ function Show3DSlices() {
                   </Box>
                 )}
                 <Box
-                  onMouseDown={(event) => handleResizeStart(event, axis)}
+                  onPointerDown={(event) => handleResizeStart(event, axis)}
                   sx={resizeHandleSx}
                 />
               </Box>

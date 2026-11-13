@@ -20,7 +20,7 @@ Each widget should be self-contained, meaning that its Python module and `js/<bu
 | Widget state, layout, and interactions | `src/quantem/widget/<widget>.py` and `js/<bundle>/` |
 | Frontend helpers for several widgets | shared modules at the top of [`js/`](https://github.com/electronmicroscopy/quantem.widget/tree/main/js) |
 | Display math - colormaps, ranges, histograms, display FFT, display geometry | [`js/display/`](https://github.com/electronmicroscopy/quantem.widget/tree/main/js/display) |
-| WebGPU science kernels - detector reductions, HDF5/bslz4 browser IO, SSB | [`quantem.gpu`](https://github.com/bobleesj/quantem.gpu) |
+| WebGPU science kernels - detector reductions, HDF5/bslz4 browser IO, direct ptychography | [`quantem.gpu`](https://github.com/bobleesj/quantem.gpu) |
 
 Display math is widget source. Each operation has a JavaScript path that runs
 without WebGPU and a WebGPU path that must give the same pixels; the widget
@@ -28,7 +28,7 @@ shows which one is active (`WebGPU` or `CPU` in the title row).
 
 Science kernels belong to `quantem.gpu`.
 [`scripts/sync-gpu-webgpu.mjs`](https://github.com/electronmicroscopy/quantem.widget/blob/main/scripts/sync-gpu-webgpu.mjs)
-copies its `detector/`, `dpc/`, `formats/`, `io/` and `ssb/` sources into
+copies its `detector/`, `dpc/`, `formats/`, `io/` and `direct_ptycho/` sources into
 `js/.generated/engine/`. `show4dstem` and `showptycho` bundle those kernels, and
 `js/display/borrowedImage.ts` re-exports quantem.gpu's borrowed count-image
 contract (`detector/webgpu/borrowed-image.ts`), so every bundle that draws

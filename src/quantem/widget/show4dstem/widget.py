@@ -79,11 +79,11 @@ from quantem.widget.utils.ui import (
 
 BRIGHT_FIELD_RADIUS_FRACTION = 0.125  # bright-field radius as a fraction of the detector side before fitting
 DEFAULT_VI_ROI_RATIO = 0.15  # scan ROI radius as a fraction of the scan side
-PRODUCT_LABELS = ("DPC_row", "DPC_col", "SSB")
+PRODUCT_LABELS = ("DPC_row", "DPC_col", "Direct")
 # the calibration a 4D acquisition carries, under the .qem format's flat names
-# Compute SSB's downloadable record; ShowPtycho's calibration.json has another shape and schema
-SSB_CALIBRATION_SCHEMA = "quantem.show4dstem-ssb-calibration/4"
-FROM_TRAIT = object()  # a Compute SSB setting left to its ssb_compute_* trait (None is a value of its own)
+# direct_phase()'s downloadable record; ShowPtycho's calibration.json has another shape and schema
+DIRECT_CALIBRATION_SCHEMA = "quantem.show4dstem-direct-calibration/5"
+FROM_TRAIT = object()  # a direct_phase() setting left to its direct_* trait (None is a value of its own)
 CALIBRATION_KEYS = ("scan_sampling_A", "detector_sampling_mrad", "detector_sampling_inv_A", "voltage_kV", "semiangle_mrad")
 # Soft guide for the inline offline pack: the browser's JSON parse of the embedded
 # base64 is the real ceiling, and gzip keeps a 2 GB uint8 stack under it.
@@ -186,7 +186,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         and supplies bounded detector queries, including distributed CUDA
         sessions. The widget closes that borrowed session on ``free()``;
         close its source acquisition separately. Such sessions require
-        ``offline=False`` and do not expose SSB or source cropping here.
+        ``offline=False`` and do not expose direct ptychography or source cropping here.
         A loaded scan with ``detector_session()`` prepares that session
         automatically; pass the scan directly to ``Show4DSTEM``.
     device
@@ -279,25 +279,25 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     _h5_urls = traitlets.Unicode("").tag(sync=True)
     _qem_urls = traitlets.Unicode("").tag(sync=True)
     _offline_bad_px = traitlets.Unicode("").tag(sync=True)
-    ssb_compute_request = traitlets.Unicode("").tag(sync=True)
-    ssb_compute_status = traitlets.Unicode("").tag(sync=True)
-    ssb_compute_busy = traitlets.Bool(False).tag(sync=True)
-    ssb_compute_enabled = traitlets.Bool(True).tag(sync=True)
-    ssb_compute_trials = traitlets.Int(200).tag(sync=True)
-    # quantem.gpu's default SSB: the model fit with the sample tilt and depth spread; False fits at tilt 0
-    ssb_compute_tilt = traitlets.Bool(True).tag(sync=True)
+    direct_request = traitlets.Unicode("").tag(sync=True)
+    direct_status = traitlets.Unicode("").tag(sync=True)
+    direct_busy = traitlets.Bool(False).tag(sync=True)
+    direct_enabled = traitlets.Bool(True).tag(sync=True)
+    direct_trials = traitlets.Int(200).tag(sync=True)
+    # quantem.gpu's default direct ptychography: the model fit with the sample tilt and depth spread; False fits at tilt 0
+    direct_tilt = traitlets.Bool(True).tag(sync=True)
     # local refinement after the trial search: "auto", quantem.gpu's exact-derivative refinement, or None for none
-    ssb_compute_refinement = traitlets.Enum(["auto"], default_value="auto", allow_none=True).tag(sync=True)
-    ssb_compute_num_bright_field_pixels = traitlets.Int(0).tag(sync=True)
-    ssb_compute_lock_C10 = traitlets.Bool(False).tag(sync=True)
-    ssb_compute_lock_C12 = traitlets.Bool(False).tag(sync=True)
-    ssb_compute_C10_nm = traitlets.Float(0.0).tag(sync=True)
-    ssb_compute_C12_nm = traitlets.Float(0.0).tag(sync=True)
-    ssb_compute_phi12_deg = traitlets.Float(0.0).tag(sync=True)
+    direct_refinement = traitlets.Enum(["auto"], default_value="auto", allow_none=True).tag(sync=True)
+    direct_bright_field_pixels = traitlets.Int(0).tag(sync=True)
+    direct_lock_C10 = traitlets.Bool(False).tag(sync=True)
+    direct_lock_C12 = traitlets.Bool(False).tag(sync=True)
+    direct_C10_nm = traitlets.Float(0.0).tag(sync=True)
+    direct_C12_nm = traitlets.Float(0.0).tag(sync=True)
+    direct_phi12_deg = traitlets.Float(0.0).tag(sync=True)
     # the physical scan-to-detector rotation in [0, 360): the reversal of the centre of mass is part of the angle
-    ssb_compute_scan_detector_rotation_deg = traitlets.Float(0.0).tag(sync=True)
-    ssb_compute_calibration_json = traitlets.Unicode("").tag(sync=True)
-    ssb_compute_calibration_filename = traitlets.Unicode("").tag(sync=True)
+    direct_scan_detector_rotation_deg = traitlets.Float(0.0).tag(sync=True)
+    direct_calibration_json = traitlets.Unicode("").tag(sync=True)
+    direct_calibration_filename = traitlets.Unicode("").tag(sync=True)
     vi_roi_mode = traitlets.Unicode("off").tag(sync=True)
     vi_roi_center_row = traitlets.Float(0.0).tag(sync=True)
     vi_roi_center_col = traitlets.Float(0.0).tag(sync=True)
@@ -473,10 +473,10 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._stream_deferred_snapshot: dict | None = None
         self._compare_lock = threading.RLock()
         self._session_lock = threading.RLock()
-        self._ssb_compute_flipped: bool | None = None  # the last SSB fit's flip, None before one
+        self._direct_flipped: bool | None = None  # the last direct ptychography fit's flip, None before one
         # the last tilt-corrected fit's {sample_tilt_mrad, depth_spread_nm}: a manual recompute keeps the sample model
-        self._ssb_compute_sample: dict | None = None
-        # the bright-field disk the caller gave (Compute SSB uses it); the widget's own disk fit is display only
+        self._direct_sample: dict | None = None
+        # the bright-field disk the caller gave (direct_phase() uses it); the widget's own disk fit is display only
         self._given_bright_field = {"bright_field_center_px": None if bright_field_center_px is None else
                                     tuple(float(value) for value in bright_field_center_px),
                                     "bright_field_radius_px": None if bright_field_radius_px is None else float(bright_field_radius_px)}
@@ -685,7 +685,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._device = data_device
         self._data = data
         if prepared or prepared_series or waiting:
-            self.ssb_compute_enabled = False
+            self.direct_enabled = False
         self.view_mode = view_mode
         self.compare_dp_mode = compare_dp_mode
         self.compare_group_mode = compare_group_mode
@@ -732,7 +732,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             else:
                 self._qem_urls = json.dumps(urls)
             self.offline = True
-            self.ssb_compute_enabled = False
+            self.direct_enabled = False
             self._set_roi_to_disk()
             self.virtual_image_bytes = np.zeros(self.shape_rows * self.shape_cols, dtype=np.float32).tobytes()
             self.frame_bytes = np.zeros(self.det_rows * self.det_cols, dtype=np.float32).tobytes()
@@ -769,7 +769,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._refresh_compare_virtual_images()
         self._update_frame()
         self.observe(self._on_export_request_change, names=["export_request"])
-        self.observe(self._on_ssb_compute_request_change, names=["ssb_compute_request"])
+        self.observe(self._on_direct_request_change, names=["direct_request"])
         self.observe(self._on_frame_idx_change, names=["frame_idx"])
         self.observe(self._on_preset_request, names=["_preset_request"])
         self.observe(self._on_compare_config_change, names=["view_mode", "compare_max_panels", "n_frames",
@@ -863,16 +863,16 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                                                  dataset_scope=dataset_scope, title=title)
         return html_export.write_interactive_html(self, path, dtype=dtype, detector_bin=detector_bin, scan_bin=scan_bin, title=title)
 
-    def compute_ssb(self, *, set_source: bool = True, verbose: bool = False, **kwargs) -> np.ndarray:
-        """Reconstruct the SSB phase of the current dataset and show it as the image.
+    def direct_phase(self, *, set_source: bool = True, verbose: bool = False, **kwargs) -> np.ndarray:
+        """Reconstruct the direct ptychography phase of the current dataset and show it as the image.
 
         The fit is quantem.gpu's default ``DirectPtycho.aberrations()``, model-based
-        and tilt-corrected: the SSB model fitted to the data together with the
+        and tilt-corrected: the direct ptychography model fitted to the data together with the
         sample tilt and depth spread (C10 is then the defocus at mid-depth).
-        ``compute_ssb(tilt=False)`` fits the same model with the tilt held at 0.
+        ``direct_phase(tilt=False)`` fits the same model with the tilt held at 0.
 
-        ``kwargs`` go to the solver: ``tilt`` (the ``ssb_compute_tilt`` trait,
-        True by default), ``trials`` (the ``ssb_compute_trials`` trait, 200 by default),
+        ``kwargs`` go to the solver: ``tilt`` (the ``direct_tilt`` trait,
+        True by default), ``trials`` (the ``direct_trials`` trait, 200 by default),
         ``refinement`` (``"auto"``, the default, quantem.gpu's exact-derivative
         refinement, or None for the best trial without one), ``seed``,
         ``aberrations`` (a dict of ``C10_nm``, ``C12_nm`` and ``phi12_deg``; a
@@ -894,28 +894,28 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         none. The aligned DPC maps from the same data are attached beside the
         phase.
         """
-        if self.ssb_compute_busy:
-            raise RuntimeError("Compute SSB is already running.")
-        self.ssb_compute_busy = True
-        self.ssb_compute_status = "Computing SSB..."
-        self.ssb_compute_calibration_json = ""
-        self.ssb_compute_calibration_filename = ""
+        if self.direct_busy:
+            raise RuntimeError("Direct ptycho is already running.")
+        self.direct_busy = True
+        self.direct_status = "Computing direct ptycho..."
+        self.direct_calibration_json = ""
+        self.direct_calibration_filename = ""
         try:
-            phase, dpc_row, dpc_col = self._ssb_phase(verbose=verbose, **kwargs)
+            phase, dpc_row, dpc_col = self._direct_phase_maps(verbose=verbose, **kwargs)
             self._set_vi_product_map("DPC_row", dpc_row)
             self._set_vi_product_map("DPC_col", dpc_col)
-            self._set_vi_product_map("SSB", phase)
+            self._set_vi_product_map("Direct", phase)
             if set_source:
-                self.vi_source = "SSB"
-            tilt = json.loads(self.ssb_compute_calibration_json or "{}").get("sample_tilt_mrad")
+                self.vi_source = "Direct"
+            tilt = json.loads(self.direct_calibration_json or "{}").get("sample_tilt_mrad")
             sample = "" if tilt is None else f", tilt-corrected: ({tilt[0]:+.1f}, {tilt[1]:+.1f}) mrad"
-            self.ssb_compute_status = f"SSB ready ({phase.shape[0]}x{phase.shape[1]}{sample})"
+            self.direct_status = f"Direct ptycho ready ({phase.shape[0]}x{phase.shape[1]}{sample})"
             return phase
         except (ValueError, RuntimeError, MemoryError) as exc:
-            self.ssb_compute_status = f"SSB failed: {exc}"
+            self.direct_status = f"Direct ptycho failed: {exc}"
             raise
         finally:
-            self.ssb_compute_busy = False
+            self.direct_busy = False
 
     def apply_preset(self, name: str) -> Self:
         """Place the detector ROI on a named preset: ``bf``, ``abf``, ``adf`` or ``haadf``.
@@ -1655,7 +1655,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             self.compare_diffraction_indices = []
 
     # ------------------------------------------------------------------
-    # Product maps (DPC and SSB phase)
+    # Product maps (DPC and direct ptychography phase)
     # ------------------------------------------------------------------
 
     def _set_vi_product_map(self, label: str, value) -> None:
@@ -1664,7 +1664,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             raise ValueError(f"Unsupported virtual-image product {label!r}. Use one of {PRODUCT_LABELS}.")
         product = np.asarray(value)
         if np.iscomplexobj(product):
-            raise ValueError(f"{label} must be a real-valued map. Pass the SSB phase map rather than a complex reconstruction.")
+            raise ValueError(f"{label} must be a real-valued map. Pass the direct ptychography phase map rather than a complex reconstruction.")
         if product.ndim == 2:
             product = product[None]
         if product.ndim != 3 or product.shape[1:] != (self.shape_rows, self.shape_cols) or product.shape[0] not in (1, self.n_frames):
@@ -1696,11 +1696,11 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._refresh_compare_virtual_images()
 
     # ------------------------------------------------------------------
-    # SSB
+    # Direct ptychography
     # ------------------------------------------------------------------
 
-    def _ssb_source(self):
-        """The current dataset in the form quantem.gpu SSB reads without a dense copy."""
+    def _direct_source(self):
+        """The current dataset in the form quantem.gpu direct ptychography reads without a dense copy."""
         frame = self._frame_source(int(self.frame_idx))
         if not isinstance(frame, AcquisitionView):
             return frame
@@ -1710,13 +1710,13 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
 
     @staticmethod
     def _positive_pair(value, name: str) -> tuple[float, float]:
-        """A positive ``(row, col)`` pair from a scalar or a length-2 sequence; zero or negative sampling has no SSB geometry."""
+        """A positive ``(row, col)`` pair from a scalar or a length-2 sequence; zero or negative sampling has no direct ptychography geometry."""
         pair = tuple(float(component) for component in per_axis(value, 2))
         if len(pair) != 2 or pair[0] <= 0 or pair[1] <= 0:
             raise ValueError(f"{name} must be a positive scalar or length-2 pair, got {value!r}.")
         return pair
 
-    def _ssb_phase(
+    def _direct_phase_maps(
         self,
         *,
         bright_field_radius_px: float | None = None,
@@ -1734,7 +1734,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         seed: int = 42,
         verbose: bool = False,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Run quantem.gpu SSB on the current dataset; returns ``(phase, dpc_row, dpc_col)``.
+        """Run quantem.gpu direct ptychography on the current dataset; returns ``(phase, dpc_row, dpc_col)``.
 
         The DPC centre-of-mass maps are quantem.gpu's aligned fields
         (``dpc.run``) at the solved physical rotation and flip. Without
@@ -1743,45 +1743,45 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         with the 180-degree choice settled by the fit.
         """
         if self.n_frames != 1:
-            raise ValueError("Compute SSB runs on a single 4D dataset. For a series, open the target dataset as a 4D widget.")
+            raise ValueError("Direct ptycho runs on a single 4D dataset. For a series, open the target dataset as a 4D widget.")
         # the calibration the dataset or file records (or, for an input that records none, the constructor keywords)
         if not self.scan_sampling_A:
-            raise ValueError("Compute SSB needs the scan step in angstrom and the data record none. For an array or an "
+            raise ValueError("Direct ptycho needs the scan step in angstrom and the data record none. For an array or an "
                              "uncalibrated file, construct Show4DSTEM(data, scan_sampling_A=(row_A, col_A)).")
         if self.voltage_kV is None:
-            raise ValueError("Compute SSB needs the accelerating voltage and the data record none. For an array or an "
+            raise ValueError("Direct ptycho needs the accelerating voltage and the data record none. For an array or an "
                              "uncalibrated file, construct Show4DSTEM(data, voltage_kV=300).")
         detector_sampling_mrad = tuple(self.detector_sampling_mrad) or None
         if detector_sampling_mrad is None and self.detector_sampling_inv_A:
-            # SSB takes the detector step in mrad; a step recorded in reciprocal angstrom converts at this voltage
+            # Direct ptychography takes the detector step in mrad; a step recorded in reciprocal angstrom converts at this voltage
             detector_sampling_mrad = gpu_adapter.detector_sampling_mrad_from_inv_A(self.detector_sampling_inv_A, self.voltage_kV)
         semiangle = self.semiangle_mrad
         if semiangle is None:
             if detector_sampling_mrad is None:
-                raise ValueError("Compute SSB needs the convergence semiangle and the data record none. Construct "
+                raise ValueError("Direct ptycho needs the convergence semiangle and the data record none. Construct "
                                  "Show4DSTEM(data, semiangle_mrad=...), or give the detector step in mrad per pixel "
                                  "(detector_sampling_mrad=) so it follows from the bright-field disk edge.")
             # quantem.gpu's rule: the disk edge sits at the semiangle. The equal-area edge radius
             # of an elliptical disk takes the geometric mean of the two detector steps.
             edge_radius_px = gpu_adapter.disk_edge_radius(self._session(int(self.frame_idx)).mean_pattern())
             semiangle = edge_radius_px * math.sqrt(detector_sampling_mrad[0] * detector_sampling_mrad[1])
-            print(f"Show4DSTEM: semiangle_mrad is not recorded; Compute SSB uses {semiangle:.3f} mrad, the bright-field "
+            print(f"Show4DSTEM: semiangle_mrad is not recorded; direct ptycho uses {semiangle:.3f} mrad, the bright-field "
                   f"disk edge ({edge_radius_px:.2f} px, quantem.gpu.detector.disk_edge_radius) times the detector step. "
                   "Pass Show4DSTEM(data, semiangle_mrad=...) to set it.")
         if semiangle <= 0:
             raise ValueError(f"semiangle_mrad must be positive, got {semiangle}.")
-        trials = int(self.ssb_compute_trials if trials is None else trials)
+        trials = int(self.direct_trials if trials is None else trials)
         if trials < 0:
             raise ValueError(f"trials must be >= 0, got {trials}.")
-        tilt = bool(self.ssb_compute_tilt if tilt is FROM_TRAIT else tilt)
-        refinement = self.ssb_compute_refinement if refinement is FROM_TRAIT else refinement
+        tilt = bool(self.direct_tilt if tilt is FROM_TRAIT else tilt)
+        refinement = self.direct_refinement if refinement is FROM_TRAIT else refinement
         if refinement not in ("auto", None):
-            raise ValueError(f"Compute SSB refinement must be 'auto' or None, got {refinement!r}.")
+            raise ValueError(f"Direct ptycho refinement must be 'auto' or None, got {refinement!r}.")
         do_refine = refinement is not None
         fit_options: dict = {}
         if lock_C10 or lock_C12:
             held = {name: float(value) for name, value in {
-                "C10_nm": self.ssb_compute_C10_nm, "C12_nm": self.ssb_compute_C12_nm, "phi12_deg": self.ssb_compute_phi12_deg,
+                "C10_nm": self.direct_C10_nm, "C12_nm": self.direct_C12_nm, "phi12_deg": self.direct_phi12_deg,
                 **(aberrations or {})}.items()}
             if tilt:
                 # quantem.gpu's joint fit holds C10 alone, C12 = 0 alone, or all three (then only tilt and depth are fitted)
@@ -1810,8 +1810,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             bright_field_radius_px = self._given_bright_field["bright_field_radius_px"]
         if bright_field_center_px is None:
             bright_field_center_px = self._given_bright_field["bright_field_center_px"]
-        self.ssb_compute_status = "Preparing SSB data..."
-        source = self._ssb_source()
+        self.direct_status = "Preparing direct ptycho data..."
+        source = self._direct_source()
         manual = bool(lock_aberrations and aberrations is not None)
         with gpu_adapter.DirectSession.open(
             source,
@@ -1820,7 +1820,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             scan_sampling_A=tuple(self.scan_sampling_A),
             detector_sampling_mrad=detector_sampling_mrad,
             scan_shape=(self.shape_rows, self.shape_cols) if source.ndim == 3 else None,
-            # a missing coefficient is 0, as compute_ssb documents; quantem.gpu takes all three and refuses any other key
+            # a missing coefficient is 0, as direct_phase documents; quantem.gpu takes all three and refuses any other key
             aberrations=None if aberrations is None else {"C10_nm": 0.0, "C12_nm": 0.0, "phi12_deg": 0.0, **aberrations},
             scan_detector_rotation_deg=None if scan_detector_rotation_deg is None else float(scan_detector_rotation_deg),
             scan_detector_rotation_flipped=scan_detector_rotation_flipped,
@@ -1829,46 +1829,46 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                else {"bright_field_intensity_threshold": float(bright_field_intensity_threshold)}),
             bright_field_radius_px=None if bright_field_radius_px is None else float(bright_field_radius_px),
             bright_field_center_px=None if bright_field_center_px is None else tuple(float(value) for value in bright_field_center_px),
-        ) as ssb:
-            num_bright_field_pixels = ssb.num_bright_field_pixels
-            bright_field_intensity_threshold = ssb.bright_field_intensity_threshold
+        ) as direct:
+            num_bright_field_pixels = direct.num_bright_field_pixels
+            bright_field_intensity_threshold = direct.bright_field_intensity_threshold
             # the values the session used, also when it detected or estimated them
-            bright_field_radius_px, detector_sampling_mrad = ssb.bright_field_radius_px, ssb.detector_sampling_mrad
-            scan_detector_rotation_flipped = ssb.scan_detector_rotation_flipped
-            self.ssb_compute_num_bright_field_pixels = num_bright_field_pixels
-            if tilt and self._ssb_compute_sample is not None:
+            bright_field_radius_px, detector_sampling_mrad = direct.bright_field_radius_px, direct.detector_sampling_mrad
+            scan_detector_rotation_flipped = direct.scan_detector_rotation_flipped
+            self.direct_bright_field_pixels = num_bright_field_pixels
+            if tilt and self._direct_sample is not None:
                 # a manual recompute, or a refinement without trials, starts from the last tilt-corrected fit's sample
-                ssb.ssb.sample_tilt_mrad = tuple(self._ssb_compute_sample["sample_tilt_mrad"])
-                ssb.ssb.depth_spread_nm = float(self._ssb_compute_sample["depth_spread_nm"])
+                direct.direct.sample_tilt_mrad = tuple(self._direct_sample["sample_tilt_mrad"])
+                direct.direct.depth_spread_nm = float(self._direct_sample["depth_spread_nm"])
             if manual or (trials == 0 and not do_refine):
-                self.ssb_compute_status = f"Reconstructing SSB with the given coefficients ({num_bright_field_pixels} BF pixels)..."
-                result = ssb.run()
+                self.direct_status = f"Reconstructing direct ptycho with the given coefficients ({num_bright_field_pixels} BF pixels)..."
+                result = direct.run()
             else:
                 method = "with sample tilt" if tilt else "at tilt 0"
-                self.ssb_compute_status = (f"Fitting SSB aberrations {method} ({trials} trials"
+                self.direct_status = (f"Fitting aberrations {method} ({trials} trials"
                                            f"{', refined' if do_refine else ''}, {num_bright_field_pixels} BF pixels)...")
                 search = "standard" if tilt and not fit_options and trials > 0 and refinement is not None else "primary"
-                result = ssb.aberrations(search=search,
+                result = direct.aberrations(search=search,
                                           tilt=tilt, trials=trials, refinement=refinement,
                                           seed=int(seed), verbose=verbose, show=False, **fit_options)
-                self._ssb_compute_sample = None if result.get("sample_tilt_mrad") is None else {
+                self._direct_sample = None if result.get("sample_tilt_mrad") is None else {
                     "sample_tilt_mrad": result["sample_tilt_mrad"], "depth_spread_nm": result["depth_spread_nm"]}
             # quantem.gpu centres a scan its FFT cannot take in a padded grid; keep the measured positions
             phase = result["phase"]
             if tuple(phase.shape) != (self.shape_rows, self.shape_cols):
-                phase = ssb.crop_native(phase, (0, self.shape_rows, 0, self.shape_cols), 1)
+                phase = direct.crop_native(phase, (0, self.shape_rows, 0, self.shape_cols), 1)
         phase = np.ascontiguousarray(torch.as_tensor(phase).cpu().numpy(), dtype=np.float32)
         if phase.shape != (self.shape_rows, self.shape_cols):
-            raise ValueError(f"SSB result shape {phase.shape} does not match the widget scan shape {self.shape_rows}x{self.shape_cols}.")
-        self.ssb_compute_C10_nm = result["aberrations"]["C10_nm"]
-        self.ssb_compute_C12_nm = result["aberrations"]["C12_nm"]
-        self.ssb_compute_phi12_deg = result["aberrations"]["phi12_deg"]
+            raise ValueError(f"Direct ptychography result shape {phase.shape} does not match the widget scan shape {self.shape_rows}x{self.shape_cols}.")
+        self.direct_C10_nm = result["aberrations"]["C10_nm"]
+        self.direct_C12_nm = result["aberrations"]["C12_nm"]
+        self.direct_phi12_deg = result["aberrations"]["phi12_deg"]
         # the physical angle: a manual recompute sends it back whole, where the folded angle alone lost the reversal
-        self.ssb_compute_scan_detector_rotation_deg = result["scan_detector_rotation_deg"]
+        self.direct_scan_detector_rotation_deg = result["scan_detector_rotation_deg"]
         # a manual recompute sends the angle back; the flip of the same fit goes with it
-        self._ssb_compute_flipped = scan_detector_rotation_flipped
-        self.ssb_compute_calibration_json = json.dumps({
-            "schema": SSB_CALIBRATION_SCHEMA,
+        self._direct_flipped = scan_detector_rotation_flipped
+        self.direct_calibration_json = json.dumps({
+            "schema": DIRECT_CALIBRATION_SCHEMA,
             "generated_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             "source": {"widget": "Show4DSTEM", "title": self.title, "acquisition_index": int(self.frame_idx),
                        "scan_shape": [self.shape_rows, self.shape_cols], "detector_shape": [self.det_rows, self.det_cols]},
@@ -1889,8 +1889,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             "tilt_fit_gain": result.get("tilt_fit_gain"),
             "seed": int(seed), "loss": result["loss"], "elapsed_s": result["elapsed_s"],
         }, indent=2)
-        self.ssb_compute_calibration_filename = (
-            f"{export_slug(self.title, 'show4dstem')}_{self.shape_rows}x{self.shape_cols}x{self.det_rows}x{self.det_cols}_ssb_calibration.json"
+        self.direct_calibration_filename = (
+            f"{export_slug(self.title, 'show4dstem')}_{self.shape_rows}x{self.shape_cols}x{self.det_rows}x{self.det_cols}_direct_calibration.json"
         )
         dpc_row, dpc_col = gpu_adapter.aligned_center_of_mass(
             source, (self.shape_rows, self.shape_cols),
@@ -1898,57 +1898,57 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             scan_detector_rotation_flipped=scan_detector_rotation_flipped)
         return phase, np.ascontiguousarray(dpc_row, dtype=np.float32), np.ascontiguousarray(dpc_col, dtype=np.float32)
 
-    def _on_ssb_compute_request_change(self, change) -> None:
-        """The frontend's Compute SSB button: run the solver on a worker thread."""
+    def _on_direct_request_change(self, change) -> None:
+        """The frontend's Direct ptycho Calculate Phase button: run the solver on a worker thread."""
         raw = str(change.get("new") or "")
         if not raw:
             return
-        payload = json.loads(raw)  # the frontend sends {"action": "compute_ssb", ...}
-        self.ssb_compute_request = ""  # consume the trigger before any long work
-        if payload.get("action") != "compute_ssb":
-            self.ssb_compute_status = f"SSB failed: unknown request {payload.get('action')!r}"
+        payload = json.loads(raw)  # the frontend sends {"action": "direct_phase", ...}
+        self.direct_request = ""  # consume the trigger before any long work
+        if payload.get("action") != "direct_phase":
+            self.direct_status = f"Direct ptycho failed: unknown request {payload.get('action')!r}"
             return
-        if not self.ssb_compute_enabled:
-            self.ssb_compute_status = "Compute SSB is available only in a live Python kernel. Precompute SSB before exporting standalone HTML."
+        if not self.direct_enabled:
+            self.direct_status = "Direct ptycho is available only in a live Python kernel. Precompute the direct phase before exporting standalone HTML."
             return
-        if self.ssb_compute_busy:
-            self.ssb_compute_status = "SSB compute is already running."
+        if self.direct_busy:
+            self.direct_status = "Direct ptycho is already running."
             return
         kwargs = {key: payload[key] for key in ("trials", "tilt", "refinement", "lock_aberrations")
                   if key in payload}
         if "trials" in kwargs:
-            self.ssb_compute_trials = int(kwargs["trials"])
+            self.direct_trials = int(kwargs["trials"])
         if "tilt" in kwargs:
-            self.ssb_compute_tilt = bool(kwargs["tilt"])
+            self.direct_tilt = bool(kwargs["tilt"])
         if "refinement" in kwargs:
-            self.ssb_compute_refinement = kwargs["refinement"]
+            self.direct_refinement = kwargs["refinement"]
         manual = bool(kwargs.get("lock_aberrations", False))
         if manual:
             # the sliders' aberrations and the physical rotation, reconstructed as given
             aberrations = payload.get("aberrations", {})
-            self.ssb_compute_C10_nm = float(aberrations.get("C10_nm", self.ssb_compute_C10_nm))
-            self.ssb_compute_C12_nm = float(aberrations.get("C12_nm", self.ssb_compute_C12_nm))
-            self.ssb_compute_phi12_deg = float(aberrations.get("phi12_deg", self.ssb_compute_phi12_deg))
-            self.ssb_compute_scan_detector_rotation_deg = wrap_degrees(
-                payload.get("scan_detector_rotation_deg", self.ssb_compute_scan_detector_rotation_deg))
-            kwargs["aberrations"] = {"C10_nm": self.ssb_compute_C10_nm, "C12_nm": self.ssb_compute_C12_nm,
-                                     "phi12_deg": self.ssb_compute_phi12_deg}
-            kwargs["scan_detector_rotation_deg"] = self.ssb_compute_scan_detector_rotation_deg
-            kwargs["scan_detector_rotation_flipped"] = self._ssb_compute_flipped
-        self.ssb_compute_lock_C10 = bool(payload.get("lock_C10", self.ssb_compute_lock_C10))
-        self.ssb_compute_lock_C12 = bool(payload.get("lock_C12", self.ssb_compute_lock_C12))
+            self.direct_C10_nm = float(aberrations.get("C10_nm", self.direct_C10_nm))
+            self.direct_C12_nm = float(aberrations.get("C12_nm", self.direct_C12_nm))
+            self.direct_phi12_deg = float(aberrations.get("phi12_deg", self.direct_phi12_deg))
+            self.direct_scan_detector_rotation_deg = wrap_degrees(
+                payload.get("scan_detector_rotation_deg", self.direct_scan_detector_rotation_deg))
+            kwargs["aberrations"] = {"C10_nm": self.direct_C10_nm, "C12_nm": self.direct_C12_nm,
+                                     "phi12_deg": self.direct_phi12_deg}
+            kwargs["scan_detector_rotation_deg"] = self.direct_scan_detector_rotation_deg
+            kwargs["scan_detector_rotation_flipped"] = self._direct_flipped
+        self.direct_lock_C10 = bool(payload.get("lock_C10", self.direct_lock_C10))
+        self.direct_lock_C12 = bool(payload.get("lock_C12", self.direct_lock_C12))
         if not manual:
-            kwargs["lock_C10"] = self.ssb_compute_lock_C10
-            kwargs["lock_C12"] = self.ssb_compute_lock_C12
+            kwargs["lock_C10"] = self.direct_lock_C10
+            kwargs["lock_C12"] = self.direct_lock_C12
 
         def worker() -> None:
             """Run the solver off the kernel thread so the frontend stays responsive while it fits."""
             try:
-                self.compute_ssb(verbose=bool(payload.get("verbose", False)), **kwargs)
+                self.direct_phase(verbose=bool(payload.get("verbose", False)), **kwargs)
             except (ValueError, RuntimeError, MemoryError):
-                return  # compute_ssb already published the failure string
+                return  # direct_phase already published the failure string
 
-        threading.Thread(target=worker, name="Show4DSTEM-compute-SSB", daemon=True).start()
+        threading.Thread(target=worker, name="Show4DSTEM-direct-phase", daemon=True).start()
 
     # ------------------------------------------------------------------
     # Offline packing

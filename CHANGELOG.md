@@ -6,6 +6,58 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+## rc44 - 2026-11-11
+
+Needs quantem.gpu rc18 (`[cuda]` and `[mps]` extras).
+
+### Show3DSlices opens tilted; `quantem-widget show3dslices`
+
+- `Show3DSlices(volume, view="tilted")` opens the 3D view tipped 18 deg toward the viewer from the side, with
+  perspective; `view="top"` and `view="side"` match the Top and Side buttons, and a new Tilt button sets the
+  tilted view. Clicking a view button records it, so Reset returns there.
+- New defaults: `slice_stretch=10` (was 30), `volume_opacity=0.6`, `slice_plane_opacity=0.25`; all three and
+  `orthographic` are keywords.
+- `quantem-widget show3dslices volume.npy --sampling SLICE_A ROW_A COL_A --units A` writes the offline page, with
+  `--view`, `--volume-opacity`, `--slice-plane-opacity`, `--orthographic`, `--slice-stretch`, `--encoding`.
+
+### Renamed: SSB is direct ptychography (no aliases)
+
+The maintainer, 11 Nov 2026: "we don't want to use the term SSB, use Direct Ptycho". Every
+name quantem.widget owns now says direct ptychography; the old names are removed, nothing is
+accepted under two spellings, and the readers read only the new record ids. Names shared with
+quantem.gpu (`quantem.ssb-calibration/8`, `quantem.ssb-browser-calibration/3`, `ssb_upsample_factor`,
+`WebGPUSSBBackend` and the vendored `js/.generated/`) follow quantem.gpu's own rename.
+
+| Old | New | Where |
+|---|---|---|
+| `Show4DSTEM.compute_ssb()` | `Show4DSTEM.direct_phase()` | method |
+| traits `ssb_compute_request`, `ssb_compute_status`, `ssb_compute_busy`, `ssb_compute_enabled`, `ssb_compute_trials`, `ssb_compute_tilt`, `ssb_compute_refinement` | `direct_request`, `direct_status`, `direct_busy`, `direct_enabled`, `direct_trials`, `direct_tilt`, `direct_refinement` | Show4DSTEM Python traits and browser model keys |
+| traits `ssb_compute_num_bright_field_pixels`, `ssb_compute_C10_nm`, `ssb_compute_C12_nm`, `ssb_compute_phi12_deg`, `ssb_compute_lock_C10`, `ssb_compute_lock_C12`, `ssb_compute_scan_detector_rotation_deg` | `direct_bright_field_pixels`, `direct_C10_nm`, `direct_C12_nm`, `direct_phi12_deg`, `direct_lock_C10`, `direct_lock_C12`, `direct_scan_detector_rotation_deg` | Show4DSTEM Python traits and browser model keys |
+| traits `ssb_compute_calibration_json`, `ssb_compute_calibration_filename` | `direct_calibration_json`, `direct_calibration_filename` | Show4DSTEM Python traits and browser model keys |
+| request action `"compute_ssb"`, product-map source and label `"SSB"` | `"direct_phase"`, source `"Direct"` (shown as "Direct ptycho") | Show4DSTEM browser request, `vi_source`, `vi_product_labels` |
+| download `<title>_<shape>_ssb_calibration.json` | `<title>_<shape>_direct_calibration.json` | Show4DSTEM calibration download |
+| `ShowPtycho.ssb_session` (trait), `ShowPtycho.ssb_parameters` | `ptycho_session`, `ptycho_parameters` | Python and browser model key |
+| region label `"<label> · SSB"`, export record key `ssb_phase` | `"<label> · Direct"`, `direct_phase` | `region_images`, region export records |
+| browser message `"ssb-preview"` | `"direct-preview"` | ShowPtycho kernel messages |
+| `adapters.gpu.is_ssb`, `DirectSession.ssb` | `is_direct_ptycho`, `DirectSession.direct` | `quantem.widget.adapters.gpu` |
+| env `QUANTEM_SSB_RELEASE`, `QUANTEM_SSB_RELEASE_SOURCE`, `QUANTEM_SSB_RELEASE_CALIBRATION`, `QUANTEM_SSB_RELEASE_BACKEND` | `QUANTEM_DIRECT_RELEASE`, `QUANTEM_DIRECT_RELEASE_SOURCE`, `QUANTEM_DIRECT_RELEASE_CALIBRATION`, `QUANTEM_DIRECT_RELEASE_BACKEND` | release gate, `.github/workflows/widget-release.yml` |
+| `scripts/rewrite_ssb_calibration.py` | `scripts/rewrite_direct_calibration.py` | repository script |
+| `docs/maintainer/ssb-release-check.md`, `docs/tutorials/ssb_workflow.ipynb` | `docs/maintainer/direct-ptycho-release-check.md`, `docs/tutorials/direct_ptycho_workflow.ipynb` | docs |
+| UI: "SSB" reconstruction menu item, "Sample tilt (thick SSB)", "SSB Crop", "Refit SSB (200 trials)", "SSB refit complete" | "Phase of mean", "Sample tilt", "Direct ptycho crop", "Refit (200 trials)", "Refit complete" | ShowPtycho |
+| UI: "SSB" panel, "Running SSB...", "SSB calibration", aria-labels "SSB fit", "SSB refinement", "SSB lock C10/C12" | "Direct ptycho", "Running direct ptycho...", "Direct ptycho calibration", "Direct ptycho fit", ... | Show4DSTEM |
+
+Saved records, each one version past the id it replaces; `scripts/rewrite_direct_calibration.py`
+carries an earlier file over and keeps `<name>.before`:
+
+| Old | New |
+|---|---|
+| `quantem.ssb-stars/5` | `quantem.direct-stars/6` |
+| `quantem.ssb-snapshots/2` | `quantem.direct-snapshots/3` |
+| `quantem.ssb-browser-folder/3` | `quantem.direct-browser-folder/4` |
+| `quantem.show4dstem-ssb-calibration/4` | `quantem.show4dstem-direct-calibration/5` |
+| `quantem.ssb-calibration/8` (script only; ShowPtycho still writes it until quantem.gpu renames it) | `quantem.direct-calibration/9` |
+| `quantem.ssb-browser-calibration/3` (script only, as above) | `quantem.direct-browser-calibration/4` |
+
 ### Renamed (no aliases)
 
 quantem.widget now uses quantem.gpu's names for direct ptychography. The old

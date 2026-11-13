@@ -156,7 +156,7 @@ class Show3DPlayback:
     def _refresh_auto_contrast_ranges(self) -> None:
         """Precompute one percentile range per stack and per independent panel.
 
-        A panel may be a different physical quantity from its neighbor (SSB
+        A panel may be a different physical quantity from its neighbor (direct ptychography
         phase beside dark-field counts), so each independent panel gets its own
         range over its whole time series. Ranges come from a 1024-bin
         histogram accumulated frame by frame so the stack is never joined.

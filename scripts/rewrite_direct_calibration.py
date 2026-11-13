@@ -1,4 +1,4 @@
-"""Rewrite SSB calibration files of an earlier quantem.widget release into the current layout, once.
+"""Rewrite direct ptychography calibration files of an earlier quantem.widget release into the current layout, once.
 
 quantem.widget reads and writes one layout per file kind and converts nothing
 inside the package. A calibration a person chose by eye cannot be recomputed,
@@ -12,9 +12,9 @@ so this script carries the earlier file kinds over:
 - ``*_ssb_calibration.json`` from Show4DSTEM (``schema`` "quantem.ssb.calibration.v1", or
   ``quantem.show4dstem-ssb-calibration/1``, whose ``refine`` flag is now ``refinement``:
   ``"nelder-mead"`` or None, ``/2`` or ``/3``). Layouts up to /2 recorded the standard fit at tilt 0,
-  the only one Compute SSB ran then; /3 records the sample model of the phase (``tilt``,
+  the only one Show4DSTEM ran then; /3 records the sample model of the phase (``tilt``,
   ``sample_tilt_mrad``, ``depth_spread_nm``, ``tilt_fit_gain``), so an earlier file gets
-  ``tilt`` false and the other three None. Compute SSB now fits tilt-corrected by default.
+  ``tilt`` false and the other three None. Show4DSTEM's direct phase now fits tilt-corrected by default.
   /4 names the search budget ``trials`` (was ``num_trials``).
 
 The calibration /4, stars /1, snapshots /1 and cal.json /2 layouts named the display-only phase sign ``flip_phase`` (now
@@ -40,15 +40,23 @@ method ``"ssb"``. Calibration /8 and stars /5 use quantem.gpu's names: ``upsampl
 ``upsample_mode``, ``phase_damp``, ``amplitude_damp`` and the method ``"phase_of_mean"`` (in
 ``reconstruction.method`` and ``reconstruction_method``). The regional fit records name their
 search budget ``trials`` (was ``num_trials``), and calibration /8 holds no ``phase_estimator``:
-SSB has one estimator, the phase of the mean wave, so the key is dropped (a retired
+the conventional direct method has one estimator, the phase of the mean wave, so the key is dropped (a retired
 ``"mean_phase"`` or ``"complex_wave"`` with it). quantem.gpu's ``save_calibration`` wrote
 ``reconstruction_method`` beside ``reconstruction_options``; /8 holds the one ``reconstruction``
 dict ShowPtycho writes, ``{"method": ..., "phase_damp": ..., ...}``, so such a file, /8 included,
 is folded into it. No number changes.
 
-    python scripts/rewrite_ssb_calibration.py --dry-run path/to/calibration.json
-    python scripts/rewrite_ssb_calibration.py path/to/calibration.json path/to/showptycho_stars.json
-    python scripts/rewrite_ssb_calibration.py --data path/to/scan_master.h5 path/to/calibration.json
+The last step renames each record id to its direct ptychography id, one version past the
+earlier one, with no other change: ``quantem.ssb-calibration/8`` is ``quantem.direct-calibration/9``,
+``quantem.ssb-stars/5`` is ``quantem.direct-stars/6``, ``quantem.ssb-snapshots/2`` is
+``quantem.direct-snapshots/3``, ``quantem.ssb-browser-calibration/3`` is
+``quantem.direct-browser-calibration/4``, ``quantem.ssb-browser-folder/3`` (an exported folder's
+``manifest.json``) is ``quantem.direct-browser-folder/4`` and
+``quantem.show4dstem-ssb-calibration/4`` is ``quantem.show4dstem-direct-calibration/5``.
+
+    python scripts/rewrite_direct_calibration.py --dry-run path/to/calibration.json
+    python scripts/rewrite_direct_calibration.py path/to/calibration.json path/to/showptycho_stars.json
+    python scripts/rewrite_direct_calibration.py --data path/to/scan_master.h5 path/to/calibration.json
 
 ``--dry-run`` prints what would be written and changes nothing. Without it each
 file is replaced and the earlier one is kept beside it as ``<name>.before``.
@@ -93,6 +101,11 @@ PATH_CALIBRATION_SCHEMA = "quantem.ssb-calibration/5"
 PATH_STARS_SCHEMA = "quantem.ssb-stars/2"
 SNAPSHOTS_SCHEMA = "quantem.ssb-snapshots/2"
 BROWSER_CALIBRATION_SCHEMA = "quantem.ssb-browser-calibration/3"
+BROWSER_FOLDER_SCHEMA = "quantem.ssb-browser-folder/3"
+# the last layouts above under their direct ptychography ids, one version on; nothing else changes
+DIRECT_IDS = {CALIBRATION_SCHEMA: "quantem.direct-calibration/9", STARS_SCHEMA: "quantem.direct-stars/6",
+              SNAPSHOTS_SCHEMA: "quantem.direct-snapshots/3", BROWSER_CALIBRATION_SCHEMA: "quantem.direct-browser-calibration/4",
+              BROWSER_FOLDER_SCHEMA: "quantem.direct-browser-folder/4", SHOW4DSTEM_SCHEMA: "quantem.show4dstem-direct-calibration/5"}
 # Show4DSTEM layouts up to /2 fitted at tilt 0 and recorded no sample model
 SHOW4DSTEM_TILT_ZERO = {"tilt": False, "sample_tilt_mrad": None, "depth_spread_nm": None, "tilt_fit_gain": None}
 RENAMED = {"flip_phase": "display_negate_phase", "tilt_mrad": "sample_tilt_mrad",
@@ -161,6 +174,8 @@ def rewrite(earlier, path: pathlib.Path | None = None, data: pathlib.Path | None
     ``path`` is where the file is (the folder a relative data path is measured from), ``data``
     the acquisition when it is not beside the file under the name the file recorded.
     """
+    if isinstance(earlier, dict) and earlier.get("schema") in DIRECT_IDS.values():
+        return None, []
     current, notes = path_layout(earlier)
     if current is not None and current.get("schema") in (PATH_CALIBRATION_SCHEMA, PATH_STARS_SCHEMA):
         current = portable(current, pathlib.Path.cwd() / "calibration.json" if path is None else path, data)
@@ -169,6 +184,8 @@ def rewrite(earlier, path: pathlib.Path | None = None, data: pathlib.Path | None
     if current is not None and "reconstruction_method" in current:
         options = current.pop("reconstruction_options", None) or {}
         current["reconstruction"] = {"method": current.pop("reconstruction_method"), **options}
+    if current is not None:
+        current["schema"] = DIRECT_IDS[current["schema"]]
     return current, notes
 
 
@@ -244,7 +261,7 @@ def session_identity(earlier: dict, data: pathlib.Path, scan_shape) -> dict:
 
 
 def path_layout(earlier) -> tuple[dict | None, list[str]]:
-    """An earlier file's content in the last layout before ``portable``, or None when it is current already."""
+    """An earlier file's content in the last layout before ``portable``."""
     if isinstance(earlier, list):
         records = [showptycho_record(star, higher_order_radians=True) for star in earlier]
         return {"schema": PATH_STARS_SCHEMA, "stars": [record for record, _ in records]}, [note for _, notes in records for note in notes]
@@ -252,10 +269,8 @@ def path_layout(earlier) -> tuple[dict | None, list[str]]:
         return earlier, []
     if earlier.get("schema") in NAMES_RENAMED:
         return {**earlier, "schema": NAMES_RENAMED[earlier["schema"]]}, []
-    if earlier.get("schema") == CALIBRATION_SCHEMA and "reconstruction_method" in earlier:
+    if earlier.get("schema") in DIRECT_IDS:
         return dict(earlier), []
-    if earlier.get("schema") in (CALIBRATION_SCHEMA, STARS_SCHEMA, SNAPSHOTS_SCHEMA, BROWSER_CALIBRATION_SCHEMA, SHOW4DSTEM_SCHEMA):
-        return None, []
     later = {"quantem.ssb-calibration/4": PATH_CALIBRATION_SCHEMA, "quantem.ssb-stars/1": PATH_STARS_SCHEMA,
              "quantem.ssb-snapshots/1": SNAPSHOTS_SCHEMA,
              "quantem.ssb-browser-calibration/2": BROWSER_CALIBRATION_SCHEMA}.get(earlier.get("schema"))
@@ -290,7 +305,7 @@ def path_layout(earlier) -> tuple[dict | None, list[str]]:
         current.update(schema=PATH_CALIBRATION_SCHEMA, notes=earlier.get("notes"), sample_tilt_mrad=None if tilt is None else list(tilt),
                        propagator_tilt_mrad=earlier.get("tilt_object_mrad"), depth_spread_nm=earlier.get("depth_spread_nm"))
         return current, notes
-    raise ValueError("not an SSB calibration file this script knows")
+    raise ValueError("not a direct ptychography calibration file this script knows")
 
 
 def main() -> None:

@@ -1,6 +1,6 @@
 """ShowPtycho in a live JupyterLab: keyboard scope and two viewers on one page.
 
-A notebook holds an SSB session in ShowPtycho and an empty code cell. Text
+A notebook holds a direct ptychography session in ShowPtycho and an empty code cell. Text
 typed into the cell, with the letters and keys the widget binds (P, R, S,
 Space, arrows), must land in the cell editor untouched while the widget sits
 on the page. After a click on the widget the same keys must reach it: P pins
@@ -178,7 +178,7 @@ assert saved['display']['tilt_correction'] is False
 assert saved['upsample_mode'] == 'auto'
 assert viewer.upsample == 'auto'
 assert json.loads(viewer.higher_order_aberrations_json)['C30_nm'] == 2.
-expected, _ = viewer._ssb.preview({**viewer._current(), 'C30_nm': 2.}, upsample=viewer.auto_upsample,
+expected, _ = viewer._direct.preview({**viewer._current(), 'C30_nm': 2.}, upsample=viewer.auto_upsample,
     sample_tilt_mrad=(0., 0.), depth_spread_nm=12.)
 np.testing.assert_array_equal(np.frombuffer(viewer.phase_bytes, np.float32).reshape(expected.shape), expected)
 print('saved-fitted-science')
@@ -247,7 +247,7 @@ request = json.loads(viewer.result_json)
 assert request['method'] == 'complex', request
 assert request['phase_damp'] > .03, request
 assert request['amplitude_damp'] > .03, request
-expected, _ = viewer._ssb.preview(viewer.ssb_parameters['aberrations'], compute_loss=False,
+expected, _ = viewer._direct.preview(viewer.ptycho_parameters['aberrations'], compute_loss=False,
     upsample=viewer._output_factor, **viewer._reconstruction_options())
 shown = np.frombuffer(viewer.phase_bytes, np.float32).reshape(expected.shape)
 np.testing.assert_array_equal(shown, expected)

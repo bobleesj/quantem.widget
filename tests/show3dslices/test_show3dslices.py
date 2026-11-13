@@ -201,6 +201,20 @@ def test_the_x_y_z_names_of_earlier_releases_are_not_accepted():
     assert widget.slice_index == 1 and widget.voxel_size_A == [0.0, 0.0, 0.0]
 
 
+
+def test_view_keywords_open_the_3d_view_and_are_validated():
+    volume = column_volume(depth=3, size=16)
+    widget = Show3DSlices(volume)
+    # a multislice volume opens tilted, depth columns upright, with the planes faint over the volume
+    assert (widget.view, widget.slice_stretch, widget.volume_opacity, widget.slice_plane_opacity,
+            widget.orthographic) == ("tilted", 10.0, 0.6, 0.25, False)
+    widget = Show3DSlices(volume, view="top", volume_opacity=0.3, slice_plane_opacity=0.5, orthographic=True)
+    assert (widget.view, widget.volume_opacity, widget.slice_plane_opacity, widget.orthographic) == ("top", 0.3, 0.5, True)
+    assert widget.state_dict()["view"] == "top"
+    with pytest.raises(traitlets.TraitError, match='view must be "tilted", "top" or "side"'):
+        Show3DSlices(volume, view="front")
+
+
 # --- export -------------------------------------------------------------------------
 
 

@@ -16,7 +16,7 @@ ShowPtycho(torch.from_numpy(object_wave).to("cuda"))   # torch tensors on any de
 
 | Input | Shown | Hidden |
 |---|---|---|
-| 2D real array (NumPy or torch) | phase, FFT, histograms, scale bar (`sampling` in `units`: Å, nm or pm) | aberration sliders, Sampling, Save, pins, sweeps (one line names the SSB session they need) |
+| 2D real array (NumPy or torch) | phase, FFT, histograms, scale bar (`sampling` in `units`: Å, nm or pm) | aberration sliders, Sampling, Save, pins, sweeps (one line names the direct ptychography session they need) |
 | 2D complex array | the above plus amplitude (Amp) and the complex HSV view | as above |
 | `quantem.gpu.DirectPtycho` session | phase, FFT, histograms, scale bar and everything below | Amp and Complex display channels: session preview displays phase; use the returned complex result to inspect amplitude |
 
@@ -27,7 +27,7 @@ largest change. `angle` and `abs` run on the tensor's own device.
 ## Workflow and ownership
 
 `quantem.widget` owns presentation, project layout, and browser export. It does
-not implement CUDA, MPS, or WebGPU SSB kernels. Exact fitting and final
+not implement CUDA, MPS, or WebGPU direct ptychography kernels. Exact fitting and final
 reconstruction enter through the shared `quantem.gpu.DirectPtycho` API and return one
 `DirectPtychoResult`, regardless of compute backend. `ShowPtycho` consumes the prepared
 `DirectPtycho` session so it can reuse resident buffers for notebook interaction; the
@@ -53,13 +53,13 @@ recorded one, else estimated from the centre-of-mass curl:
 ```python
 ptycho = DirectPtycho(data)
 ptycho.run()
-viewer = ptycho.show(local_tilt=True, show_fft=True, save_dir="ssb-results")
+viewer = ptycho.show(local_tilt=True, show_fft=True, save_dir="direct-results")
 viewer
 ```
 
 `ptycho.show(...)` is `ShowPtycho(ptycho, ...)`; both forms take the same options.
 
-Detector sampling reuses the saved calibration. When missing, SSB fits the
+Detector sampling reuses the saved calibration. When missing, direct ptychography fits the
 full-field probe disk automatically and retains the estimate for **Save**.
 The known convergence semiangle is required to establish the angular scale.
 An omitted rotation is the recorded one, else estimated from the curl of the
@@ -146,7 +146,7 @@ that FFT panel. It is not re-running the raw detector preprocessing.
 ## Direct reconstruction methods
 
 The canonical workflow is `DirectPtycho(data).run()`. Its default
-`method="phase_of_mean"` preserves conventional SSB on CUDA and MPS. A live CUDA session
+`method="phase_of_mean"` preserves conventional direct ptychography on CUDA and MPS. A live CUDA session
 also supports two experimental regularized direct reconstructions:
 
 ```python
@@ -160,7 +160,7 @@ viewer = ShowPtycho(
 viewer
 ```
 
-The **Reconstruction** control selects **SSB**, **Phase**, or **Amplitude + phase**.
+The **Reconstruction** control selects **Phase of mean**, **Phase**, or **Amplitude + phase**.
 For phase, the **Phase damping** slider stabilizes weakly constrained
 frequencies. Amplitude + phase adds a separate **Amplitude damping**
 slider. Each slider is a direct strength, not a multiplier of another control.
@@ -171,7 +171,7 @@ sampling remain the same unless you change those controls explicitly.
 Dragging runs the current method through `quantem.gpu.DirectPtycho.preview`.
 The fixed-optics system is cached by that backend and the widget sends only
 bounded, latest-value requests. It does not smooth a stored display image or
-switch to the browser's conventional SSB solver. Changing optics requires
+switch to the browser's conventional direct ptychography solver. Changing optics requires
 rebuilding the corresponding system. The achievable display rate depends on
 image size and the notebook/browser connection; no fixed frame rate is promised.
 
@@ -179,8 +179,8 @@ image size and the notebook/browser connection; no fixed frame rate is promised.
 Tikhonov damping strengths of the direct least-squares solve. `smoothness_inv_A=1.0` sets the prior's frequency scale in inverse
 angstroms; use `0` for a flat regularizer. Save records the method and all active
 strengths and detector weighting. With the default `method=None`, a compatible
-saved method is restored automatically; without a save, SSB is used. An explicit
-`method="phase_of_mean"` keeps SSB and does not restore a different saved method.
+saved method is restored automatically; without a save, direct ptychography is used. An explicit
+`method="phase_of_mean"` keeps direct ptychography and does not restore a different saved method.
 A `DirectPtycho.run(...).save_calibration("review/calibration.json")` result can
 be reopened with `ShowPtycho(ptycho, save_dir="review")`, including its sampling,
 strengths, smoothness, and `detector_weighting` choice. Explicit strength,
@@ -188,7 +188,7 @@ smoothness, or weighting arguments override those saved values. These methods us
 measurement of specimen thickness.
 
 Regularized modes require a live CUDA backend. Regional fitting and standalone
-browser reconstruction currently support SSB only and reject unsupported mode
+browser reconstruction currently support direct ptychography only and reject unsupported mode
 combinations explicitly. `save_calibration()` still saves a regularized review,
 including its reproducible method settings. To save scientific output arrays:
 
@@ -203,7 +203,7 @@ result = ptycho.run(
 )
 ```
 
-## SSB fit methods
+## Direct ptychography fit methods
 
 The default on CUDA and MPS uses 200 initial TPE trials, then jointly
 refines aberrations through fifth order with sample tilt and depth.
@@ -211,10 +211,10 @@ refines aberrations through fifth order with sample tilt and depth.
 The initial result is provisional; final refinement can change its phase.
 
 
-quantem fits SSB aberrations with a physical model of the measurement, not an image-quality score. For each trial
+quantem fits direct ptychography aberrations with a physical model of the measurement, not an image-quality score. For each trial
 set of aberrations, and the sample's tilt and thickness, it predicts the double-overlap data the detector should have
 recorded, then keeps the parameters whose prediction agrees best with the measurement (least squares). This
-model-based, tilt-corrected fit is the default everywhere, and it is where SSB in quantem is heading.
+model-based, tilt-corrected fit is the default everywhere, and it is where direct ptychography in quantem is heading.
 
 | Call | Method | Use it for |
 |---|---|---|
@@ -223,7 +223,7 @@ model-based, tilt-corrected fit is the default everywhere, and it is where SSB i
 
 ## Tilt correction
 
-The fit is tilt-corrected by default: `ptycho.aberrations()` fits the SSB
+The fit is tilt-corrected by default: `ptycho.aberrations()` fits the direct ptychography
 model with the sample tilt and depth spread, and the viewer opens on that fit:
 
 ```python
@@ -235,7 +235,7 @@ viewer
 The other method is explicit, with quantem.gpu's names:
 `ptycho.aberrations(search="primary", tilt=False)` fits the primary optics model
 with tilt and depth held at zero. Use `search="primary", tilt=True` for a
-comparison at the same aberration order. Joint fit, Refit SSB and Fit Regions
+comparison at the same aberration order. Joint fit, Refit and Fit Regions
 all run the model-based, tilt-corrected fit.
 
 **Tilt correction** starts on. Switch it off to compare the phase and FFT with
@@ -247,7 +247,7 @@ correction has been fitted. This does not rotate the scan or align depth slices.
 
 ## Reusing the reviewed phase
 
-SSB reconstructs one phase, the phase of the mean wave, on CUDA and MPS,
+Direct ptychography reconstructs one phase, the phase of the mean wave, on CUDA and MPS,
 including higher-order aberrations. Save records it as the method
 `"phase_of_mean"` (in `reconstruction.method`) with the resolved sampling factor
 and optics, so another reconstruction can start from the same phase.
@@ -262,8 +262,8 @@ viewer
 ```
 
 Output sampling is automatic. ShowPtycho uses QuantEM.GPU's
-`ssb_upsample_factor` rule: the smallest supported grid, capped at 4×, for the nominal
-circular-aperture SSB frequency range, `2 * semiangle / wavelength`, along both
+`direct_auto_upsample` rule: the smallest supported grid, capped at 4×, for the nominal
+circular-aperture direct ptychography frequency range, `2 * semiangle / wavelength`, along both
 scan axes. This depends on calibrated voltage, convergence angle and scan step.
 Detector truncation and noise can reduce usable information; automatic sampling
 is not a measured resolution claim. The field of view, measured scan data and
@@ -275,7 +275,7 @@ the same automatic sampling and coherent phase estimator on CUDA and MPS. There
 is an Upsampling choice in View settings, with 8× available explicitly. Save records the resolved
 factor, requested mode and phase estimator for downstream use.
 
-Explicit factors are available through `ShowPtycho(ssb, upsample=8)`
+Explicit factors are available through `ShowPtycho(ptycho, upsample=8)`
 or the Upsampling menu for controlled comparisons. CUDA and MPS support 1, 2, 3, 4 and 8;
 WebGPU uses 1, 2, 4 and 8, rounding Auto up when 3× is needed. Every output uses
 all bright-field pixels. A finer grid increases reconstruction work; it does not
@@ -287,12 +287,12 @@ budget to hold every BF pixel's complex64 Hermitian half-plane when needed
 output buffers require additional memory. A GPU with insufficient capacity
 rejects the run; detector pixels are never removed to make it fit.
 
-## Real-Space Crop And SSB Refit
+## Real-Space Crop And Refit
 
-For a region-specific probe/aberration fit, open the prepared SSB session with
+For a region-specific probe/aberration fit, open the prepared direct ptychography session with
 the raw master path. ShowPtycho then exposes `Crop` in the top-right action group
 beside `Export` and `Reset`. Enable `Crop`, drag a rectangle on the phase panel,
-inspect the live row/column region readout, then use `Refit SSB`.
+inspect the live row/column region readout, then use `Refit (200 trials)`.
 The widget loads the original HDF5 source into encoded GPU storage, decodes
 only that scan region, runs the tilt-corrected fit (200 trials followed by
 refinement, `DirectPtycho(...).aberrations(...)`), and replaces the phase/FFT and their
@@ -320,18 +320,18 @@ reconstruction. This is a reconstruction operation, not a display crop.
 The refit control is absent from standalone HTML/WebGPU exports and from
 sessions without a readable source master. Those modes can inspect an existing
 result interactively, but only a source-backed live session has the raw
-detector data and SSB optimizer needed to make a new scientific fit.
+detector data and direct ptychography optimizer needed to make a new scientific fit.
 
 ## Sample Tilt (Thick Crystals)
 
-Standard SSB treats the sample as one thin plane. In a thick, tilted crystal
+Standard direct ptychography treats the sample as one thin plane. In a thick, tilted crystal
 each depth sees a different defocus and sits shifted sideways by depth x tilt,
 so the lattice washes out along the tilt: often only one set of fringes survives.
 quantem.gpu's default fit adds the sample to the model, and the
-**Sample tilt (thick SSB)** panel, above the aberration sliders, shows it:
+**Sample tilt** panel, above the aberration sliders, shows it:
 
 - **tilt row / tilt col** (mrad, scan frame) and **depth spread** (nm). Depth
-  spread 0 is standard SSB, exactly. It is the depth the model averages over,
+  spread 0 is standard direct ptychography, exactly. It is the depth the model averages over,
   not a measured sample thickness.
 - **Joint fit** fits defocus, astigmatism, tilt and depth spread together and
   moves every slider to the result. The fitted C10 is the defocus at mid-depth.
@@ -340,7 +340,7 @@ quantem.gpu's default fit adds the sample to the model, and the
   scan-detector rotation and swapped when the rotation is flipped), which
   seeds a quantem.thick reconstruction directly.
 
-To compare ordinary and tilt-corrected SSB, keep `search="primary"` on both
+To compare ordinary and tilt-corrected direct ptychography, keep `search="primary"` on both
 sides. Each widget opens on the session's latest fit; neither side adds the
 standard workflow's fifth-order refinement.
 
@@ -364,7 +364,7 @@ frame, from `quantem.gpu.geometry.sample_to_propagator_tilt` with the session's
 rotation and flip, and
 `depth_spread_nm`, the model's depth spread, which is not a sample thickness).
 
-Where it runs: live notebooks with a CUDA or MPS SSB session (sliders and Joint
+Where it runs: live notebooks with a CUDA or MPS direct ptychography session (sliders and Joint
 fit), and exported WebGPU folders (sliders; fitting needs Python). The higher-order panel retains the fitted coefficients during tilt and sampling changes.
 
 Validation: on a simulated 15 nm BaTiO3 crystal tilted (3, -4) mrad the fit
@@ -381,12 +381,12 @@ angle in [0, 360), beside `scan_detector_rotation_flipped`; `scan_sampling_A` an
 `detector_sampling_mrad` are `[row, col]`. `calibration.json`,
 `showptycho_stars.json`, the exported `snapshots/cal.json` and the widget's
 messages use these names, and each file names its layout in a `schema` string
-(`quantem.ssb-calibration/8`, `quantem.ssb-stars/5`,
-`quantem.ssb-browser-calibration/3`, `quantem.ssb-browser-folder/3`,
-`quantem.ssb-snapshots/2`). Calibration /8 and stars /5 use quantem.gpu's
+(`quantem.direct-calibration/9`, `quantem.direct-stars/6`,
+`quantem.direct-browser-calibration/4`, `quantem.direct-browser-folder/4`,
+`quantem.direct-snapshots/3`). Calibration /9 and stars /6 use quantem.gpu's
 names: `upsample`, `upsample_mode`, the method `"phase_of_mean"` and the strengths
-`phase_damp` and `amplitude_damp`. An earlier calibration (/4 to /7) or stars
-file (/1 to /4) is rewritten once with `scripts/rewrite_ssb_calibration.py`. No file holds an absolute path: `calibration.json`
+`phase_damp` and `amplitude_damp`. An earlier calibration (`quantem.ssb-calibration/4` to `/8`) or stars
+file (`quantem.ssb-stars/1` to `/5`) is rewritten once with `scripts/rewrite_direct_calibration.py`. No file holds an absolute path: `calibration.json`
 and each star name the acquisition as `source`, its file name and, when the
 data lives under the save folder, its path relative to it; the session
 identity a restore compares is quantem.gpu's portable `source_identity` (file
@@ -396,12 +396,12 @@ restores its fit; another acquisition under the same file name is refused.
 The display-only phase sign is
 `display_negate_phase`; regional fits hold `sample_tilt_mrad`,
 `sample_agreement` and `num_completed_trials`. A file of another layout is not
-converted; `scripts/rewrite_ssb_calibration.py` in the repository carries
+converted; `scripts/rewrite_direct_calibration.py` in the repository carries
 earlier calibration, star and snapshot files over once (a `/5` calibration
 with a session identity needs its data beside it or `--data PATH`). A
-Show4DSTEM Compute SSB download (`quantem.show4dstem-ssb-calibration/4`) is
+Show4DSTEM direct ptycho calibration download (`quantem.show4dstem-direct-calibration/5`) is
 another record and is not restored as `calibration.json`.
-quantem.gpu's SSB engines compute in Angstrom and radians; the widget converts
+quantem.gpu's direct ptychography engines compute in Angstrom and radians; the widget converts
 once, in `quantem.widget.adapters.gpu`. Slider ranges are C10 +-40 nm and C12
 0-10 nm.
 
@@ -525,7 +525,7 @@ The shared folder/single-file export language is documented in
 
 ## Local tilt workspace
 
-Keep a live SSB session as the input to retain the original C10, C12, phi12,
+Keep a live direct ptychography session as the input to retain the original C10, C12, phi12,
 rotation, Sample, FFT and snapshot controls. The optional **Local Tilt** switch
 adds region editing to the same image. It starts off; there are no workspace
 tabs. An array input remains a static image and cannot expose live optics.
@@ -551,28 +551,28 @@ current operation and elapsed time. It reconstructs the full scan with each
 regional fit, then crops the corrected regional view. The overview fit remains intact.
 
 The settings accept up to 64 overlapping windows, each at least 32 native scan
-samples per axis. A freehand phase-scoring mask is not an arbitrary-support SSB
+samples per axis. A freehand phase-scoring mask is not an arbitrary-support direct ptychography
 fit; region selection currently uses rectangles. Contrast alone does not
 identify physical grain boundaries. Changing the shared calibration marks local
 results stale; obsolete in-flight replies cannot replace a newer selection.
 
-Named SSB results appear beside the overview. The existing Color, Smooth and
-phase-percentile controls apply to all SSB panels; percentiles are evaluated
+Named direct ptychography results appear beside the overview. The existing Color, Smooth and
+phase-percentile controls apply to all direct ptychography panels; percentiles are evaluated
 per image. The top-right **View settings** gear groups **Show FFT**,
 **Inset / Side by Side**, FFT color and contrast. Expand **Local Tilt** there
 for exact bounds, overlapping windows and linked or independent regional zoom;
-**Sweep Ranges** and **SSB Crop** hold the other occasional controls. Local
+**Sweep Ranges** and **Direct ptycho crop** hold the other occasional controls. Local
 Tilt opens FFT as an inset; Side by Side uses an equally sized image panel.
 The defocus sweep, Pin
 and Save controls remain available; Randomize has been removed. The display transport is
-float32; Python preserves the caller-supplied image arrays and dtype. A live SSB session supplies fitting automatically; no notebook callback is needed.
+float32; Python preserves the caller-supplied image arrays and dtype. A live direct ptychography session supplies fitting automatically; no notebook callback is needed.
 Custom callbacks remain available for application integrations.
 
 ### Continue in another notebook cell
 
 ```python
 regions = viewer.regions
-parameters = viewer.ssb_parameters
+parameters = viewer.ptycho_parameters
 fits = viewer.region_fits
 images = viewer.region_images
 ```
@@ -598,7 +598,7 @@ A stable region ID is also accepted. `viewer.calibration()` explicitly selects
 the overview, irrespective of the visible controls. Busy or stale regional fits
 raise with corrective guidance. Numerical state is independent of display settings.
 
-Add `include_phase=True` to include the full `ssb_phase` array in radians. This
+Add `include_phase=True` to include the full `direct_phase` array in radians. This
 reuses the viewer's prepared GPU session at the selected model; it does not
 prepare another acquisition or refit. The array is an independent copy.
 

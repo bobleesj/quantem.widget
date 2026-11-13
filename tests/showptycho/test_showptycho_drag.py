@@ -68,7 +68,7 @@ def test_one_slider_drag_uses_its_window_and_a_release_prepares_the_next(ptycho,
     for index, value in enumerate((12.0, 12.05), start=1):
         expected = request(index, value)
         np.testing.assert_array_equal(_shown(viewer), expected)
-    while not viewer._ssb.advance():
+    while not viewer._direct.advance():
         pass
     expected = request(3, 12.2)
     assert np.abs(_shown(viewer) - expected).max() <= 2e-6 * np.abs(expected).max()
@@ -90,7 +90,7 @@ def test_a_rotation_drag_never_touches_the_drag_windows(ptycho, tmp_path, monkey
     request(2, 0.0, C10_nm=12.05)                                          # an unreleased C10 drag
     calls = []
     for name in ("drag", "advance", "prepare"):
-        monkeypatch.setattr(viewer._ssb, name, lambda *args, _name=name, **kwargs: calls.append(_name))
+        monkeypatch.setattr(viewer._direct, name, lambda *args, _name=name, **kwargs: calls.append(_name))
     for index, rotation in enumerate((0.5, 1.0, 1.5), start=3):            # then the rotation slider
         request(index, rotation, C10_nm=12.05)
         expected = ptycho.preview({**ABERRATIONS, "C10_nm": 12.05}, upsample=3, compute_loss=False)[0]

@@ -1,5 +1,5 @@
 /**
- * ShowPtycho's reconstruction requests to the vendored quantem.gpu WebGPU SSB engine.
+ * ShowPtycho's reconstruction requests to the vendored quantem.gpu WebGPU direct ptychography engine.
  *
  * The engine under `js/.generated/engine` is copied from quantem.gpu and shares the widget's names:
  * it reads `snapshots/cal.json` and the bright-field source exactly as ShowPtycho.export writes them
@@ -11,16 +11,16 @@
  * is its Python counterpart.
  */
 
-import type { WebGPUSSBBackend } from "../.generated/engine/direct_ptycho/webgpu/backend";
+import type { WebGPUDirectBackend } from "../.generated/engine/direct_ptycho/webgpu/backend";
 import type { WebGPUReconstructionOptions } from "../.generated/engine/direct_ptycho/webgpu/protocol";
 
 /** The layout of `snapshots/snapshots.json`, written by the exported page. */
-export const SNAPSHOTS_SCHEMA = "quantem.ssb-snapshots/2";
+export const SNAPSHOTS_SCHEMA = "quantem.direct-snapshots/3";
 
 // The engine evaluates chi = (pi / lambda[A]) alpha^2 (C10 + ...), so it takes Angstrom where the vocabulary says nm.
 const ANGSTROM_PER_NM = 10;
 
-/** Thick-sample model of one reconstruction: sample tilt (scan frame) and depth spread; a depth spread of 0 is standard SSB. */
+/** Thick-sample model of one reconstruction: sample tilt (scan frame) and depth spread; a depth spread of 0 is standard direct ptychography. */
 export interface SampleValues { tiltRowMrad: number; tiltColMrad: number; depthSpreadNm: number }
 
 /** One reconstruction request in the vocabulary's quantities. */
@@ -51,7 +51,7 @@ export function higherOrderAzimuthKey(name: string): string {
 }
 
 /** Run one reconstruction on the engine, converting nm to Angstrom and degrees to radians at this boundary. */
-export function reconstruct(engine: WebGPUSSBBackend, request: ReconstructionRequest) {
+export function reconstruct(engine: WebGPUDirectBackend, request: ReconstructionRequest) {
   const higherOrder: Record<string, number> = {};
   for (const [key, value] of Object.entries(request.higherOrderAberrations)) {
     // a magnitude goes in Angstrom (C21_nm -> C21_A); an azimuth keeps its name and its degrees

@@ -295,7 +295,7 @@ def export_clone(widget, dtype: str, detector_bin: int, scan_bin: int):
     """A second viewer over the packed counts whose state is what the page embeds.
 
     The clone carries the binned geometry and the live display state, has its
-    own export and SSB buttons disabled (there is no kernel behind the page),
+    own export and direct ptychography buttons disabled (there is no kernel behind the page),
     and keeps the heavy stack in its saved state.
     """
     data = export_data_array(widget, dtype, detector_bin, scan_bin)
@@ -336,12 +336,12 @@ def export_clone(widget, dtype: str, detector_bin: int, scan_bin: int):
     clone.export_payload = b""
     clone.export_payload_id = ""
     clone.export_filename = ""
-    clone.ssb_compute_enabled = False
-    clone.ssb_compute_status = ""
-    clone.ssb_compute_request = ""
-    clone.ssb_compute_busy = False
-    clone.ssb_compute_calibration_json = ""
-    clone.ssb_compute_calibration_filename = ""
+    clone.direct_enabled = False
+    clone.direct_status = ""
+    clone.direct_request = ""
+    clone.direct_busy = False
+    clone.direct_calibration_json = ""
+    clone.direct_calibration_filename = ""
     clone._save_state = True
     return clone
 

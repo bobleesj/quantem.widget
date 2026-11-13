@@ -22,21 +22,21 @@ To run the same gate locally after installing candidate wheels:
 ```bash
 unset PYTHONPATH
 export QUANTEM_WIDGET_BROWSER=1 QUANTEM_WIDGET_HEADLESS=1
-export QUANTEM_SSB_RELEASE=1
-export QUANTEM_SSB_RELEASE_SOURCE=/path/to/scan.qem
-export QUANTEM_WIDGET_BROWSER_OUT=/tmp/ssb-widget-check
+export QUANTEM_DIRECT_RELEASE=1
+export QUANTEM_DIRECT_RELEASE_SOURCE=/path/to/scan.qem
+export QUANTEM_WIDGET_BROWSER_OUT=/tmp/direct-widget-check
 python -m pytest -q -s tests/browser/test_showptycho_release.py
 ```
 
 For an H5 file with incomplete calibration, set
-`QUANTEM_SSB_RELEASE_CALIBRATION` to a JSON object with the actual beam energy,
+`QUANTEM_DIRECT_RELEASE_CALIBRATION` to a JSON object with the actual beam energy,
 convergence semiangle and scan sampling. Saved detector sampling is reused;
 missing sampling is fitted. Do not substitute another specimen's calibration.
 
 The gate rejects imports from editable checkouts. It saves screenshots and
 separates fit time from the live interaction completion time. Keep private-data
 screenshots and raw reports outside the repository. CI uses public gold only.
-Kernel benchmarks use `quantem-gpu benchmark-ssb --require-installed`; they do
+Kernel benchmarks use `quantem-gpu benchmark-direct --require-installed`; they do
 not measure browser paint. Record missing hardware, skipped tests and failures
 explicitly, and do not publish an RC that has not passed both backend gates.
 

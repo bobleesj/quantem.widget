@@ -22,7 +22,7 @@ const DEFAULTS: Record<string, unknown> = {
   sample_fit_request: 0, sample_fit_status: '', sample_json: '{}', save_trigger: 0, scan_cols: 0,
   scan_detector_rotation_deg: 0, scan_detector_rotation_max_deg: 180,
   scan_detector_rotation_min_deg: -180, scan_rows: 0, scan_sampling_A: [], session_note: '',
-  ssb_session: true, stars_path: '', tilt_correction: true, trials_json: '',
+  ptycho_session: true, stars_path: '', tilt_correction: true, trials_json: '',
   upsample_available: false, upsample: 'auto', webgpu_cal_json: '',
   webgpu_h5_source_json: '', webgpu_preview_enabled: false, webgpu_preview_status: '',
   webgpu_standalone: false,
@@ -92,7 +92,7 @@ test('a running regional fit disables every aberration and sample slider', async
   const sliders = () => Array.from(el.querySelectorAll('fieldset .MuiSlider-root'))
     .filter(root => root.querySelectorAll('input').length !== 2);
   const sampleToggle = Array.from(el.querySelectorAll('fieldset p'))
-    .find(node => node.textContent?.includes('Sample tilt (thick SSB)')) as HTMLElement;
+    .find(node => node.textContent?.includes('Sample tilt')) as HTMLElement;
   act(() => { sampleToggle.parentElement!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
   const locked = sliders();
   // C10, C12 and phi12 (rotation is shared, so hidden) plus tilt row, tilt col and depth spread.
@@ -190,7 +190,7 @@ test('trial preview and restore use each complete fitted model, including tilt a
 test('joint fit becomes available again after fifth-order completion', async () => {
   const model = session({ local_tilt_enabled: false, local_tilt_active_region: '' });
   await mount(model);
-  const toggle = Array.from(el.querySelectorAll('p')).find(node => node.textContent?.includes('Sample tilt (thick SSB)'))!;
+  const toggle = Array.from(el.querySelectorAll('p')).find(node => node.textContent?.includes('Sample tilt'))!;
   act(() => toggle.parentElement!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
   const button = Array.from(el.querySelectorAll('button')).find(node => node.textContent === 'Joint fit')!;
   act(() => button.click());
@@ -220,7 +220,7 @@ test('wheel zoom works through region overlays and stays independent of other pa
     local_tilt_json: JSON.stringify({ scan_shape: [128, 128], regions, fits: [FIT, { ...FIT, ...lower }] }),
     local_tilt_selection_json: JSON.stringify(regions),
     local_tilt_images_json: JSON.stringify(regions.map((region, index) => ({
-      label: `${region.label} · SSB`, shape: [4, 4], offset: index * 16, sampling_A: 0.5,
+      label: `${region.label} · Direct`, shape: [4, 4], offset: index * 16, sampling_A: 0.5,
     }))),
     local_tilt_bytes: new DataView(new Float32Array(32).fill(0.25).buffer),
   });
@@ -228,8 +228,8 @@ test('wheel zoom works through region overlays and stays independent of other pa
   const science = { ...model.values };
   const panel = (label: string) => el.querySelector(`canvas[aria-label="${label}"]`)!.parentElement!;
   const overview = panel('Overview');
-  const upper = panel('Upper · SSB');
-  const bottom = panel('Lower · SSB');
+  const upper = panel('Upper · Direct');
+  const bottom = panel('Lower · Direct');
   const wheel = async (target: Element, deltaY = -100) => {
     const event = new WheelEvent('wheel', { deltaY, bubbles: true, cancelable: true });
     act(() => { target.dispatchEvent(event); });

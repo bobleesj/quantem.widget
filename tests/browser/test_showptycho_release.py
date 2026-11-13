@@ -1,9 +1,9 @@
 """Installed-wheel acceptance on a real acquisition and a fresh Jupyter kernel.
 
-Set QUANTEM_WIDGET_BROWSER=1, QUANTEM_SSB_RELEASE_SOURCE and optionally
-QUANTEM_SSB_RELEASE_CALIBRATION (a JSON object). This is a hardware release
+Set QUANTEM_WIDGET_BROWSER=1, QUANTEM_DIRECT_RELEASE_SOURCE and optionally
+QUANTEM_DIRECT_RELEASE_CALIBRATION (a JSON object). This is a hardware release
 gate, not the synthetic browser smoke tier. Missing data is a failure when
-QUANTEM_SSB_RELEASE=1. Screenshots and timings stay in the requested output.
+QUANTEM_DIRECT_RELEASE=1. Screenshots and timings stay in the requested output.
 """
 
 import json
@@ -27,12 +27,12 @@ def test_installed_joint_fit_draw_move_resize_and_restore(
     browser_out,
 ):
     """Draw, move and resize one region without replacing the other or Overview."""
-    if os.environ.get("QUANTEM_SSB_RELEASE") != "1":
-        pytest.skip("Opt-in installed-wheel release gate: QUANTEM_SSB_RELEASE=1")
-    assert os.environ.get("QUANTEM_SSB_RELEASE_SOURCE"), (
+    if os.environ.get("QUANTEM_DIRECT_RELEASE") != "1":
+        pytest.skip("Opt-in installed-wheel release gate: QUANTEM_DIRECT_RELEASE=1")
+    assert os.environ.get("QUANTEM_DIRECT_RELEASE_SOURCE"), (
         "Provide the real acquisition path"
     )
-    calibration = json.loads(os.environ.get("QUANTEM_SSB_RELEASE_CALIBRATION", "{}"))
+    calibration = json.loads(os.environ.get("QUANTEM_DIRECT_RELEASE_CALIBRATION", "{}"))
     notebook = "showptycho_release.ipynb"
     setup = f"""from pathlib import Path
 import json
@@ -47,29 +47,29 @@ from quantem.gpu.device import resolve
 for package in (quantem.gpu, quantem.widget):
     assert "site-packages" in Path(package.__file__).resolve().parts, "Install wheels and unset PYTHONPATH"
 backend = resolve("auto")
-assert backend == {os.environ.get("QUANTEM_SSB_RELEASE_BACKEND", "mps" if os.sys.platform == "darwin" else "cuda")!r}
-data = io.load(os.environ['QUANTEM_SSB_RELEASE_SOURCE'], verbose=False)
+assert backend == {os.environ.get("QUANTEM_DIRECT_RELEASE_BACKEND", "mps" if os.sys.platform == "darwin" else "cuda")!r}
+data = io.load(os.environ['QUANTEM_DIRECT_RELEASE_SOURCE'], verbose=False)
 for name, value in {calibration!r}.items():
     setattr(data.calibration, name, value)
 if data.calibration.detector_sampling_mrad is None and data.calibration.detector_sampling_inv_A is None:
     data.calibration.detector_sampling()
-ssb = DirectPtycho(data)
+direct = DirectPtycho(data)
 started = time.perf_counter()
-fit = ssb.aberrations(trials=200, seed=42, compare_standard=False)
+fit = direct.aberrations(trials=200, seed=42, compare_standard=False)
 full_fit_s = time.perf_counter() - started
 assert fit.optimizer["host_numerical_search"] is False
 assert fit.optimizer["device"] == backend
 assert len(fit.trial_records) == 200 * (len(fit.rotation_branches.branches) if fit.rotation_branches else 1)
-result = ssb.run(upsample="auto")
+result = direct.run(upsample="auto")
 save_dir = Path.cwd() / 'calibration'
-viewer = ssb.show(local_tilt=True, save_dir=save_dir)
+viewer = direct.show(local_tilt=True, save_dir=save_dir)
 viewer.regions = []
 overview = viewer.phase_bytes
 viewer
 """
     jupyter.write_notebook(notebook, setup)
     page = jupyter.open(
-        open_page, notebook, "ssb-release", webgpu=True, ready=PHASE, out=browser_out
+        open_page, notebook, "direct-release", webgpu=True, ready=PHASE, out=browser_out
     )
     adapter = page.adapter()
     hardware_adapter(adapter)
@@ -133,7 +133,7 @@ viewer
         """
 assert viewer.phase_bytes == overview
 assert viewer.region_fits[0] == first_fit
-np.testing.assert_array_equal(viewer.region_images[first_fit['label'] + ' · SSB'], first_image)
+np.testing.assert_array_equal(viewer.region_images[first_fit['label'] + ' · Direct'], first_image)
 print('independent')
 """,
     )
@@ -167,7 +167,7 @@ print('independent')
         """
 assert viewer.phase_bytes == overview
 assert viewer.region_fits[0] == first_fit
-np.testing.assert_array_equal(viewer.region_images[first_fit['label'] + ' · SSB'], first_image)
+np.testing.assert_array_equal(viewer.region_images[first_fit['label'] + ' · Direct'], first_image)
 assert all(len(f['fit_record']['fits']) == 1 and f['num_completed_trials'] == 200
            and f['refinement'] == 'bfgs' and f['optimizer']['host_numerical_search'] is False
            for f in viewer.region_fits)
@@ -190,7 +190,7 @@ print(json.dumps({'backend': backend, 'full_fit_s': full_fit_s,
 Path(viewer.calibration_path).with_name('release_expected.json').write_text(json.dumps({
     'fits': viewer.region_fits, 'C10_nm': fit.aberrations['C10_nm']}))
 viewer.close()
-ssb.close()
+direct.close()
 data.close()
 print('saved')
 """,
@@ -203,8 +203,8 @@ save_dir = Path.cwd() / 'calibration'
 expected = json.loads((save_dir / 'release_expected.json').read_text())
 def unexpected_refit(*args, **kwargs):
     raise AssertionError('Saved calibration should restore without refitting')
-ssb.aberrations = unexpected_refit
-viewer = ssb.show(local_tilt=True, save_dir=save_dir)
+direct.aberrations = unexpected_refit
+viewer = direct.show(local_tilt=True, save_dir=save_dir)
 assert viewer.region_fits == expected['fits']
 assert viewer.fitted_C10_nm == expected['C10_nm']
 viewer
@@ -214,7 +214,7 @@ viewer
     restored_page = jupyter.open(
         open_page,
         "showptycho_restored.ipynb",
-        "ssb-restored",
+        "direct-restored",
         webgpu=True,
         ready=IMAGE,
         out=browser_out,

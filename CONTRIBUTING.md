@@ -67,7 +67,7 @@ npm ci
 QUANTEM_GPU_SRC=../quantem.gpu/src npm run build
 ```
 
-Conventional SSB remains available on CUDA and MPS. The regularized phase and
+Conventional direct ptychography remains available on CUDA and MPS. The regularized phase and
 complex methods currently require CUDA and do not run in standalone exports.
 
 For documentation work:
