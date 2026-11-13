@@ -21,6 +21,8 @@ dependencies:
   - git
   - nodejs>=20
   - jupyterlab
+  # named outright: a Windows install reached JupyterLab without it ("No module named dateutil")
+  - python-dateutil
   - pip:
       # PyPI's torch for Windows has no CUDA and is often newer, so pip would pick it: torch comes from the PyTorch
       # index alone, the CUDA 13 build that quantem.gpu[cuda] uses.
