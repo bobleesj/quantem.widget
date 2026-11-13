@@ -1383,7 +1383,7 @@ function Show3D() {
   const [thumbnails, setThumbnails] = useModelState<boolean>("thumbnails");
   const [thumbnailColumns, setThumbnailColumns] = useModelState<number>("thumbnail_columns");
   const [newestFirst] = useModelState<boolean>("newest_first");
-  const [histogramBeside] = useModelState<boolean>("histogram_beside");
+  const [histogramUnderImage] = useModelState<boolean>("histogram_under_image");
   // The model-backed setter can emit its React update after another synced
   // trait in the same control event. Direct WebGPU repaint paths must use the
   // palette selected by this event, not the palette from the previous render.
@@ -10272,7 +10272,7 @@ function Show3D() {
       </Box>
     </Box>
   ) : null;
-  // the intensity histogram + clip sliders (gray only); under the controls, or right of the image (histogram_beside)
+  // the intensity histogram + clip sliders (gray only); with the controls, or right under the image (histogram_under_image)
   const histogramPanel = isRgb ? null : (() => {
       // Global stack range from Python (data_min/data_max trait), not per-frame.
       // Log mode: log1p the range so bins line up with the log-scaled frame data.
@@ -11334,7 +11334,7 @@ function Show3D() {
             </Box>
           </Box>
           )}
-          <Box sx={(thumbnails && nSlices >= 1) || (histogramBeside && histogramPanel) ? { display: "flex", alignItems: "flex-start", gap: 1.5 } : { display: "contents" }}>
+          <Box sx={thumbnails && nSlices >= 1 ? { display: "flex", alignItems: "flex-start", gap: 1.5 } : { display: "contents" }}>
           {thumbnails && nSlices >= 1 && (
             <ThumbnailStrip
               frames={nSlices}
@@ -11959,10 +11959,11 @@ function Show3D() {
               });
             })()}
           </Box>
-          {histogramBeside && histogramPanel && (
-            <Box sx={{ flexShrink: 0, alignSelf: "flex-start" }}>{histogramPanel}</Box>
-          )}
           </Box>
+          {/* The histogram right under the image, at its right edge: in view without scrolling (histogram_under_image). */}
+          {histogramUnderImage && histogramPanel && (
+            <Box sx={{ mt: 0.5, display: "flex", justifyContent: "flex-end", width: "100%" }}>{histogramPanel}</Box>
+          )}
           {/* Statistics bar - right below the image. Multi-panel = one row per panel. */}
           {showStats && (
             (localPanelStats && (nPanels || 1) > 1) ? (
@@ -12246,7 +12247,7 @@ function Show3D() {
                 </Box>
               </Box>
               {/* Intensity histogram + clip sliders are gray-only (colormap window). */}
-              {!histogramBeside && histogramPanel}
+              {!histogramUnderImage && histogramPanel}
             </Box>
           )}
           {/* Lens settings row (when Lens is active) */}
