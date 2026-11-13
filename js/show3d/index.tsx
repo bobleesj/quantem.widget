@@ -1383,7 +1383,6 @@ function Show3D() {
   const [thumbnails, setThumbnails] = useModelState<boolean>("thumbnails");
   const [thumbnailColumns, setThumbnailColumns] = useModelState<number>("thumbnail_columns");
   const [newestFirst] = useModelState<boolean>("newest_first");
-  const [histogramUnderImage] = useModelState<boolean>("histogram_under_image");
   // The model-backed setter can emit its React update after another synced
   // trait in the same control event. Direct WebGPU repaint paths must use the
   // palette selected by this event, not the palette from the previous render.
@@ -10272,7 +10271,7 @@ function Show3D() {
       </Box>
     </Box>
   ) : null;
-  // the intensity histogram + clip sliders (gray only); with the controls, or right under the image (histogram_under_image)
+  // the intensity histogram + clip sliders (gray only), beside the Scale and Color rows
   const histogramPanel = isRgb ? null : (() => {
       // Global stack range from Python (data_min/data_max trait), not per-frame.
       // Log mode: log1p the range so bins line up with the log-scaled frame data.
@@ -11960,10 +11959,6 @@ function Show3D() {
             })()}
           </Box>
           </Box>
-          {/* The histogram right under the image, at its right edge: in view without scrolling (histogram_under_image). */}
-          {histogramUnderImage && histogramPanel && (
-            <Box sx={{ mt: 0.5, display: "flex", justifyContent: "flex-end", width: "100%" }}>{histogramPanel}</Box>
-          )}
           {/* Statistics bar - right below the image. Multi-panel = one row per panel. */}
           {showStats && (
             (localPanelStats && (nPanels || 1) > 1) ? (
@@ -12019,51 +12014,57 @@ function Show3D() {
                 {/* True-color figure stacks: hide colormap / intensity / Smooth;
                     paper figures are already final pixels. */}
                 {!isRgb && (<>
-                {/* Row 1: Scale + Auto + Colorbar */}
-                <Box sx={{ ...controlRow, ...mobileControlRowSx, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                  <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Scale</Typography>
-                  <Select value={logScale ? "log" : "linear"} onChange={(e) => changeLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={themedMenuProps} inputProps={{ "aria-label": "Intensity scale (linear or logarithmic)" }}>
-                    <MenuItem value="linear">Lin</MenuItem>
-                    <MenuItem value="log">Log</MenuItem>
-                  </Select>
-                  <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }} title={perPanelHistogramEnabled ? "Stack-wide auto contrast. Turn off for independent panel clips." : "Automatic percentile-based contrast."}>
-                    {perPanelHistogramEnabled ? "Auto stack" : "Auto"}
-                  </Typography>
-                  <Switch checked={autoContrast} onChange={(e) => handleAutoContrastChange(e.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": perPanelHistogramEnabled ? "Toggle stack-wide automatic contrast" : "Toggle automatic percentile-based contrast" } }} />
-                  <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Colorbar</Typography>
-                  <Switch checked={showColorbar} onChange={(e) => setShowColorbar(e.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Toggle colorbar overlay" } }} />
-                </Box>
-                {/* Row 2: Color + Smooth + Diff */}
-                <Box sx={{ ...controlRow, ...mobileControlRowSx, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                  <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Color</Typography>
-                  <Select
-                    size="small"
-                    value={panelCmapFor(colorTargetPanel)}
-                    onChange={(e) => setCmapForPanel(
-                      colorTargetPanel,
-                      e.target.value,
-                    )}
-                    MenuProps={themedFastMenuProps}
-                    sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }}
-                    inputProps={{ "aria-label": nPanels > 1 ? (colorShared ? "Shared colormap for all panels" : "Selected panel colormap") : "Image colormap" }}
-                  >
-                    {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name} dense>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
-                  </Select>
-                  <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Smooth</Typography>
-                  <Switch checked={smooth} onChange={(e) => setSmooth(e.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Toggle bilinear smoothing" } }} />
-                  {!showDenoise && displayFilterBanner && (
-                    /* House rule: an active reduction is never invisible,
-                       even with the denoise controls row hidden. */
-                    <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.accent }} title={displayFilterBanner}>
-                      {displayFilterBanner.split(" (")[0]}
-                    </Typography>
-                  )}
-                  <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Diff</Typography>
-                  <Select value={diffMode} onChange={(e) => setDiffMode(e.target.value)} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={themedMenuProps} inputProps={{ "aria-label": "Difference mode (off, previous frame, first frame)" }}>
-                    <MenuItem value="off">Off</MenuItem>
-                    <MenuItem value="previous">Prev</MenuItem>
-                    <MenuItem value="first">First</MenuItem>
-                  </Select>
+                {/* Scale and Color rows, the histogram beside them as tall as both: no gap under the image */}
+                <Box sx={{ display: "flex", alignItems: "stretch", gap: `${SPACING.SM}px`, flexWrap: isMobileViewport ? "wrap" : "nowrap" }}>
+                  <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, minWidth: 0 }}>
+                    {/* Row 1: Scale + Auto + Colorbar */}
+                    <Box sx={{ ...controlRow, ...mobileControlRowSx, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
+                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Scale</Typography>
+                      <Select value={logScale ? "log" : "linear"} onChange={(e) => changeLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={themedMenuProps} inputProps={{ "aria-label": "Intensity scale (linear or logarithmic)" }}>
+                        <MenuItem value="linear">Lin</MenuItem>
+                        <MenuItem value="log">Log</MenuItem>
+                      </Select>
+                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }} title={perPanelHistogramEnabled ? "Stack-wide auto contrast. Turn off for independent panel clips." : "Automatic percentile-based contrast."}>
+                        {perPanelHistogramEnabled ? "Auto stack" : "Auto"}
+                      </Typography>
+                      <Switch checked={autoContrast} onChange={(e) => handleAutoContrastChange(e.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": perPanelHistogramEnabled ? "Toggle stack-wide automatic contrast" : "Toggle automatic percentile-based contrast" } }} />
+                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Colorbar</Typography>
+                      <Switch checked={showColorbar} onChange={(e) => setShowColorbar(e.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Toggle colorbar overlay" } }} />
+                    </Box>
+                    {/* Row 2: Color + Smooth + Diff */}
+                    <Box sx={{ ...controlRow, ...mobileControlRowSx, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
+                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Color</Typography>
+                      <Select
+                        size="small"
+                        value={panelCmapFor(colorTargetPanel)}
+                        onChange={(e) => setCmapForPanel(
+                          colorTargetPanel,
+                          e.target.value,
+                        )}
+                        MenuProps={themedFastMenuProps}
+                        sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }}
+                        inputProps={{ "aria-label": nPanels > 1 ? (colorShared ? "Shared colormap for all panels" : "Selected panel colormap") : "Image colormap" }}
+                      >
+                        {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name} dense>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
+                      </Select>
+                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Smooth</Typography>
+                      <Switch checked={smooth} onChange={(e) => setSmooth(e.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Toggle bilinear smoothing" } }} />
+                      {!showDenoise && displayFilterBanner && (
+                        /* House rule: an active reduction is never invisible,
+                           even with the denoise controls row hidden. */
+                        <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.accent }} title={displayFilterBanner}>
+                          {displayFilterBanner.split(" (")[0]}
+                        </Typography>
+                      )}
+                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Diff</Typography>
+                      <Select value={diffMode} onChange={(e) => setDiffMode(e.target.value)} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={themedMenuProps} inputProps={{ "aria-label": "Difference mode (off, previous frame, first frame)" }}>
+                        <MenuItem value="off">Off</MenuItem>
+                        <MenuItem value="previous">Prev</MenuItem>
+                        <MenuItem value="first">First</MenuItem>
+                      </Select>
+                    </Box>
+                  </Box>
+                  {histogramPanel}
                 </Box>
                 {/* Row 3 (toggle-gated): display-only denoise for sparse map stacks (EDS, low dose) */}
                 {showDenoise && (
@@ -12246,8 +12247,6 @@ function Show3D() {
                   </Box>
                 </Box>
               </Box>
-              {/* Intensity histogram + clip sliders are gray-only (colormap window). */}
-              {!histogramUnderImage && histogramPanel}
             </Box>
           )}
           {/* Lens settings row (when Lens is active) */}
