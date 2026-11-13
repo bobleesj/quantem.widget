@@ -55,7 +55,7 @@ import { MetadataSection } from "../widgetInfo";
 import { applyFrequencyFilterBrowser, frequencyFilterActive, getFrequencyFilterBackend, normalizeFrequencyFilterMode } from "../display/frequencyFilter";
 import { encodeIndexedGif, quantizeRgbaForBrowserGif } from "./gif";
 import { missingDisplayStackStatus } from "./displayStack";
-import { ThumbnailStrip } from "./ThumbnailStrip";
+import { ThumbnailStrip, type ThumbnailCellRect } from "./ThumbnailStrip";
 import { ThumbnailRenderer } from "../display/thumbnails";
 import {
   MAX_PLAYBACK_FPS,
@@ -2854,6 +2854,11 @@ function Show3D() {
   const gpuCmapRef = React.useRef<GPUColormapEngine | null>(null);
   const gpuCmapReadyRef = React.useRef(false);
   const gpuFrameCacheUploadedRef = React.useRef<Set<number>>(new Set());
+  // Thumbnail strip: the renderer holding one small GPU layer per frame, the hook that builds a frame's
+  // layer as it becomes resident, and the strip's redraw (filled by the strip while it is shown).
+  const thumbnailRendererRef = React.useRef<ThumbnailRenderer | null>(null);
+  const thumbnailIngestRef = React.useRef<((frame: number) => void) | null>(null);
+  const thumbnailRedrawRef = React.useRef<(() => void) | null>(null);
   // Show3D.stream: the stack the GPU residency effect will see next, read by its cleanup to keep
   // resident frames when the new stack only appends to the old one.
   const gpuStackRef = React.useRef({ stack: offlineFloatStack as DataView | null, width, height, isRgb });
@@ -4889,6 +4894,8 @@ function Show3D() {
           if (isRgb) engine.uploadRgbData(idx, frame.length === frameSize ? frame : frame.subarray(0, frameSize), width, height);
           else engine.uploadData(idx, frame, width, height, 1, true);
           uploaded.add(idx);
+          // its thumbnail layer is box-filtered from the slot now, once, on the GPU
+          if (!isRgb) thumbnailIngestRef.current?.(idx);
           setGpuResidency({ stage: "uploading", ready: uploaded.size, error: "" });
           if (position === 0) renderGpuCachedSliceDirect(current, false);
           if (position % 4 === 3) await new Promise<void>(resolve => window.setTimeout(resolve, 0));
@@ -5949,6 +5956,8 @@ function Show3D() {
       renderGpuTemporalAverageSliceDirect(drawIdx, false)
       || renderGpuCachedSliceDirect(drawIdx, false)
     );
+    // the thumbnails take the new range in the same frame: only their uniforms change
+    thumbnailRedrawRef.current?.();
     if (rendered) {
       updatePlaybackLiveControls(drawIdx);
       return;
@@ -9992,9 +10001,15 @@ function Show3D() {
     if (commitLater) scheduleScrubModelCommit(next);
   };
   const commitSlice = (idx: number) => setAllSliceIdx(clampSlice(idx));
-  // Thumbnail strip: drawn on the GPU from the resident frame slots, so it adds only thumbnail-sized buffers.
-  const thumbnailRendererRef = React.useRef<ThumbnailRenderer | null>(null);
+  // Thumbnail strip: each resident frame is box-filtered once on the GPU into a small layer; the strip is one
+  // canvas drawn from those layers with the main image's range, scale and colormap. The layers go with the
+  // viewer, and with the strip when it is hidden.
   React.useEffect(() => () => { thumbnailRendererRef.current?.destroy(); thumbnailRendererRef.current = null; }, []);
+  React.useEffect(() => {
+    if (thumbnails) return;
+    thumbnailRendererRef.current?.destroy();
+    thumbnailRendererRef.current = null;
+  }, [thumbnails]);
   const thumbnailHoverOriginRef = React.useRef<number | null>(null);
   // The strip is exactly as tall as the viewer as drawn (the canvas box can render shorter than canvasH).
   const [viewerBoxHeight, setViewerBoxHeight] = React.useState(0);
@@ -10014,35 +10029,72 @@ function Show3D() {
     if (streamedStackExtends(previous, offlineFloatStack) !== null) return thumbnailDataVersionRef.current;
     return ++thumbnailDataVersionRef.current;
   }, [offlineFloatStack, offlineStack]);
-  const drawThumbnail = React.useCallback((canvas: HTMLCanvasElement, frame: number): boolean => {
+  // One thumbnail per frame: the first shown panel (with several panels, the others follow it).
+  const thumbnailPanels = Math.max(1, nPanels || 1);
+  const thumbnailPanelWidth = sharedPanelSource ? Math.max(1, numPanelCols || width) : Math.max(1, numPanelCols || Math.round(width / thumbnailPanels));
+  const thumbnailFirstPanel = sharedPanelSource ? 0 : Math.max(0, Math.min(thumbnailPanels - 1, visiblePanelIndices[0] ?? 0));
+  const thumbnailSource = {
+    // a streamed append keeps the version, so the layers already built stay
+    key: `${thumbnailDataVersion}|${width}x${height}|${thumbnailPanelWidth}|${thumbnailFirstPanel}|${sharedPanelSource ? 1 : 0}`,
+    regionX0: sharedPanelSource ? 0 : thumbnailFirstPanel * thumbnailPanelWidth,
+    regionWidth: thumbnailPanelWidth,
+  };
+  const ensureThumbnailRenderer = (): ThumbnailRenderer | null => {
     const engine = gpuCmapRef.current;
-    if (!engine || !gpuCmapReadyRef.current || isRgb || !gpuFrameCacheUploadedRef.current.has(frame)) return false;
-    if (!thumbnailRendererRef.current) thumbnailRendererRef.current = new ThumbnailRenderer(engine);
+    if (!thumbnails || isRgb || !engine || !gpuCmapReadyRef.current) return null;
+    thumbnailRendererRef.current ??= new ThumbnailRenderer(engine);
+    return thumbnailRendererRef.current;
+  };
+  // A frame just made resident: build its layer now (the residency effect calls this per uploaded frame).
+  thumbnailIngestRef.current = (frame: number) => {
+    ensureThumbnailRenderer()?.ingest(frame, thumbnailSource);
+  };
+  // The display range of `frame` as the main image draws it (per-frame Auto ranges, per-panel ranges, the
+  // histogram's slider), from the live settings a histogram drag writes before React commits.
+  const thumbnailRange = (frame: number, settings: typeof playRef.current): RenderRange => {
+    const range = directPanelRanges(frame, [thumbnailFirstPanel], settings);
+    return Array.isArray(range) ? range[0] : range;
+  };
+  const thumbnailPaintRef = React.useRef<((canvas: HTMLCanvasElement, cells: ThumbnailCellRect[]) => boolean) | null>(null);
+  thumbnailPaintRef.current = (canvas, cells) => {
+    const renderer = ensureThumbnailRenderer();
+    if (!renderer) return false;
     const context = canvas.getContext("webgpu") as GPUCanvasContext | null;
     if (!context) return false;
-    // One square thumbnail per frame: the first shown panel (with several panels, the others follow it).
-    const panels = Math.max(1, nPanels || 1);
-    const panelSourceWidth = sharedPanelSource ? Math.max(1, numPanelCols || width) : Math.max(1, numPanelCols || Math.round(width / panels));
-    const firstPanel = sharedPanelSource ? 0 : Math.max(0, Math.min(panels - 1, visiblePanelIndices[0] ?? 0));
-    const liveCmap = cmapLiveRef.current || cmap || "inferno";
-    return thumbnailRendererRef.current.draw(context, frame, {
-      panels: 1,
-      panelSourceWidth,
-      panelOffset: firstPanel * panelSourceWidth,
-      sharedSource: !!sharedPanelSource,
-      thumbWidth: canvas.width,
-      thumbHeight: canvas.height,
-      gap: 0,
-      bgRgb: packedRgbFromHex(interPanelGapColor),
-      logScale: !!logScale,
-      lutName: liveCmap,
-      lut: COLORMAPS[liveCmap] || COLORMAPS.inferno,
+    renderer.useSource(thumbnailSource.key);
+    const settings = playRef.current;
+    const uploaded = gpuFrameCacheUploadedRef.current;
+    const draws = cells.map(cell => {
+      // a frame made resident by another path (or before the strip opened) gets its layer on first sight
+      if (!renderer.has(cell.frame) && uploaded.has(cell.frame)) renderer.ingest(cell.frame, thumbnailSource);
+      return { ...cell, ...thumbnailRange(cell.frame, settings) };
     });
-  }, [isRgb, nPanels, sharedPanelSource, numPanelCols, width, cmap, logScale, interPanelGapColor, visiblePanelIndices]);
-  const releaseThumbnail = React.useCallback((canvas: HTMLCanvasElement) => {
+    const livePanelCmaps = panelCmapsLiveRef.current;
+    const panelCmap = livePanelCmaps.length === thumbnailPanels ? livePanelCmaps[thumbnailFirstPanel] : "";
+    const lutName = panelCmap && COLORMAPS[panelCmap] ? panelCmap : (cmapLiveRef.current || cmap || "inferno");
+    return renderer.draw(context, {
+      cells: draws,
+      logScale: !!settings.logScale,
+      lutName,
+      lut: COLORMAPS[lutName] || COLORMAPS.inferno,
+    });
+  };
+  const paintThumbnails = React.useCallback(
+    (canvas: HTMLCanvasElement, cells: ThumbnailCellRect[]) => thumbnailPaintRef.current?.(canvas, cells) ?? false,
+    [],
+  );
+  const releaseThumbnailCanvas = React.useCallback((canvas: HTMLCanvasElement) => {
     const context = canvas.getContext("webgpu") as GPUCanvasContext | null;
     if (context) thumbnailRendererRef.current?.release(context);
   }, []);
+  // A committed display change (colormap, log scale, Auto, a histogram release, new ranges from Python) redraws the
+  // strip after playRef holds it, in the same commit as the main image. A histogram drag redraws it from
+  // paintHistogramPreviewGpu instead, frame by frame.
+  React.useEffect(() => {
+    thumbnailRedrawRef.current?.();
+  }, [cmap, normalizedPanelCmaps, logScale, autoContrast, imageVminPct, imageVmaxPct, dataMin, dataMax, traitVmin, traitVmax,
+    percentileLow, percentileHigh, vminPerPanel, vmaxPerPanel, panelStates, linkContrast, autoVmins, autoVmaxs,
+    thumbnailSource.key, gpuCmapReady]);
   const thumbnailUnavailableReason = isRgb
     ? "Thumbnails for color stacks are not drawn yet."
     : gpuResidency.stage === "fallback" || gpuResidency.stage === "missing"
@@ -11346,11 +11398,11 @@ function Show3D() {
               onHover={handleThumbnailHover}
               onSelect={handleThumbnailSelect}
               height={viewerBoxHeight || canvasH}
-              imageAspect={(sharedPanelSource ? Math.max(1, numPanelCols || width) : Math.max(1, numPanelCols || Math.round(width / Math.max(1, nPanels || 1)))) / Math.max(1, height)}
-              draw={drawThumbnail}
-              release={releaseThumbnail}
-              drawKey={`${thumbnailDataVersion}|${cmap}|${logScale}|${width}x${height}|${nPanels}|${themeColors.bg}|${visiblePanelIndices[0] ?? 0}`}
-              retryKey={gpuResidency.ready}
+              imageAspect={thumbnailPanelWidth / Math.max(1, height)}
+              paint={paintThumbnails}
+              release={releaseThumbnailCanvas}
+              redrawRef={thumbnailRedrawRef}
+              retryKey={`${gpuResidency.ready}|${gpuCmapReady}|${thumbnailSource.key}`}
               unavailableReason={thumbnailUnavailableReason}
               colors={{ text: themeColors.text, textMuted: themeColors.textMuted, border: themeColors.border, accent: themeColors.accent, controlBg: themeColors.controlBg }}
               chosen={driftFrames || []}
