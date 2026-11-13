@@ -455,8 +455,8 @@ def test_frame_times_s_are_one_increasing_time_per_frame_and_time_the_corrected_
 
 
 def test_drift_correction_runs_on_the_gpu_and_matches_the_fourier_shift():
-    """The drift-corrected panel is quantem.gpu's Fourier shift when installed (else the widget's torch), on the GPU
-    (CPU only without one), and equals the plain Fourier shift, frame by frame, measured and fitted frames alike."""
+    """The drift-corrected panel is quantem.gpu's Fourier shift, on the GPU (CPU only without one), and equals the
+    plain Fourier shift, frame by frame, measured and fitted frames alike."""
     import numpy as np
     import pytest
     import torch
@@ -475,14 +475,8 @@ def test_drift_correction_runs_on_the_gpu_and_matches_the_fourier_shift():
                  else np.asarray(drift["velocity_px_per_s"]) * times[frame])
         expected[frame] = np.fft.ifft2(np.fft.fft2(stack[frame]) * np.exp(2j * np.pi * (rows * shift[0] + cols * shift[1]))).real
     devices = ["cpu"] + (["cuda"] if torch.cuda.is_available() else []) + (["mps"] if torch.backends.mps.is_available() else [])
-    from quantem.widget.adapters import gpu as gpu_adapter
-
-    paths = [gpu_adapter.gpu_moved, None] if gpu_adapter.gpu_moved is not None else [None]   # quantem.gpu's, then ours
-    for path in paths:
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(gpu_adapter, "gpu_moved", path)
-            for device in devices:
-                got = drift_corrected(stack, drift, frame_times_s=times, device=device)
-                assert got.dtype == np.float32 and np.allclose(got, expected, atol=1e-4), (device, path)
+    for device in devices:
+        got = drift_corrected(stack, drift, frame_times_s=times, device=device)
+        assert got.dtype == np.float32 and np.allclose(got, expected, atol=1e-4), device
     if len(devices) == 1:
         pytest.skip("no GPU here: checked the CPU fallback only")

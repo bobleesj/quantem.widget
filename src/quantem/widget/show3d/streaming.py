@@ -119,8 +119,9 @@ class Show3DStream:
             return bool(self._stream_pending)
 
     def _stream_wait_sent(self, timeout: float = 5.0) -> bool:
-        """Wait until every appended frame has left the worker (tests and scripts)."""
-        return self._stream_worker.wait_idle(self._stream_has_pending, timeout)
+        """Wait until every appended frame has left the worker (tests and scripts); an ended stream has."""
+        worker = self._stream_worker
+        return True if worker is None else worker.wait_idle(self._stream_has_pending, timeout)
 
     def _stream_flush(self) -> None:
         """Publish all pending frames as one transfer when a credit is free."""

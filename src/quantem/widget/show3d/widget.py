@@ -123,50 +123,34 @@ def drift_corrected(stack: np.ndarray, drift: Mapping, *, frame_times_s: Sequenc
 
     The picked frames move back by their measured ``shift_px``; the others by the fitted velocity,
     at their own time when ``frame_times_s`` gives one per frame, else at their frame index.
-    A Fourier shift: sub-pixel, and the edges wrap around. quantem.gpu's own (``quantem.gpu.drift.series.moved``,
-    float64, as ``Drift.corrected``) when it is installed; without it the same shift in this module's torch,
-    batched. Either on ``device`` (``"auto"``: CUDA, then Metal, then the CPU only when there is no GPU).
+    A Fourier shift: sub-pixel, and the edges wrap around: quantem.gpu's ``drift.series.moved`` (float64, as
+    ``Drift.corrected``), on ``device`` (``"auto"``: CUDA, then Metal; the CPU only when there is no GPU).
 
     Examples
     --------
     >>> corrected = drift_corrected(frames, viewer.drift, frame_times_s=viewer.frame_times_s)  # doctest: +SKIP
     """
+    from quantem.widget.adapters import gpu as gpu_adapter
     from quantem.widget.device import resolve_device
 
+    gpu_adapter.require("Find drift's drift-corrected panel")
     frames = [int(frame) for frame in drift["frames"]]
     measured = {frame: shift for frame, shift in zip(frames, drift["shift_px"])}
     velocity = np.asarray(drift.get("velocity_px_per_frame", (0.0, 0.0)), dtype=np.float64)
     per_second = drift.get("velocity_px_per_s")
     timed = frame_times_s is not None and len(frame_times_s) == stack.shape[0] and per_second is not None
-    shifts = np.empty((stack.shape[0], 2), dtype=np.float64)        # where the specimen sits in each frame, px
+    target = torch.device(resolve_device(device))
+    out = np.empty(stack.shape, dtype=np.float32)
     for frame in range(stack.shape[0]):
         if frame in measured:
-            shifts[frame] = np.asarray(measured[frame], dtype=np.float64)
+            shift = np.asarray(measured[frame], dtype=np.float64)
         elif timed:
-            shifts[frame] = np.asarray(per_second, dtype=np.float64) * (frame_times_s[frame] - frame_times_s[frames[0]])
+            shift = np.asarray(per_second, dtype=np.float64) * (frame_times_s[frame] - frame_times_s[frames[0]])
         else:
-            shifts[frame] = velocity * (frame - frames[0])
-    target = torch.device(resolve_device(device))
-    from quantem.widget.adapters import gpu as gpu_adapter
-
-    if gpu_adapter.gpu_moved is not None:          # quantem.gpu's shift, image(r - d): back by the specimen's shift
-        out = np.empty(stack.shape, dtype=np.float32)
-        for frame in range(stack.shape[0]):
-            image = torch.as_tensor(np.ascontiguousarray(stack[frame], dtype=np.float32), device=target)
-            out[frame] = gpu_adapter.gpu_moved(image, -shifts[frame]).cpu().numpy()
-        return out
-    rows = torch.fft.fftfreq(stack.shape[1], device=target, dtype=torch.float64)[:, None]
-    cols = torch.fft.fftfreq(stack.shape[2], device=target, dtype=torch.float64)[None, :]
-    out = np.empty(stack.shape, dtype=np.float32)
-    # 8 frames of 2048 x 2048: about 0.5 GB of complex work on the GPU at once
-    batch = max(1, int(8 * 2048 * 2048 // max(1, stack.shape[1] * stack.shape[2])))
-    for first in range(0, stack.shape[0], batch):
-        chunk = torch.as_tensor(np.ascontiguousarray(stack[first:first + batch], dtype=np.float32), device=target)
-        shift = torch.as_tensor(shifts[first:first + batch], device=target)
-        # the specimen moved by shift; f(r + shift) <-> F(k) exp(+2 pi i k . shift)
-        phase = torch.exp(2j * math.pi * (rows[None] * shift[:, 0, None, None] + cols[None] * shift[:, 1, None, None]))
-        moved = torch.fft.ifft2(torch.fft.fft2(chunk) * phase.to(torch.complex64)).real
-        out[first:first + len(chunk)] = moved.cpu().numpy()
+            shift = velocity * (frame - frames[0])
+        # the specimen moved by shift; moved() gives image(r - d), so back by -shift
+        image = torch.as_tensor(np.ascontiguousarray(stack[frame], dtype=np.float32), device=target)
+        out[frame] = gpu_adapter.gpu_moved(image, -shift).cpu().numpy()
     return out
 
 
