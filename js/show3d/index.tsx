@@ -1383,6 +1383,7 @@ function Show3D() {
   const [thumbnails, setThumbnails] = useModelState<boolean>("thumbnails");
   const [thumbnailColumns, setThumbnailColumns] = useModelState<number>("thumbnail_columns");
   const [newestFirst] = useModelState<boolean>("newest_first");
+  const [histogramBeside] = useModelState<boolean>("histogram_beside");
   // The model-backed setter can emit its React update after another synced
   // trait in the same control event. Direct WebGPU repaint paths must use the
   // palette selected by this event, not the palette from the previous render.
@@ -10271,6 +10272,83 @@ function Show3D() {
       </Box>
     </Box>
   ) : null;
+  // the intensity histogram + clip sliders (gray only); under the controls, or right of the image (histogram_beside)
+  const histogramPanel = isRgb ? null : (() => {
+      // Global stack range from Python (data_min/data_max trait), not per-frame.
+      // Log mode: log1p the range so bins line up with the log-scaled frame data.
+      const { min: histMin, max: histMax } = resolveDisplayBounds(dataMin, dataMax, traitVmin, traitVmax, logScale);
+      if (perPanelHistogramEnabled) {
+        const visibleCount = Math.max(1, visiblePanelCount || 1);
+        const cols = panelColsForCount(visibleCount);
+        // Match Show2D shell exactly (width=110, height=58, gap=15px)
+        // so the per-panel histogram strip is visually consistent
+        // across widgets.
+        const panelHistWidth = 110;
+        const panelHistGap = 15;
+        const panelHistMaxWidth = cols * panelHistWidth + Math.max(0, cols - 1) * panelHistGap;
+        return (
+          <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "flex-start", gap: 0.5, opacity: 1, pointerEvents: "auto", maxWidth: "100%" }}>
+            <Box sx={{ display: "grid", gridTemplateColumns: `repeat(auto-fit, minmax(min(100%, ${panelHistWidth}px), ${panelHistWidth}px))`, gap: `${panelHistGap}px`, width: "100%", maxWidth: panelHistMaxWidth, justifyContent: "start" }}>
+            {visiblePanelIndices.map((panel) => {
+              const state = panelStates[panel] || initialState;
+              // Per-panel histogram uses THIS panel's data range
+              // (not stack-wide histMin/histMax). Tight-range
+              // modalities (SSB phase) get a sensible slider
+              // space instead of being squashed by DF counts.
+              const panelDataRange = panelDataRanges[panel];
+              const panelRange = (panelDataRange && panelDataRange.max > panelDataRange.min) ? panelDataRange : { min: histMin, max: histMax };
+              const vminPct = state.imageVminPct;
+              const vmaxPct = state.imageVmaxPct;
+              return (
+                <Histogram
+                  key={`panel-hist-${panel}`}
+                  bins={panelHistogramBins[panel] ?? null}
+                  vminPct={vminPct}
+                  vmaxPct={vmaxPct}
+                  onRangeChange={(min, max) => changePanelHistogramRange(panel, min, max, true)}
+                  onRangePreview={(min, max) => changePanelHistogramRange(panel, min, max, false)}
+                  onRangeCommit={(min, max) => changePanelHistogramRange(panel, min, max, true)}
+                  width={110}
+                  height={58}
+                  valueDecimals={2}
+                  labelFontFamily={UI_FONT}
+                  theme={themeInfo.theme === "dark" ? "dark" : "light"}
+                  dataMin={panelRange.min}
+                  dataMax={panelRange.max}
+                />
+              );
+            })}
+            </Box>
+          </Box>
+        );
+      }
+      return (
+      <Box sx={{
+        // Match Show2D histogram shell exactly so visual stays consistent
+        // across widgets. alignItems: flex-end (not stretch) prevents the
+        // inner Slider thumbs from overflowing onto the canvas, which was
+        // the source of the "2.8 tooltip overlaps bars" overlap bug.
+        display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "flex-start", gap: 0.5,
+      }}>
+        <Histogram
+          bins={imageHistogramBins}
+          vminPct={imageVminPct}
+          vmaxPct={imageVmaxPct}
+          onRangeChange={(min, max) => commitImageHistogramRange(min, max)}
+          onRangePreview={(min, max) => previewImageHistogramRange(min, max)}
+          onRangeCommit={(min, max) => commitImageHistogramRange(min, max)}
+          width={110}
+          height={58}
+          valueDecimals={2}
+          labelFontFamily={UI_FONT}
+          theme={themeInfo.theme === "dark" ? "dark" : "light"}
+          dataMin={histMin}
+          dataMax={histMax}
+        />
+      </Box>
+      );
+  })();
+
   return (
     <Box
       ref={rootRef}
@@ -11256,7 +11334,7 @@ function Show3D() {
             </Box>
           </Box>
           )}
-          <Box sx={thumbnails && nSlices >= 1 ? { display: "flex", alignItems: "flex-start", gap: 1.5 } : { display: "contents" }}>
+          <Box sx={(thumbnails && nSlices >= 1) || (histogramBeside && histogramPanel) ? { display: "flex", alignItems: "flex-start", gap: 1.5 } : { display: "contents" }}>
           {thumbnails && nSlices >= 1 && (
             <ThumbnailStrip
               frames={nSlices}
@@ -11881,6 +11959,9 @@ function Show3D() {
               });
             })()}
           </Box>
+          {histogramBeside && histogramPanel && (
+            <Box sx={{ flexShrink: 0, alignSelf: "flex-start" }}>{histogramPanel}</Box>
+          )}
           </Box>
           {/* Statistics bar - right below the image. Multi-panel = one row per panel. */}
           {showStats && (
@@ -12165,81 +12246,7 @@ function Show3D() {
                 </Box>
               </Box>
               {/* Intensity histogram + clip sliders are gray-only (colormap window). */}
-              {!isRgb && (() => {
-                // Global stack range from Python (data_min/data_max trait), not per-frame.
-                // Log mode: log1p the range so bins line up with the log-scaled frame data.
-                const { min: histMin, max: histMax } = resolveDisplayBounds(dataMin, dataMax, traitVmin, traitVmax, logScale);
-                if (perPanelHistogramEnabled) {
-                  const visibleCount = Math.max(1, visiblePanelCount || 1);
-                  const cols = panelColsForCount(visibleCount);
-                  // Match Show2D shell exactly (width=110, height=58, gap=15px)
-                  // so the per-panel histogram strip is visually consistent
-                  // across widgets.
-                  const panelHistWidth = 110;
-                  const panelHistGap = 15;
-                  const panelHistMaxWidth = cols * panelHistWidth + Math.max(0, cols - 1) * panelHistGap;
-                  return (
-                    <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "flex-start", gap: 0.5, opacity: 1, pointerEvents: "auto", maxWidth: "100%" }}>
-                      <Box sx={{ display: "grid", gridTemplateColumns: `repeat(auto-fit, minmax(min(100%, ${panelHistWidth}px), ${panelHistWidth}px))`, gap: `${panelHistGap}px`, width: "100%", maxWidth: panelHistMaxWidth, justifyContent: "start" }}>
-                      {visiblePanelIndices.map((panel) => {
-                        const state = panelStates[panel] || initialState;
-                        // Per-panel histogram uses THIS panel's data range
-                        // (not stack-wide histMin/histMax). Tight-range
-                        // modalities (SSB phase) get a sensible slider
-                        // space instead of being squashed by DF counts.
-                        const panelDataRange = panelDataRanges[panel];
-                        const panelRange = (panelDataRange && panelDataRange.max > panelDataRange.min) ? panelDataRange : { min: histMin, max: histMax };
-                        const vminPct = state.imageVminPct;
-                        const vmaxPct = state.imageVmaxPct;
-                        return (
-                          <Histogram
-                            key={`panel-hist-${panel}`}
-                            bins={panelHistogramBins[panel] ?? null}
-                            vminPct={vminPct}
-                            vmaxPct={vmaxPct}
-                            onRangeChange={(min, max) => changePanelHistogramRange(panel, min, max, true)}
-                            onRangePreview={(min, max) => changePanelHistogramRange(panel, min, max, false)}
-                            onRangeCommit={(min, max) => changePanelHistogramRange(panel, min, max, true)}
-                            width={110}
-                            height={58}
-                            valueDecimals={2}
-                            labelFontFamily={UI_FONT}
-                            theme={themeInfo.theme === "dark" ? "dark" : "light"}
-                            dataMin={panelRange.min}
-                            dataMax={panelRange.max}
-                          />
-                        );
-                      })}
-                      </Box>
-                    </Box>
-                  );
-                }
-                return (
-                <Box sx={{
-                  // Match Show2D histogram shell exactly so visual stays consistent
-                  // across widgets. alignItems: flex-end (not stretch) prevents the
-                  // inner Slider thumbs from overflowing onto the canvas, which was
-                  // the source of the "2.8 tooltip overlaps bars" overlap bug.
-                  display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "flex-start", gap: 0.5,
-                }}>
-                  <Histogram
-                    bins={imageHistogramBins}
-                    vminPct={imageVminPct}
-                    vmaxPct={imageVmaxPct}
-                    onRangeChange={(min, max) => commitImageHistogramRange(min, max)}
-                    onRangePreview={(min, max) => previewImageHistogramRange(min, max)}
-                    onRangeCommit={(min, max) => commitImageHistogramRange(min, max)}
-                    width={110}
-                    height={58}
-                    valueDecimals={2}
-                    labelFontFamily={UI_FONT}
-                    theme={themeInfo.theme === "dark" ? "dark" : "light"}
-                    dataMin={histMin}
-                    dataMax={histMax}
-                  />
-                </Box>
-                );
-              })()}
+              {!histogramBeside && histogramPanel}
             </Box>
           )}
           {/* Lens settings row (when Lens is active) */}
