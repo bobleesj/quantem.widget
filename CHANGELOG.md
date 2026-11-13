@@ -34,6 +34,14 @@ new `rcN` heading when that rc is published to TestPyPI.
   draws drafts while it moves and one full frame when it rests; past 700 ms per frame it keeps the draft's
   pixel density with half the ray steps and says so once in the console.
 
+### Fixed
+
+- Show3DSlices dropped Smooth while the slice moved on a zoomed-in panel: dragging or stepping the slice
+  slider, or playing, painted each slice with the nearest source pixel, and the panel stayed blocky after
+  the first step. With Smooth on it now paints as the panel at rest does (the native slice, scaled with
+  bilinear smoothing); with Smooth off it stays sharp. Show3D keeps Smooth at rest, zoomed, stepping and
+  playing.
+
 ## rc44 - 2026-11-11
 
 Needs quantem.gpu rc18 (`[cuda]` and `[mps]` extras).

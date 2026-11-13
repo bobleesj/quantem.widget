@@ -609,7 +609,7 @@ function wheelZoomAboutPointer(canvas: HTMLCanvasElement, event: React.WheelEven
 // slice dimensions instead would sample a partly-empty buffer.
 function drawZoomedOffscreen(
   ctx: CanvasRenderingContext2D,
-  offscreen: HTMLCanvasElement,
+  offscreen: HTMLCanvasElement | ImageBitmap,
   canvasW: number,
   canvasH: number,
   view: ZoomState,
@@ -2343,6 +2343,10 @@ function Show3DSlices() {
     const canvasW = canvasSize.w, canvasH = canvasSize.h;
     const renderAxis = axis === 0 ? 0 : 3;
     const renderIndex = axis === 0 ? idx : 0;
+    const zoom = { zoom: view?.zoom || 1, panX: view?.panX || 0, panY: view?.panY || 0 };
+    // Smooth draws as the settled view does: the native slice from the GPU, scaled by the canvas with
+    // bilinear smoothing. Without Smooth the shader renders the panel itself: an area average when the
+    // view shrinks the slice, the nearest source pixel when it enlarges it.
     const bitmap = engine.renderVolumeSliceToImageBitmap(
       renderAxis,
       renderIndex,
@@ -2350,15 +2354,19 @@ function Show3DSlices() {
       paint.logScale,
       paint.flip,
       undefined,
-      { zoom: view?.zoom || 1, panX: view?.panX || 0, panY: view?.panY || 0, canvasW, canvasH },
+      paint.smooth ? undefined : { ...zoom, canvasW, canvasH },
       paint.alignment,
     );
     if (!bitmap) return false;
     const ctx = canvas.getContext("2d");
     if (!ctx) { bitmap.close(); return false; }
-    ctx.imageSmoothingEnabled = paint.smooth;
-    ctx.clearRect(0, 0, canvasW, canvasH);
-    ctx.drawImage(bitmap, 0, 0, bitmap.width, bitmap.height, 0, 0, canvasW, canvasH);
+    if (paint.smooth) {
+      drawZoomedOffscreen(ctx, bitmap, canvasW, canvasH, zoom, true);
+    } else {
+      ctx.imageSmoothingEnabled = false;
+      ctx.clearRect(0, 0, canvasW, canvasH);
+      ctx.drawImage(bitmap, 0, 0, bitmap.width, bitmap.height, 0, 0, canvasW, canvasH);
+    }
     bitmap.close();
     return true;
   }, []);
