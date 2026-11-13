@@ -9,6 +9,7 @@ where the two paths must agree exactly.
 
 import gzip
 import json
+import os
 import re
 import threading
 import time
@@ -27,6 +28,7 @@ from quantem.widget.adapters import gpu as gpu_adapter
 from quantem.widget.adapters.core import make_dataset
 from quantem.widget.show4dstem import preview, reader
 from quantem.widget.show4dstem.detector import detector_mask, bright_field_disk, roi_mask
+from quantem.widget.show4dstem.watching import WatchedFolder
 from quantem.widget.counts import tensor_dtype
 from quantem.widget.show4dstem import export as html_export
 from quantem.widget.show4dstem.export import bundle_master_urls, check_html_payload, export_data_array, write_webgpu_bundle
@@ -174,6 +176,127 @@ def test_stream_opens_on_the_first_acquisition_and_appends_the_rest_as_they_comp
         widget.close()
         for acquisition in loaded:
             acquisition.close()
+
+
+def _watched(tmp_path, monkeypatch, **options):
+    """A viewer watching ``tmp_path`` whose looks at the folder the test makes itself, one at a time."""
+    monkeypatch.setattr(WatchedFolder, "start", lambda self: None)
+    widget = Show4DSTEM.watch(tmp_path, verbose=False, **options)
+    return widget, widget._watched_folder
+
+
+def _arrive(folder: Path, stem: str, values: np.ndarray, age_s: float) -> Path:
+    """Write one complete master whose files last changed ``age_s`` seconds ago."""
+    master = _write_master(folder, stem, values)
+    changed = time.time() - age_s
+    for path in (master, folder / f"{stem}_data_000001.h5"):
+        os.utime(path, (changed, changed))
+    return master
+
+
+def test_watch_shows_each_scan_once_it_is_complete_and_keeps_the_latest_two(tmp_path, accelerator, monkeypatch):
+    widget, watched = _watched(tmp_path, monkeypatch, latest=2)
+    try:
+        assert widget.n_frames == 0 and widget.title == "Waiting for acquisition"
+        _arrive(tmp_path, "a", _counts(0), age_s=30)
+        # a scan is read at the second look that finds it unchanged, never at the first
+        assert not watched.look() and watched.datasets == []
+        assert watched.look() and len(watched.datasets) == 1
+        widget.refresh_stream()
+        assert widget.n_frames == 1 and widget.frame_labels == ["a"]
+        np.testing.assert_array_equal(_pattern(widget), _counts(0)[widget.pos_row, widget.pos_col])
+        # the master of the next scan lands before its data file: it waits, however often the folder is looked at
+        _arrive(tmp_path, "b", _counts(1), age_s=20)
+        (tmp_path / "b_data_000001.h5").rename(tmp_path / "b.arriving")
+        assert not watched.look() and not watched.look() and len(watched.datasets) == 1
+        (tmp_path / "b.arriving").rename(tmp_path / "b_data_000001.h5")
+        assert not watched.look() and watched.look()
+        widget.refresh_stream()
+        assert widget.frame_labels == ["a", "b"] and widget.frame_idx == 1
+        np.testing.assert_array_equal(_pattern(widget), _counts(1)[widget.pos_row, widget.pos_col])
+        first = watched.datasets[0]
+        _arrive(tmp_path, "c", _counts(2), age_s=10)
+        watched.look()
+        assert watched.look() and [path.name for path in watched.paths] == ["b_master.h5", "c_master.h5"]
+        assert first.data.is_released
+        widget.refresh_stream()
+        assert widget.frame_labels == ["b", "c"] and widget.frame_idx == 1 and widget.stream_error is None
+        np.testing.assert_array_equal(_pattern(widget), _counts(2)[widget.pos_row, widget.pos_col])
+        assert widget.title == f"Watching {tmp_path.name} · 2 of the latest 2"
+        kept = list(watched.datasets)
+    finally:
+        widget.close()
+    assert watched.datasets == [] and all(dataset.data.is_released for dataset in kept)
+
+
+def test_watch_keeps_the_selected_scan_when_following_is_off(tmp_path, accelerator, monkeypatch):
+    widget, watched = _watched(tmp_path, monkeypatch, latest=2)
+    try:
+        for stem, age_s in (("a", 30), ("b", 20)):
+            _arrive(tmp_path, stem, _counts(age_s), age_s=age_s)
+        watched.look(), watched.look()
+        widget.refresh_stream()
+        widget.stream_follow = False
+        widget.frame_idx = 0
+        _arrive(tmp_path, "c", _counts(2), age_s=10)
+        watched.look(), watched.look()
+        widget.refresh_stream()
+        # b stays selected by identity: it moved to slot 0 when a was released
+        assert widget.frame_labels == ["b", "c"] and widget.frame_idx == 0
+    finally:
+        widget.close()
+
+
+def test_watch_holds_fewer_scans_when_the_device_has_no_room_and_says_so(tmp_path, accelerator, monkeypatch, capsys):
+    widget, watched = _watched(tmp_path, monkeypatch, latest=2)
+    load, attempts = gpu_adapter.load_acquisition, []
+
+    def one_scan_device(path, *args, **kwargs):
+        attempts.append(Path(path).name)
+        if watched.paths:
+            raise MemoryError("Out of memory allocating the encoded acquisition")
+        return load(path, *args, **kwargs)
+
+    monkeypatch.setattr(gpu_adapter, "load_acquisition", one_scan_device)
+    try:
+        for stem, age_s in (("a", 30), ("b", 20)):
+            _arrive(tmp_path, stem, _counts(age_s), age_s=age_s)
+        watched.look(), watched.look()
+        assert [path.name for path in watched.paths] == ["b_master.h5"]
+        assert "the device holds 1 of these scans, not latest=2" in capsys.readouterr().out
+        widget.refresh_stream()
+        assert widget.frame_labels == ["b"]
+        attempts.clear()
+        _arrive(tmp_path, "c", _counts(2), age_s=10)
+        watched.look(), watched.look()
+        # the older scan is released before the load, so no load is attempted that cannot fit
+        assert attempts == ["c_master.h5"] and [path.name for path in watched.paths] == ["c_master.h5"]
+        widget.refresh_stream()
+        assert widget.frame_labels == ["c"] and widget.stream_error is None
+    finally:
+        widget.close()
+
+
+def test_watch_starts_over_when_the_scan_shape_changes(tmp_path, accelerator, monkeypatch, capsys):
+    widget, watched = _watched(tmp_path, monkeypatch, latest=2)
+    try:
+        _arrive(tmp_path, "a", _counts(0), age_s=30)
+        watched.look(), watched.look()
+        widget.refresh_stream()
+        assert (widget.shape_rows, widget.shape_cols) == SCAN
+        _arrive(tmp_path, "small", _counts(1, scan=(4, 4)), age_s=10)
+        watched.look(), watched.look()
+        assert [path.name for path in watched.paths] == ["small_master.h5"]
+        assert "one comparison holds one scan and detector shape" in capsys.readouterr().out
+        widget.refresh_stream()
+        assert widget.frame_labels == ["small"] and (widget.shape_rows, widget.shape_cols) == (4, 4)
+        np.testing.assert_array_equal(_pattern(widget), _counts(1, scan=(4, 4))[widget.pos_row, widget.pos_col])
+        # a file that cannot be read is skipped with its reason, and the folder is still watched
+        (tmp_path / "broken_master.h5").write_bytes(b"not an HDF5 file")
+        watched.look(), watched.look()
+        assert [path.name for path in watched.paths] == ["small_master.h5"] and watched.error is None
+    finally:
+        widget.close()
 
 
 def test_stream_retires_old_scans_without_resetting_detector_or_cursor(accelerator, live_recording):

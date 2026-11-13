@@ -36,6 +36,28 @@ Show4DSTEM(data)
 
 The scan stays lossless and compressed on the GPU. Nothing is binned or cropped. `io.load` prints the size it takes.
 
+## Follow the folder the detector writes into
+
+`watch.ipynb`, beside `browse.ipynb`, holds these cells: open it with `jupyter lab src/quantem-widget/environments/watch.ipynb`.
+
+```python
+viewer = Show4DSTEM.watch(r"D:\data\today", latest=1)
+viewer
+```
+
+Each scan appears once its files have finished arriving, and replaces the one before it. `latest=2` keeps two
+scans when the card holds them; a 4 GB card holds one 512 x 512 scan. `viewer.close()` stops watching.
+
+Direct ptychography of the scan it shows, with the aberrations fitted through fifth order, is the next cell (or the
+**Direct ptycho** control in the viewer):
+
+```python
+phase = viewer.direct_phase()
+```
+
+The scan needs its voltage and scan step recorded; pass what the file lacks to `watch`, for example
+`Show4DSTEM.watch(folder, latest=1, semiangle_mrad=30)`.
+
 ## Every later session
 
 ```bash

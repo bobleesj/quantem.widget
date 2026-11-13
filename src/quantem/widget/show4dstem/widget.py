@@ -69,6 +69,7 @@ from quantem.widget.show4dstem.preview import static_png_b64
 from quantem.widget.show4dstem.reader import acquisition_name
 from quantem.widget.show4dstem.session import DetectorSessionSource, SessionSeries
 from quantem.widget.show4dstem.streaming import StreamFollower
+from quantem.widget.show4dstem.watching import WatchedFolder
 from quantem.widget.state import SavedStateMixin
 from quantem.widget.units import acquisition_calibration, per_axis, stated, wrap_degrees
 from quantem.widget.utils.array import device_array
@@ -452,6 +453,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._owned_acquisitions = []
         self._stream_lock = threading.RLock()
         self._stream_follower = None
+        self._watched_folder = None
         self._stream_source_serial = 0
         self._stream_display_view = None
         self._stream_display_views: dict[str, bool] = {}
@@ -1054,6 +1056,10 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             super().close()
 
     def _stop_stream(self) -> None:
+        watched, self._watched_folder = self._watched_folder, None
+        if watched is not None:
+            # no scan may load while the viewer lets go; the scans the folder loaded close with it
+            watched.close()
         if self._stream_follower is not None:
             self._stream_follower.stop()
             self._stream_follower = None
@@ -1197,6 +1203,45 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             raise
         return viewer
 
+    @classmethod
+    def watch(cls, folder, *, latest: int = 2, pattern: str = "*_master.h5", recursive: bool = True,
+              refresh_s: float = 2.0, **viewer_kwargs) -> Self:
+        """Show the newest scans of a folder a detector writes into, each as soon as it has finished arriving.
+
+        The folder is looked at every ``refresh_s`` seconds. A scan is read once its files are complete and
+        have stopped changing between two looks, so a scan still being written is never opened. The newest
+        ``latest`` scans stay loaded, lossless and encoded on the GPU; when another arrives the oldest is
+        released first, and the new scan is selected unless you touched the viewer in the last 1.5 seconds
+        (``viewer.stream_follow = False`` keeps your selection). When the device cannot hold ``latest``
+        scans, fewer stay loaded and one line says how many: nothing is binned or cropped to make room.
+        ``pattern`` chooses the files (``"*.qem"`` for saved acquisitions) and ``recursive`` whether child
+        folders count; ``scan_shape=(rows, cols)`` is for scans that are not square. A scan of another scan or
+        detector shape replaces the ones before it: one comparison holds one shape. Returns at once with a waiting viewer; ``close()`` stops watching and frees the scans.
+
+        Examples
+        --------
+        >>> viewer = Show4DSTEM.watch("scans")  # doctest: +SKIP
+        >>> viewer = Show4DSTEM.watch("scans", latest=1, pattern="*.qem")  # doctest: +SKIP
+        """
+        if not math.isfinite(refresh_s) or refresh_s <= 0:
+            raise ValueError("refresh_s must be finite and positive.")
+        device = viewer_kwargs.get("device", "auto")
+        watched = WatchedFolder(
+            folder, latest=latest, pattern=pattern, recursive=recursive, refresh_s=refresh_s,
+            device=None if device == "auto" else device,
+            hot_pixel_correction=viewer_kwargs.pop("hot_pixel_correction", "median"),
+            scan_shape=viewer_kwargs.pop("scan_shape", None),
+        )
+        viewer = cls.stream(watched, refresh_s=min(refresh_s, 0.25), **viewer_kwargs)
+        viewer._watched_folder = watched
+        watched.viewer = viewer
+        try:
+            watched.start()
+        except RuntimeError:  # the thread could not start
+            viewer.close()
+            raise
+        return viewer
+
     def refresh_stream(self, scan_id: str | None = None) -> None:
         """Refresh a stream after unloading scans, optionally selecting a stable scan ID.
 
@@ -1316,8 +1361,10 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 self.frame_idx = sources.index(selected) if selected in sources else 0
                 self._stream_selected_source = self._stream_source_ids[self.frame_idx]
                 self.frame_labels = [str(labels[i]) if labels and i < len(labels) else
-                                     names.get(source, str(source.metadata.get("name") or
-                                                           source.metadata.get("series", f"acquisition {i}")))
+                                     names.get(source, (dataset_name(source) or f"acquisition {i}")
+                                               if gpu_adapter.is_acquisition(source) else
+                                               str(source.metadata.get("name") or
+                                                   source.metadata.get("series", f"acquisition {i}")))
                                      for i, source in enumerate(sources)]
                 self.compare_panel_order = (list(reversed(range(len(sources))))
                                             if getattr(self, "_stream_newest_first", False)
@@ -1812,8 +1859,13 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             bright_field_center_px = self._given_bright_field["bright_field_center_px"]
         self.direct_status = "Preparing direct ptycho data..."
         source = self._direct_source()
+        if gpu_adapter.is_acquisition(source) and getattr(source.data, "_parked", None) is not None:
+            # an earlier fit on a full device left the scan in host memory: it returns before anything reads it
+            source.data.restore()
         manual = bool(lock_aberrations and aberrations is not None)
-        with gpu_adapter.DirectSession.open(
+        # a watched folder loads and releases scans from its own thread: not while this scan is being fitted
+        watched = self._watched_folder
+        with (watched.busy if watched is not None else nullcontext()), gpu_adapter.DirectSession.open(
             source,
             voltage_kV=self.voltage_kV,
             semiangle_mrad=float(semiangle),
@@ -1830,6 +1882,11 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             bright_field_radius_px=None if bright_field_radius_px is None else float(bright_field_radius_px),
             bright_field_center_px=None if bright_field_center_px is None else tuple(float(value) for value in bright_field_center_px),
         ) as direct:
+            if gpu_adapter.is_acquisition(source):
+                # On a device too small for the whole scan's spectra the fit moves the encoded scan to host memory;
+                # this viewer's detector sessions hold the same device memory, so they close first and are
+                # prepared again at the next detector query.
+                direct.direct.on_park = self._let_go_of_the_scan
             num_bright_field_pixels = direct.num_bright_field_pixels
             bright_field_intensity_threshold = direct.bright_field_intensity_threshold
             # the values the session used, also when it detected or estimated them
@@ -1853,6 +1910,12 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                                           seed=int(seed), verbose=verbose, show=False, **fit_options)
                 self._direct_sample = None if result.get("sample_tilt_mrad") is None else {
                     "sample_tilt_mrad": result["sample_tilt_mrad"], "depth_spread_nm": result["depth_spread_nm"]}
+                if result.get("fit_scan_region") is not None:
+                    # the device held the spectra of a scan region only: the whole scan is reconstructed with that
+                    # region's fit, from the encoded counts in batches of detector columns
+                    self.direct_status = (f"Reconstructing the whole scan with the fit of scan region "
+                                          f"{tuple(result['fit_scan_region'])}...")
+                    result = {**result, "phase": direct.run(compute_loss=False)["phase"]}
             # quantem.gpu centres a scan its FFT cannot take in a padded grid; keep the measured positions
             phase = result["phase"]
             if tuple(phase.shape) != (self.shape_rows, self.shape_cols):
@@ -1888,6 +1951,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             "sample_tilt_mrad": result.get("sample_tilt_mrad"), "depth_spread_nm": result.get("depth_spread_nm"),
             "tilt_fit_gain": result.get("tilt_fit_gain"),
             "seed": int(seed), "loss": result["loss"], "elapsed_s": result["elapsed_s"],
+            # only a fit on a small device reads a scan region; a whole-scan fit records none
+            **({} if result.get("fit_scan_region") is None else {"fit_scan_region": list(result["fit_scan_region"])}),
         }, indent=2)
         self.direct_calibration_filename = (
             f"{export_slug(self.title, 'show4dstem')}_{self.shape_rows}x{self.shape_cols}x{self.det_rows}x{self.det_cols}_direct_calibration.json"
@@ -1897,6 +1962,11 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             scan_detector_rotation_deg=result["scan_detector_rotation_deg"],
             scan_detector_rotation_flipped=scan_detector_rotation_flipped)
         return phase, np.ascontiguousarray(dpc_row, dtype=np.float32), np.ascontiguousarray(dpc_col, dtype=np.float32)
+
+    def _let_go_of_the_scan(self) -> None:
+        """Close every detector session on the shown scan, so a fit can take the scan off the device."""
+        with self._compare_lock, self._session_lock:
+            self._close_sessions()
 
     def _on_direct_request_change(self, change) -> None:
         """The frontend's Direct ptycho Calculate Phase button: run the solver on a worker thread."""

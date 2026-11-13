@@ -6,6 +6,12 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- `Show4DSTEM.watch(folder, latest=2)` follows a folder a detector writes into: each scan is shown once its files are
+  complete, the newest `latest` stay loaded, and the oldest is released before the next one loads. When the device
+  cannot hold `latest` scans it keeps fewer and says so. `widget watch <folder>` writes the notebook.
+- `Show4DSTEM.direct_phase()` (the Direct ptycho control) runs on a device too small for the whole scan's spectra: the
+  fit reads the central scan region while the encoded scan waits in host memory, the whole scan is reconstructed in
+  batches, and `direct_calibration_json` records `fit_scan_region`.
 - The command is `widget` (was `quantem-widget`), with no alias: `widget show2d`, `widget show3d`, `widget show3dslices`,
   `widget show4dstem`, `widget github`.
 - `widget build` builds the widgets' JavaScript in a source checkout installed with `pip install -e`, from any folder;

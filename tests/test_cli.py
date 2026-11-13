@@ -1044,3 +1044,16 @@ def test_update_fast_forwards_the_checkout_then_builds_and_refuses_a_diverged_on
     assert cli.main(["update"]) == 1
     assert "could not be fast-forwarded" in capsys.readouterr().err
     assert _git(checkout, "rev-parse", "HEAD") == mine and builds == [False, False]
+
+
+def test_watch_writes_a_notebook_that_follows_the_folder(tmp_path, capsys):
+    scans = tmp_path / "today"
+    scans.mkdir()
+    assert cli.main(["watch", str(scans), "--latest", "1", "--pattern", "*.qem", "--no-open",
+                     "--save-dir", str(tmp_path / "out")]) == 0
+    notebook = json.loads((tmp_path / "out" / "watch_today.ipynb").read_text())
+    assert "".join(notebook["cells"][1]["source"]) == (
+        "from quantem.widget import Show4DSTEM\n\n"
+        f"viewer = Show4DSTEM.watch({str(scans.resolve())!r}, latest=1, pattern='*.qem')\nviewer\n")
+    assert cli.main(["watch", str(tmp_path / "missing"), "--no-open"]) == 1
+    assert "is not a folder to watch" in capsys.readouterr().err

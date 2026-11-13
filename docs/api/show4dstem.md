@@ -187,6 +187,41 @@ opened from a path, `Show4DSTEM(path)`; acquisitions you pass to
 shows a compact GPU memory label in its title row when CUDA or MPS memory is visible. Exported HTML has no live
 Python GPU allocation, so it does not expose a "free GPU memory" control.
 
+## Watch a folder
+
+`Show4DSTEM.watch(folder)` follows a folder a detector writes into and shows each scan as soon as it has finished
+arriving:
+
+```python
+viewer = Show4DSTEM.watch("scans", latest=2)
+viewer
+```
+
+- The folder is looked at every `refresh_s` seconds (2 by default). A scan is read once its files are complete and
+  have stopped changing between two looks, so a master whose data files are still being written is never opened.
+- The newest `latest` scans stay loaded, lossless and encoded on the GPU. When another arrives the oldest is released
+  first and the new scan is selected, unless you touched the viewer in the last 1.5 seconds;
+  `viewer.stream_follow = False` keeps your selection.
+- When the device cannot hold `latest` scans, fewer stay loaded and one line says how many. Nothing is binned or
+  cropped to make room. On a 4 GB card one 512 x 512 x 192 x 192 scan fits (3106 MiB with the viewer open in a rehearsal, each scan
+  shown about 2 s after its file appeared at `refresh_s=0.5`).
+- `pattern="*.qem"` follows saved acquisitions instead of `*_master.h5`; `scan_shape=(rows, cols)` is for scans
+  that are not square. A scan of another scan or detector shape replaces the ones before it.
+- A file that cannot be read is skipped with its reason on one line, and the folder is still watched.
+- `viewer.close()` stops watching and frees the scans. `widget watch <folder>` writes this cell as a notebook.
+
+Direct ptychography on the scan the watch shows is the second cell, or the **Direct ptycho** control:
+
+```python
+phase = viewer.direct_phase()
+```
+
+On a device too small for the whole scan's spectra (a 4 GB card and a 512 x 512 x 192 x 192 scan) the fit reads the
+central 128 x 128 scan region and prints it; the viewer closes its detector sessions, the encoded scan waits in host
+memory during the fit, the folder watch waits too, and the whole scan is then reconstructed from the encoded counts in
+batches of detector columns. Rehearsed with the device held to 4096 MiB free: 5 s for fit and phase, 3602 MiB at the
+peak; not yet run on a 4 GB card. `direct_calibration_json` then carries `fit_scan_region`.
+
 ## Direct ptychography
 
 The default on CUDA and MPS uses 200 initial TPE trials, then jointly
@@ -492,7 +527,7 @@ compare-grid signoff.
 
 ```{eval-rst}
 .. autoclass:: quantem.widget.show4dstem.Show4DSTEM
-   :members: selected_scan_region, export_html, direct_phase, apply_preset, state_dict, save, load_state_dict, free, close, pattern, virtual_image
+   :members: watch, selected_scan_region, export_html, direct_phase, apply_preset, state_dict, save, load_state_dict, free, close, pattern, virtual_image
 ```
 
 ```{note}

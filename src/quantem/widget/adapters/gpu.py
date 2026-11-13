@@ -714,6 +714,7 @@ class DirectSession:
         ``scan_detector_rotation_deg`` (the physical angle in [0, 360)),
         ``loss``, ``elapsed_s``, ``refinement`` (the optimizer a fit used, None
         without one), ``objective`` (what a fit optimized, None without one),
+        ``fit_scan_region`` (the region a fit read on a small device, else None),
         and with a sample model ``sample_tilt_mrad``,
         ``depth_spread_nm`` and ``tilt_fit_gain``.
         """
@@ -724,6 +725,8 @@ class DirectSession:
             "elapsed_s": None if result.elapsed_s is None else float(result.elapsed_s),
             "refinement": getattr(result, "refinement", None),
             "objective": getattr(result, "objective", None),
+            # the scan region a fit read when the device could not hold the whole scan's spectra, else None
+            "fit_scan_region": getattr(result, "fit_scan_region", None),
         }
         if result.sample_tilt_mrad is not None:
             fitted.update(sample_tilt_mrad=[float(value) for value in result.sample_tilt_mrad],

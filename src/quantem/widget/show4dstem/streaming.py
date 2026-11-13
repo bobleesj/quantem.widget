@@ -35,6 +35,8 @@ class StreamFollower:
         self.refresh_s = refresh_s
         self.options = options
         self.title = options.get("title") or "Live acquisition"
+        # a watched folder shows each scan as it lands; a live recording keeps the scan the user selected
+        self.select_newest = getattr(recording, "select_newest", False)
 
     def snapshot(self) -> list:
         return list(self.recording.acquisitions if self.partial else self.recording.datasets)
@@ -112,6 +114,9 @@ class StreamFollower:
                         viewer._replace_stream_sources(self.shown_sources, [])
                         self.last_refresh = time.monotonic()
                     self.shown_sources, self.previous = [], None
+                    if not self.partial:
+                        # the next completed scan may have another shape: it sets the geometry again
+                        self.initialized = False
                     return not complete
                 if not self.initialized and self.partial and not sources[0].received:
                     return not complete
@@ -126,10 +131,16 @@ class StreamFollower:
                     if len(sources) > shown:
                         viewer.append(sources[shown:], self.labels[shown:len(sources)] if self.labels else None)
                         self.previous = None
-                elif sources and self.partial:
+                elif sources:
                     viewer._replace_stream_sources(self.shown_sources, sources)
                     self.previous = None
+                arrived = not self.shown_sources or sources[-1] is not self.shown_sources[-1]
                 self.shown_sources = sources
+                if (self.select_newest and arrived and viewer.stream_follow
+                        and time.monotonic() - viewer._last_interaction_at >= STREAM_FOLLOW_PAUSE_S):
+                    with viewer.hold_sync(), viewer.hold_trait_notifications():
+                        viewer.frame_idx = len(sources) - 1
+                        viewer._stream_selected_source = viewer._stream_source_ids[viewer.frame_idx]
                 shown = len(sources)
                 if self.partial and isinstance(viewer._data, SessionSeries):
                     # Live sessions remain open as leases until eviction. Their
@@ -163,7 +174,7 @@ class StreamFollower:
                     done = " ✓" if current.received == current.total else ""
                     viewer.title = f"Live · {scan} · {current.received:,}/{current.total:,}{done} · {shown} kept"
                 else:
-                    viewer.title = self.title
+                    viewer.title = self.options.get("title") or getattr(self.recording, "title", None) or self.title
                 self.previous = progress
                 self.last_refresh = time.monotonic()
             return not complete
