@@ -48,6 +48,17 @@ Needs quantem.gpu rc18 (`[cuda]` and `[mps]` extras).
 - `quantem-widget show3dslices volume.npy --sampling SLICE_A ROW_A COL_A --units A` writes the offline page, with
   `--view`, `--volume-opacity`, `--slice-plane-opacity`, `--orthographic`, `--slice-stretch`, `--encoding`.
 
+### Touch, pen and lighter playback
+
+- Show3D plays with a third of the main-thread work: stats, histogram and star state commit once a second
+  while playing, and the slider, counters and frame labels are written every frame. Under a 4x CPU throttle
+  one frame costs 4.1 ms for one 512 px panel and 5.3 ms for three (was 12 ms and 18.7 ms).
+- Resize grips follow a finger and a pen in Show3D, Show2D, Show3DSlices (volume and axis panels), ShowPtycho
+  and Show4DSTEM, and Show3D's profile height and Show4DSTEM's profile bars too: they listened to mouse events
+  only. On touch screens the 16 px grip takes a 44 px hit area.
+- Show3D by finger: a one-finger touch draws a Profile, places and moves the ROI and moves the Lens; the fps
+  slider is wider and slider thumbs are larger on touch screens. The ROI hint says drag.
+
 ### Renamed: SSB is direct ptychography (no aliases)
 
 The maintainer, 11 Nov 2026: "we don't want to use the term SSB, use Direct Ptycho". Every
