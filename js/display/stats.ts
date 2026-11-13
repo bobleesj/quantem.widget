@@ -1,7 +1,7 @@
 /** Display statistics: data range, log scale, percentile clip, histogram. */
 
 /** Find min/max range of a Float32Array, filtering out NaN and Infinity. */
-export function findDataRange(data: Float32Array): { min: number; max: number } {
+export function findDataRange(data: ArrayLike<number>): { min: number; max: number } {
   let min = Infinity, max = -Infinity;
   for (let i = 0; i < data.length; i++) {
     const value = data[i];

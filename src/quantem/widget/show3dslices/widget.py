@@ -31,6 +31,9 @@ from quantem.widget.utils.state_io import read_state
 from quantem.widget.utils.ui import validate_display_limits
 
 _SLICE_ALIGNMENT_MODES = frozenset({"off", "auto", "manual"})
+# Sample types the browser and the GPU hold as they are, every value exact: an 8-bit stack costs one byte
+# per voxel in the kernel, the page and the texture instead of four. Any other type is shown as float32.
+_NATIVE_DTYPES = frozenset({"uint8", "int8", "uint16", "int16", "float32"})
 
 
 def _voxel_size_A(sampling: float | Sequence[float], units: str | Sequence[str]) -> list[float]:
@@ -98,6 +101,12 @@ def _flatten_pages(
         if len(titles) != n_panels:
             raise ValueError(f"panel_titles length {len(titles)} must match panel_count {n_panels}")
     return data, titles, 1, 0, []
+
+
+def _all_finite(volume: np.ndarray) -> bool:
+    """True when every value is finite, checked one slice at a time so the boolean mask stays one slice."""
+    flat = volume.reshape(-1, *volume.shape[-2:])
+    return all(bool(np.isfinite(flat[index]).all()) for index in range(flat.shape[0]))
 
 
 class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
@@ -168,7 +177,8 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     offline : bool
         Pack the volume as uint8 against its global range (256 levels) for
         small standalone HTML, and print one line saying so; ``False`` keeps
-        exact float32 in the browser.
+        every value exact in the browser: uint8, int8, uint16, int16 and float32
+        stay in their own type (no copy in the kernel), other types become float32.
     """
 
     _esm = pathlib.Path(__file__).parent.parent / "static" / "show3dslices.js"
@@ -187,7 +197,9 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     slice_index = traitlets.CInt(0).tag(sync=True)
     oblique_angle = traitlets.Float(0.0).tag(sync=True)
     oblique_profile_line = traitlets.List(traitlets.Dict(), default_value=[]).tag(sync=True)
-    volume_bytes = traitlets.Bytes(b"").tag(sync=True)
+    # The volume's own memory (no copy), in volume_dtype; b"" after free()
+    volume_bytes = traitlets.Any(b"").tag(sync=True)
+    volume_dtype = traitlets.Unicode("float32").tag(sync=True)
     offline = traitlets.Bool(False).tag(sync=True)
     # True only on the clone written by export_html: the standalone page renders
     # on a light background whatever the viewer's OS theme.
@@ -425,9 +437,12 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
         if np.iscomplexobj(data):
             raise TypeError("Show3DSlices does not accept complex data. Pass np.abs(arr) or np.angle(arr).")
         data, panel_titles, n_pages, panels_per_page, page_labels = _flatten_pages(data, panel_titles, page_labels)
-        with np.errstate(over="ignore", invalid="ignore"):
-            volume = np.ascontiguousarray(data, dtype=np.float32)
-        if not np.isfinite(volume).all():
+        if data.dtype.name in _NATIVE_DTYPES and data.dtype.isnative:
+            volume = np.ascontiguousarray(data)
+        else:
+            with np.errstate(over="ignore", invalid="ignore"):
+                volume = np.ascontiguousarray(data, dtype=np.float32)
+        if volume.dtype.kind == "f" and not _all_finite(volume):
             raise ValueError("Data contains NaN, inf, or values beyond float32 range. Clean with np.nan_to_num first.")
         self._data = volume
         with self.hold_sync():
@@ -465,15 +480,19 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
             if self.offline:
                 # uint8 against the global range: the browser rescales with _offline_min/_max
                 print(f"Show3DSlices packs the {'x'.join(map(str, volume.shape[1:]))} volume as uint8 over its range "
-                      "(256 levels); offline=False, or export_html(encoding='full'), keeps float32.")
+                      "(256 levels); offline=False, or export_html(encoding='full'), keeps every value exact.")
                 low, high = float(volume.min()), float(volume.max())
                 self._offline_min, self._offline_max = low, high
+                packed = np.zeros(volume.shape, dtype=np.uint8)
                 if high > low:
-                    self.volume_bytes = np.clip(np.rint((volume - low) * (255.0 / (high - low))), 0, 255).astype(np.uint8).tobytes()
-                else:
-                    self.volume_bytes = np.zeros(volume.shape, dtype=np.uint8).tobytes()
+                    # one slice at a time: the float32 working copy stays one slice, not one volume
+                    for panel, slab in np.ndindex(volume.shape[:2]):
+                        packed[panel, slab] = np.clip(np.rint((volume[panel, slab].astype(np.float32) - low) * (255.0 / (high - low))), 0, 255)
+                self.volume_dtype = "uint8"
+                self.volume_bytes = memoryview(packed).cast("B")
             else:
-                self.volume_bytes = volume.tobytes()
+                self.volume_dtype = volume.dtype.name
+                self.volume_bytes = memoryview(volume).cast("B")
         if self.slice_alignment == "auto":
             self.estimate_slice_alignment()
         self.observe(self._on_page_change, names=["page_idx"])
@@ -659,7 +678,7 @@ class Show3DSlices(StateFileMixin, HtmlExportMixin, anywidget.AnyWidget):
     def export_html(self, path: str | pathlib.Path | None = None, *, title: str | None = None, encoding: str = "full") -> pathlib.Path:
         """Write a standalone HTML viewer that opens with no kernel and no network.
 
-        ``encoding="full"`` embeds the exact float32 volume; ``"uint8"`` packs
+        ``encoding="full"`` embeds the exact volume in its own type; ``"uint8"`` packs
         it against the global range for a file about a quarter the size. The
         default path is the kernel cwd with the title, volume shape and
         encoding in the name.

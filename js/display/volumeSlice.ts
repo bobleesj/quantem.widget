@@ -3,6 +3,25 @@
 import type { GPUColormapEngine } from "./colormapEngine";
 import { DISPLAY_NORMALIZE_WGSL } from "./displayShaders";
 import { computePipeline } from "./pipelines";
+import { guardGPUMemory } from "./device";
+import { asFloat32, type VolumeArray } from "../format";
+
+// How the shader reads one voxel: a storage buffer of f32, or a texture whose texels are float, unsigned
+// or signed. An integer volume stays in an integer texture of its own width (r8uint, r16sint, ...), so
+// every value is exact and an 8-bit stack takes a quarter of the float32 bytes.
+type VolumeSource = "buffer" | "f32" | "u32" | "i32";
+
+function volumeTextureFormat(volume: VolumeArray): { format: GPUTextureFormat; source: Exclude<VolumeSource, "buffer"> } {
+  if (volume instanceof Uint8Array) return { format: "r8uint", source: "u32" };
+  if (volume instanceof Uint16Array) return { format: "r16uint", source: "u32" };
+  if (volume instanceof Int8Array) return { format: "r8sint", source: "i32" };
+  if (volume instanceof Int16Array) return { format: "r16sint", source: "i32" };
+  return { format: "r32float", source: "f32" };
+}
+
+// Upload at most this many bytes per queue.writeTexture call: the browser copies each call's bytes on
+// their way to the GPU process, so a whole volume in one call would briefly double its memory.
+const UPLOAD_CHUNK_BYTES = 32 * 1024 * 1024;
 
 // Smallest zoom of a volume slice view, Show3DSlices' MIN_ZOOM. The area
 // average reads every source pixel an output pixel covers, (fullW / canvasW /
@@ -16,13 +35,13 @@ export const VOLUME_SLICE_MIN_ZOOM = 0.5;
 // extraction and NO per-frame volume re-upload. axis: 0=top (slice fixed),
 // 1=row fixed, 2=col fixed, 3=oblique cut along the alignment segment. Order
 // matches the CPU path: log THEN flip.
-function volumeSliceShader(source: "buffer" | "texture"): string {
+function volumeSliceShader(source: VolumeSource): string {
   const volumeBinding = source === "buffer"
     ? "var<storage, read> vol: array<f32>"
-    : "var volTex: texture_2d_array<f32>";
+    : `var volTex: texture_2d_array<${source}>`;
   const volumeLoad = source === "buffer"
     ? "vol[slice * p.numRows * p.numCols + row * p.numCols + col]"
-    : "textureLoad(volTex, vec2<i32>(i32(col), i32(row)), i32(slice), 0).r";
+    : `f32(textureLoad(volTex, vec2<i32>(i32(col), i32(row)), i32(slice), 0).r)`;
   return DISPLAY_NORMALIZE_WGSL + /* wgsl */ `
 struct VParams {
   numCols: u32, numRows: u32, numSlices: u32, axis: u32,
@@ -166,12 +185,13 @@ export class VolumeSlices {
   private readonly engine: GPUColormapEngine;
   private readonly device: GPUDevice;
   private volumePipeline: GPUComputePipeline | null = null;
-  private volumeTexturePipeline: GPUComputePipeline | null = null;
+  private volumeTexturePipelines = new Map<VolumeSource, GPUComputePipeline>();
+  private volTextureSource: Exclude<VolumeSource, "buffer"> = "f32";
+  private volTextureFormat: GPUTextureFormat | null = null;
   private volumeBuffer: GPUBuffer | null = null;
   private volumeTexture: GPUTexture | null = null;
   private volTextureView: GPUTextureView | null = null;
   private volUseTexture = false;
-  private volTextureWidth = 0;
   private volCols = 0;
   private volRows = 0;
   private volSlices = 0;
@@ -200,73 +220,63 @@ export class VolumeSlices {
     });
   }
 
-  private ensureVolumeTexturePipeline(): void {
-    this.volumeTexturePipeline ??= computePipeline(this.device, volumeSliceShader("texture"));
+  private ensureVolumeTexturePipeline(source: Exclude<VolumeSource, "buffer">): void {
+    if (!this.volumeTexturePipelines.has(source)) {
+      this.volumeTexturePipelines.set(source, computePipeline(this.device, volumeSliceShader(source)));
+    }
     this.volParamsBuffer ??= this.device.createBuffer({
       size: VOLUME_PARAMS_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
   }
 
   /**
-   * Upload a 3D volume (slices, rows, cols) row-major float32 into GPU memory once.
-   * 4k and row-padded large stacks use a 2D texture array to avoid
-   * storage-buffer binding limits. The texture path keeps original float32
-   * values; unaligned rows are padded only in the upload stride and never
-   * sampled. Other shapes use the storage-buffer path.
+   * Upload a 3D volume (slices, rows, cols), row-major, into GPU memory once, in its own sample type:
+   * a 2D texture array of float32 or of the integer type, read back exactly by the slice shader.
+   * A volume larger than the texture limits uses the float32 storage-buffer path.
    */
-  uploadVolume(vol: Float32Array, numCols: number, numRows: number, numSlices: number): boolean {
-    const rowBytes = numCols * 4;
-    const paddedRowBytes = Math.ceil(rowBytes / 256) * 256;
-    const textureWidth = paddedRowBytes / 4;
-    const canTexture = textureWidth <= this.device.limits.maxTextureDimension2D &&
+  uploadVolume(vol: VolumeArray, numCols: number, numRows: number, numSlices: number): boolean {
+    const { format, source } = volumeTextureFormat(vol);
+    const canTexture = numCols <= this.device.limits.maxTextureDimension2D &&
       numRows <= this.device.limits.maxTextureDimension2D &&
       numSlices <= this.device.limits.maxTextureArrayLayers;
     if (canTexture) {
-      this.ensureVolumeTexturePipeline();
+      this.ensureVolumeTexturePipeline(source);
       const needsTexture = !this.volumeTexture || this.volCount !== vol.length ||
         this.volCols !== numCols || this.volRows !== numRows || this.volSlices !== numSlices ||
-        this.volTextureWidth !== textureWidth;
+        this.volTextureFormat !== format;
       if (needsTexture) {
         this.volumeTexture?.destroy();
-        this.volumeTexture = this.device.createTexture({
-          size: { width: textureWidth, height: numRows, depthOrArrayLayers: numSlices },
-          format: "r32float",
+        this.volumeTexture = guardGPUMemory(this.device, `a ${numSlices} x ${numRows} x ${numCols} volume`, () => this.device.createTexture({
+          size: { width: numCols, height: numRows, depthOrArrayLayers: numSlices },
+          format,
           usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-        });
+        }));
         this.volTextureView = this.volumeTexture.createView({ dimension: "2d-array" });
         this.volTextureBindGroup = null;
         this.volCount = vol.length;
+        this.volTextureFormat = format;
       }
+      if (this.volTextureSource !== source) this.volTextureBindGroup = null;
+      this.volTextureSource = source;
+      // queue.writeTexture takes rows of any length (the 256-byte row rule is for buffer copies), so
+      // the volume's own memory is the source: no padded copy, in chunks of whole slices.
       const texture = this.volumeTexture!;
-      if (paddedRowBytes === rowBytes) {
+      const rowBytes = numCols * vol.BYTES_PER_ELEMENT;
+      const sliceBytes = rowBytes * numRows;
+      const slicesPerChunk = Math.max(1, Math.floor(UPLOAD_CHUNK_BYTES / Math.max(1, sliceBytes)));
+      for (let slice = 0; slice < numSlices; slice += slicesPerChunk) {
+        const layers = Math.min(slicesPerChunk, numSlices - slice);
         this.device.queue.writeTexture(
-          { texture },
+          { texture, origin: { x: 0, y: 0, z: slice } },
           vol.buffer as ArrayBuffer,
-          { offset: vol.byteOffset, bytesPerRow: rowBytes, rowsPerImage: numRows },
-          { width: numCols, height: numRows, depthOrArrayLayers: numSlices },
+          { offset: vol.byteOffset + slice * sliceBytes, bytesPerRow: rowBytes, rowsPerImage: numRows },
+          { width: numCols, height: numRows, depthOrArrayLayers: layers },
         );
-      } else {
-        const layer = new Float32Array(textureWidth * numRows);
-        const sliceStride = numCols * numRows;
-        for (let slice = 0; slice < numSlices; slice++) {
-          const sliceStart = slice * sliceStride;
-          for (let row = 0; row < numRows; row++) {
-            const rowStart = sliceStart + row * numCols;
-            layer.set(vol.subarray(rowStart, rowStart + numCols), row * textureWidth);
-          }
-          this.device.queue.writeTexture(
-            { texture, origin: { x: 0, y: 0, z: slice } },
-            layer.buffer,
-            { bytesPerRow: paddedRowBytes, rowsPerImage: numRows },
-            { width: numCols, height: numRows, depthOrArrayLayers: 1 },
-          );
-        }
       }
       this.volUseTexture = true;
       this.volumeBuffer?.destroy();
       this.volumeBuffer = null;
       this.volComputeBindGroup = null;
-      this.volTextureWidth = textureWidth;
       this.volCols = numCols; this.volRows = numRows; this.volSlices = numSlices;
       return true;
     }
@@ -275,19 +285,20 @@ export class VolumeSlices {
     this.volumeTexture = null;
     this.volTextureView = null;
     this.volTextureBindGroup = null;
-    this.volTextureWidth = 0;
+    this.volTextureFormat = null;
     const maxBind = this.device.limits.maxStorageBufferBindingSize;
-    if (vol.byteLength > maxBind) return false;
+    if (vol.length * 4 > maxBind) return false;
     if (!this.volumeBuffer || this.volCount !== vol.length) {
       this.volumeBuffer?.destroy();
       this.volumeBuffer = this.device.createBuffer({
-        size: vol.byteLength,
+        size: vol.length * 4,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
       });
       this.volCount = vol.length;
       this.volComputeBindGroup = null;
     }
-    this.device.queue.writeBuffer(this.volumeBuffer, 0, vol.buffer as ArrayBuffer, vol.byteOffset, vol.byteLength);
+    const floats = asFloat32(vol);
+    this.device.queue.writeBuffer(this.volumeBuffer, 0, floats.buffer as ArrayBuffer, floats.byteOffset, floats.byteLength);
     this.volUseTexture = false;
     this.volCols = numCols; this.volRows = numRows; this.volSlices = numSlices;
     return true;
@@ -307,7 +318,7 @@ export class VolumeSlices {
     view?: VolumeSliceView,
     alignment?: VolumeSliceAlignment,
   ): ImageBitmap | null {
-    const texturePipeline = this.volUseTexture ? this.volumeTexturePipeline : null;
+    const texturePipeline = this.volUseTexture ? this.volumeTexturePipelines.get(this.volTextureSource) ?? null : null;
     const textureView = this.volUseTexture ? this.volTextureView : null;
     const useTexture = texturePipeline != null && textureView != null;
     const bufferPipeline = this.volumePipeline;
@@ -442,6 +453,6 @@ export class VolumeSlices {
     this.volBlitParamsBuffer?.destroy(); this.volBlitParamsBuffer = null;
     this.volBlitBindGroup = null; this.volComputeBindGroup = null; this.volTextureBindGroup = null;
     this.volUseTexture = false;
-    this.volCount = 0; this.volRgbaCapacity = 0; this.volTextureWidth = 0;
+    this.volCount = 0; this.volRgbaCapacity = 0; this.volTextureFormat = null;
   }
 }

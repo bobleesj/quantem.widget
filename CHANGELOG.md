@@ -6,6 +6,30 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+### Show3DSlices and Show3D hold less memory, every value exact
+
+- Show3DSlices keeps a uint8, int8, uint16, int16 or float32 volume in its own type in the kernel (no copy), in
+  the page and in the GPU texture; other types are shown as float32 as before. On a real 24 x 2048 x 2048 uint8
+  stack (100 MB) the kernel holds 3 MB instead of 908 MB for the widget, the page 130 MB of arrays instead of
+  432 MB and the GPU 202 MB instead of 504 MB, with identical pixels. New synced trait `volume_dtype`;
+  `volume_bytes` is a view of the volume.
+- Show3D syncs its stack as a view of its array instead of a second copy: 507 MB instead of 907 MB in the kernel
+  on the same stack.
+- Volume uploads no longer pad rows to 256 bytes and go to the GPU a few slices at a time; a volume deeper than
+  256 slices or wider than 2048 voxels stays in a texture.
+- Numbers and method: `docs/2026-11-13-show3d-memory.md`.
+
+### Show3DSlices and Show3D keep working when the GPU stops
+
+- When the browser loses its GPU device (a driver reset, a GPU process crash, too little GPU memory: most
+  often on an integrated GPU), both viewers mount again on the CPU paths, draw the same picture and say
+  why; before, they froze or went blank. The 3D view of Show3DSlices needs WebGPU and says it is off.
+- A volume the GPU has no memory for moves the page to the CPU paths with that reason, instead of using a
+  texture that was never allocated.
+- The 3D view sends one frame at a time. On a GPU that needs more than 50 ms for a full-quality frame it
+  draws drafts while it moves and one full frame when it rests; past 700 ms per frame it keeps the draft's
+  pixel density with half the ray steps and says so once in the console.
+
 ## rc44 - 2026-11-11
 
 Needs quantem.gpu rc18 (`[cuda]` and `[mps]` extras).

@@ -43,6 +43,33 @@ def drifting_stack(row_drift: float, col_drift: float, slices: int = 7, size: in
 # --- volume transport -----------------------------------------------------------
 
 
+@pytest.mark.parametrize("dtype", ["uint8", "int8", "uint16", "int16", "float32"])
+def test_volume_stays_in_its_own_type_without_a_kernel_copy(dtype):
+    info = np.iinfo(dtype) if np.dtype(dtype).kind in "iu" else None
+    values = np.random.default_rng(0).integers(info.min, info.max, size=(4, 12, 10), endpoint=True) if info else np.random.default_rng(0).standard_normal((4, 12, 10))
+    volume = values.astype(dtype)
+    widget = Show3DSlices(volume)
+    assert widget.volume_dtype == dtype
+    sent = np.frombuffer(widget.volume_bytes, dtype=dtype).reshape(volume.shape)
+    np.testing.assert_array_equal(sent, volume)
+    # the synced bytes and the stored volume are the caller's memory: no second or third copy
+    assert np.shares_memory(sent, volume) and np.shares_memory(widget._data, volume)
+
+
+@pytest.mark.parametrize("dtype", ["float64", "int32", "uint32", "bool", ">u2"])
+def test_other_types_are_shown_as_float32(dtype):
+    volume = (np.arange(4 * 6 * 5).reshape(4, 6, 5) % 7).astype(dtype)
+    widget = Show3DSlices(volume)
+    assert widget.volume_dtype == "float32"
+    np.testing.assert_array_equal(np.frombuffer(widget.volume_bytes, dtype=np.float32).reshape(volume.shape), volume.astype(np.float32))
+
+
+def test_offline_pack_of_an_integer_volume_is_the_float32_pack():
+    volume = np.random.default_rng(1).integers(100, 4000, size=(5, 16, 16)).astype(np.uint16)
+    packed = np.frombuffer(Show3DSlices(volume, offline=True).volume_bytes, dtype=np.uint8)
+    np.testing.assert_array_equal(packed, np.frombuffer(Show3DSlices(volume.astype(np.float32), offline=True).volume_bytes, dtype=np.uint8))
+
+
 def test_browser_volume_matches_numpy_slices():
     volume = column_volume()
     widget = Show3DSlices(volume, sampling=(0.3, 0.18, 0.18), units="nm", title="columns")
@@ -63,7 +90,7 @@ def test_offline_pack_is_uint8_against_the_global_range(capsys):
     widget = Show3DSlices(volume, offline=True)
     # D-R1: the uint8 pack was silent
     printed = capsys.readouterr().out
-    assert "Show3DSlices packs the 6x48x48 volume as uint8" in printed and "keeps float32" in printed
+    assert "Show3DSlices packs the 6x48x48 volume as uint8" in printed and "keeps every value exact" in printed
     packed = np.frombuffer(widget.volume_bytes, dtype=np.uint8).reshape(volume.shape)
     restored = widget._offline_min + packed * (widget._offline_max - widget._offline_min) / 255.0
     assert widget._offline_min == pytest.approx(float(volume.min()))

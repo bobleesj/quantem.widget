@@ -98,6 +98,7 @@ import {
 import { formatLength, readableLength } from "./lengthLabel";
 import { InfoTooltip } from "../shared/InfoTooltip";
 import { RenderPathBadge } from "../shared/RenderPathBadge";
+import { remountOnGPULoss } from "../shared/gpuLossRemount";
 import { KeyboardShortcuts } from "../shared/KeyboardShortcuts";
 import { useMobileViewport } from "../shared/useMobileViewport";
 import { usePageNavigation } from "../shared/pageNavigation";
@@ -112,7 +113,7 @@ import { Histogram } from "../shared/Histogram";
 import { applyDisplayFilterBrowser, browserFilterSupported, filterKnobsActive } from "../display/filter";
 import { COLORMAPS, COLORMAP_NAMES, applyColormap, displayNormalize, renderToOffscreen, renderToOffscreenReuse, createGPUColormapEngine, GPUColormapEngine } from "../display/colormaps";
 import { histogramBins } from "../display/cpuColormap";
-import { getGPUInfo, getHardwareGPUDevice } from "../display/device";
+import { getGPUInfo, getHardwareGPUDevice, onGPULost, webGPULostReason } from "../display/device";
 import { findDrift } from "./drift";
 import type { DriftReadout } from "./DriftChart";
 import { DisplayFFT, getDisplayFFT, fftshift, computeMagnitude, autoEnhanceFFT, nextPow2, applyHannWindow2D, fftClickReadout } from "../display/fft";
@@ -3164,8 +3165,26 @@ function Show3D() {
       console.warn("[Show3D] WebGPU colormap engine unavailable; drawing on the canvas", error);
       if (!disposed) setGpuCmapChecked(true);
     });
+    // A lost device (a GPU reset, a driver crash, memory pressure) takes every resident frame with it.
+    // Drop the dead engine and its caches so the canvas path draws the stack, and say why in the status
+    // line; without this the viewer keeps submitting to a dead device and the image freezes.
+    const stopWatchingLoss = onGPULost(() => {
+      if (disposed) return;
+      const lost = gpuCmapRef.current;
+      gpuCmapRef.current = null;
+      gpuCmapReadyRef.current = false;
+      gpuCanvasCtxRef.current = null;
+      gpuCanvasSizeRef.current = null;
+      gpuFrameCacheUploadedRef.current.clear();
+      gpuFFTRef.current = null;
+      gpuFftInitPromiseRef.current = null;
+      lost?.destroy();
+      setGpuDisplayVisible(false);
+      setGpuCmapReady(false);
+    });
     return () => {
       disposed = true;
+      stopWatchingLoss();
       gpuCmapRef.current?.destroy();
       gpuCmapRef.current = null;
       gpuCmapReadyRef.current = false;
@@ -4867,7 +4886,9 @@ function Show3D() {
       // say why, so the reader knows what to change: an insecure page hides navigator.gpu entirely
       const reason = typeof window !== "undefined" && !window.isSecureContext
         ? "not a secure context: open this page over https, localhost, or as a local file"
-        : /swiftshader|software/i.test(adapterInfo) ? `software renderer (${adapterInfo})` : "no WebGPU adapter";
+        : /swiftshader|software/i.test(adapterInfo) ? `software renderer (${adapterInfo})`
+          : webGPULostReason() !== null ? `the GPU device was lost (${webGPULostReason()}); reload the page to use WebGPU again`
+            : "no WebGPU adapter";
       setGpuResidency({ stage: "fallback", ready: 0, error: reason });
       return;
     }
@@ -12830,5 +12851,5 @@ function Show3D() {
   );
 }
 
-const render = createRender(Show3D);
+const render = createRender(remountOnGPULoss(Show3D));
 export default { render };

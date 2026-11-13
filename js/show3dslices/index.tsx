@@ -29,12 +29,13 @@ import StopIcon from "@mui/icons-material/Stop";
 import { useTheme } from "../theme";
 import { VolumeRenderer, CameraState, DEFAULT_CAMERA } from "./webgpu-volume";
 import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI, drawColorbar } from "../figure";
-import { extractBytes, extractFloat32, formatNumber, preserveRestoredWidgetModelsOnSave } from "../format";
+import { asFloat32, extractBytes, extractVolumeArray, formatNumber, preserveRestoredWidgetModelsOnSave, type VolumeArray } from "../format";
 import { findDataRange, applyLogScale, percentileClip, signedLog1p, sliderRange } from "../display/stats";
 import { MetadataSection } from "../widgetInfo";
 import { dequantizeUint8 } from "../display/quantization";
 import { InfoTooltip } from "../shared/InfoTooltip";
 import { RenderPathBadge } from "../shared/RenderPathBadge";
+import { remountOnGPULoss } from "../shared/gpuLossRemount";
 import { KeyboardShortcuts } from "../shared/KeyboardShortcuts";
 import { exportTitleSlug, formatEstimatedHtmlSize } from "../shared/exportFormat";
 import { HTML_PICKER_TYPE, type PendingSave, pickSaveHandle, useSaveExportPayload } from "../shared/exportSave";
@@ -43,7 +44,7 @@ import { shouldIgnoreWidgetShortcut } from "../shared/widgetShortcuts";
 import { resolveDisplayBounds } from "../shared/displayRange";
 import { Histogram } from "../shared/Histogram";
 import { COLORMAPS, COLORMAP_NAMES, renderToOffscreen, renderToOffscreenReuse, createGPUColormapEngine, GPUColormapEngine, VOLUME_SLICE_MIN_ZOOM } from "../display/colormaps";
-import { getHardwareGPUDevice, type RenderPath } from "../display/device";
+import { getHardwareGPUDevice, onGPULost, webGPULostReason, type RenderPath } from "../display/device";
 import { DisplayFFT, getDisplayFFT, fft2d, fftshift, nextPow2, computeMagnitude, autoEnhanceFFT, applyHannWindow2D, reciprocalCoordinatesFromShiftedOffset, zeroPadTopLeft } from "../display/fft";
 import { findFFTPeakBrowser } from "../display/geometry";
 import { estimateSliceAlignment } from "./sliceAlignment";
@@ -115,10 +116,11 @@ const typography = {
 // A position in the volume is (row, col) in voxels; x and y are kept for canvas and pointer positions.
 type ImagePoint = { row: number; col: number };
 
-function extractTopSlice(volume: Float32Array, numCols: number, numRows: number, numSlices: number, sliceIndex: number): Float32Array {
+// One slice as float32: a view of a float32 volume, a one-slice converted copy of an integer one.
+function extractTopSlice(volume: VolumeArray, numCols: number, numRows: number, numSlices: number, sliceIndex: number): Float32Array {
   if (sliceIndex < 0 || sliceIndex >= numSlices) return new Float32Array(numRows * numCols);
   const start = sliceIndex * numRows * numCols;
-  return volume.subarray(start, start + numRows * numCols);
+  return asFloat32(volume.subarray(start, start + numRows * numCols));
 }
 
 function clampNumber(value: number, min: number, max: number): number {
@@ -277,7 +279,7 @@ function segmentWidth(start: ImagePoint, stop: ImagePoint): number {
 }
 
 function sampleVolumeBilinear(
-  volume: Float32Array,
+  volume: VolumeArray,
   numCols: number,
   numRows: number,
   numSlices: number,
@@ -301,7 +303,7 @@ function sampleVolumeBilinear(
 }
 
 function extractOblique(
-  volume: Float32Array,
+  volume: VolumeArray,
   numCols: number,
   numRows: number,
   numSlices: number,
@@ -325,8 +327,10 @@ function extractOblique(
 
 // Copies a row-major slice into the top-left of a zero-filled power-of-two
 // grid, the input layout the FFT needs.
-function extractVolumeFloat32(
+// The volume in the type the kernel sent (no copy). An offline report's uint8 levels are rescaled to float32.
+function extractVolume(
   dataView: DataView | ArrayBuffer | Uint8Array,
+  dtype: string,
   offline: boolean,
   offlineMin: number,
   offlineMax: number,
@@ -334,10 +338,10 @@ function extractVolumeFloat32(
   numRows: number,
   numSlices: number,
   panelCount = 1,
-): Float32Array | null {
+): VolumeArray | null {
   const panels = Math.max(1, Math.floor(panelCount || 1));
   const count = Math.max(0, Math.floor(numCols) * Math.floor(numRows) * Math.floor(numSlices) * panels);
-  if (!offline) return extractFloat32(dataView, count);
+  if (!offline) return extractVolumeArray(dataView, dtype, count);
   const bytes = extractBytes(dataView);
   if (bytes.length === 0 || count === 0) return null;
   const usable = Math.min(count, bytes.length);
@@ -395,9 +399,9 @@ function volumeDisplayWindow(
   return flip ? { vmin: -window.vmax, vmax: -window.vmin } : window;
 }
 
-function makeHistogramSample(data: Float32Array | null, target = 1_000_000): Float32Array | null {
+function makeHistogramSample(data: VolumeArray | null, target = 1_000_000): Float32Array | null {
   if (!data || data.length === 0) return null;
-  if (data.length <= target) return data;
+  if (data.length <= target) return asFloat32(data);
   const stride = Math.ceil(data.length / target);
   const out = new Float32Array(Math.ceil(data.length / stride));
   for (let src = 0, dst = 0; src < data.length; src += stride, dst++) out[dst] = data[src];
@@ -695,6 +699,7 @@ function Show3DSlices() {
   const [pagePlaying, setPagePlaying] = React.useState(false);
   const [pagePlayFps, setPagePlayFps] = React.useState<number>(2);
   const [volumeBytes] = useModelState<DataView>("volume_bytes");
+  const [volumeDtype] = useModelState<string>("volume_dtype");
   const [offline] = useModelState<boolean>("offline");
   const [offlineMin] = useModelState<number>("_offline_min");
   const [offlineMax] = useModelState<number>("_offline_max");
@@ -848,7 +853,25 @@ function Show3DSlices() {
       if (disposed) { engine?.destroy(); return; }
       if (engine) { gpuCmapRef.current = engine; setCmapReady(true); }
     });
-    return () => { disposed = true; gpuCmapRef.current?.destroy(); gpuCmapRef.current = null; volUploadedKeyRef.current = null; };
+    // A lost device (a GPU reset, a driver crash, memory pressure) takes its volume texture with it.
+    // The slice panels then draw from the volume in JavaScript, with the same pixel values, and the
+    // FFT moves to the CPU; without this they would keep submitting to a dead device and freeze.
+    const stopWatchingLoss = onGPULost(() => {
+      if (disposed) return;
+      const lost = gpuCmapRef.current;
+      gpuCmapRef.current = null;
+      volUploadedKeyRef.current = null;
+      lost?.destroy();
+      prevCacheRef.current = { ...prevCacheRef.current, panelFloats: null };  // repaint every plane on the CPU
+      setCmapReady(false);
+      setGpuLost(webGPULostReason() ?? "the browser reported no reason");
+      getDisplayFFT().then(fft => {
+        if (disposed) return;
+        displayFFTRef.current = fft;
+        setFftPath(fft.path);
+      });
+    });
+    return () => { disposed = true; stopWatchingLoss(); gpuCmapRef.current?.destroy(); gpuCmapRef.current = null; volUploadedKeyRef.current = null; };
   }, []);
 
   const canvasRefs = React.useRef<(HTMLCanvasElement | null)[]>([null, null]);
@@ -891,12 +914,12 @@ function Show3DSlices() {
   const fftResultCacheRef = React.useRef<Map<string, FftResultCacheEntry>>(new Map());
   const fftResultCacheSeqRef = React.useRef(0);
   const fftResultCacheBytesRef = React.useRef(0);
-  const fftDataObjectRef = React.useRef<Float32Array | null>(null);
+  const fftDataObjectRef = React.useRef<VolumeArray | null>(null);
   const fftDataTokenRef = React.useRef(0);
   const displayFFTRef = React.useRef<DisplayFFT | null>(null);
   const gpuCmapRef = React.useRef<GPUColormapEngine | null>(null);
   const [cmapReady, setCmapReady] = React.useState(false);
-  const volUploadedKeyRef = React.useRef<Float32Array | null>(null);
+  const volUploadedKeyRef = React.useRef<VolumeArray | null>(null);
   const gpuVolReadyRef = React.useRef(false);
   // Live params snapshot for direct-paint (slider handler bypasses React).
   const paintParamsRef = React.useRef<{
@@ -1004,6 +1027,8 @@ function Show3DSlices() {
     button: number; x: number; y: number; yaw: number; pitch: number; panX: number; panY: number;
   } | null>(null);
   const [webgpuSupported, setWebgpuSupported] = React.useState(true);
+  // Why the WebGPU device was lost, once it is; the 3D view then says so in place of its canvas.
+  const [gpuLost, setGpuLost] = React.useState<string | null>(() => webGPULostReason());
   const [volumeInitError, setVolumeInitError] = React.useState<string>("");
   const [rendererReady, setRendererReady] = React.useState(0);
   const [volumeCanvasSize, setVolumeCanvasSize] = React.useState(initialVolumeCanvasSize);
@@ -1132,8 +1157,8 @@ function Show3DSlices() {
   // Parse volume data. Live notebooks receive exact float32 bytes; offline
   // reports receive uint8 bytes plus global min/max metadata to reduce HTML size.
   const allPanelFloats = React.useMemo(
-    () => extractVolumeFloat32(volumeBytes, offline, offlineMin, offlineMax, numCols, numRows, numSlices, safePanelCount),
-    [volumeBytes, offline, offlineMin, offlineMax, numCols, numRows, numSlices, safePanelCount],
+    () => extractVolume(volumeBytes, volumeDtype, offline, offlineMin, offlineMax, numCols, numRows, numSlices, safePanelCount),
+    [volumeBytes, volumeDtype, offline, offlineMin, offlineMax, numCols, numRows, numSlices, safePanelCount],
   );
   const panelFloats = React.useMemo(() => {
     if (!allPanelFloats || allPanelFloats.length === 0) return null;
@@ -1755,7 +1780,15 @@ function Show3DSlices() {
       setVolumeInitError(message);
       setWebgpuSupported(false);
     });
-    return () => { disposed = true; volumeRendererRef.current?.dispose(); volumeRendererRef.current = null; };
+    // The 3D view has no CPU renderer: on a lost device it releases its handles and says why.
+    const stopWatchingLoss = onGPULost(() => {
+      if (disposed) return;
+      volumeRendererRef.current?.dispose();
+      volumeRendererRef.current = null;
+      setVolumeInitError(`WebGPU device lost: ${webGPULostReason() ?? "the browser reported no reason"}`);
+      setWebgpuSupported(false);
+    });
+    return () => { disposed = true; stopWatchingLoss(); volumeRendererRef.current?.dispose(); volumeRendererRef.current = null; };
   }, []);
 
   React.useEffect(() => {
@@ -2180,7 +2213,7 @@ function Show3DSlices() {
     cmap: string; logScale: boolean;
     imageVminPct: number; imageVmaxPct: number;
     imageRangeMin: number; imageRangeMax: number;
-    panelFloats: Float32Array | null;
+    panelFloats: VolumeArray | null;
     numCols: number; numRows: number; numSlices: number;
     traitVmin: number | null; traitVmax: number | null;
     flip: boolean;
@@ -2505,7 +2538,7 @@ function Show3DSlices() {
   // -------------------------------------------------------------------------
   const prevFFTCacheRef = React.useRef<{
     sliceIndex: number;
-    panelFloats: Float32Array | null;
+    panelFloats: VolumeArray | null;
     fftColormap: string; fftLogScale: boolean; fftAuto: boolean; fftWindow: boolean; fftPath: RenderPath | null;
     showFft: boolean;
   }>({ sliceIndex: -1, panelFloats: null, fftColormap: "", fftLogScale: false, fftAuto: false, fftWindow: false, fftPath: null, showFft: false });
@@ -2538,7 +2571,7 @@ function Show3DSlices() {
     let cancelled = false;
 
     const computeFFTsForVolume = async (
-      floats: Float32Array,
+      floats: VolumeArray,
       magCache: React.MutableRefObject<(Float32Array | null)[]>,
       offscreenCache: React.MutableRefObject<(HTMLCanvasElement | null)[]>,
       imgDataCache: React.MutableRefObject<(ImageData | null)[]>,
@@ -4268,11 +4301,12 @@ function Show3DSlices() {
             display: "flex", flexDirection: "column", gap: 0.5,
           }}>
             <Typography sx={{ ...typography.label, color: themeColors.text, fontWeight: "bold", fontSize: 11 }}>
-              3D volume needs WebGPU
+              {gpuLost !== null ? "The GPU stopped: 3D view is off" : "3D volume needs WebGPU"}
             </Typography>
-            <Typography sx={{ ...typography.label, color: themeColors.textMuted, fontSize: 11, lineHeight: 1.4 }}>
-              The slice panels work without it. To enable the 3D view, turn on hardware
-              acceleration in your browser (Settings - System) and reload.
+            <Typography data-show3dslices-gpu-lost={gpuLost !== null ? "true" : undefined} sx={{ ...typography.label, color: themeColors.textMuted, fontSize: 11, lineHeight: 1.4 }}>
+              {gpuLost !== null
+                ? "The browser lost its GPU device (a driver reset or too little GPU memory). The slice panels now draw on the CPU with the same values. Reload the page to use the GPU again; a smaller volume or panel needs less GPU memory."
+                : "The slice panels work without it. To enable the 3D view, turn on hardware acceleration in your browser (Settings - System) and reload."}
             </Typography>
             {volumeInitError && (
               <Typography sx={{ ...typography.label, color: themeColors.textMuted, fontSize: 9, opacity: 0.7, mt: 0.5, wordBreak: "break-word" }}>
@@ -4759,5 +4793,5 @@ function Show3DSlices() {
 }
 
 // anywidget v0.9+ deprecates `export render` in favor of `export default { render }`.
-const render = createRender(Show3DSlices);
+const render = createRender(remountOnGPULoss(Show3DSlices));
 export default { render };

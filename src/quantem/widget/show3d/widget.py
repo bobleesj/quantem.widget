@@ -318,7 +318,7 @@ class Show3D(
     # Transport: the browser slices every frame from this one embedded display
     # stack, exact float32 (live widget, full export) or uint8 (quantized export).
     _offline_stack = traitlets.Bytes(b"").tag(sync=True)
-    _offline_float_stack = traitlets.Bytes(b"").tag(sync=True)
+    _offline_float_stack = traitlets.Any(b"").tag(sync=True)  # bytes, or a view of the stack (no copy)
     _offline_min = traitlets.Float(0.0).tag(sync=True)
     _offline_max = traitlets.Float(1.0).tag(sync=True)
     _offline_mins = traitlets.List(traitlets.Float(), default_value=[]).tag(sync=True)
