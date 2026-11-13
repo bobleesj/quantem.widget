@@ -720,9 +720,16 @@ class Show3D(
 
     @traitlets.observe("drift")
     def _show_drift_corrected(self, change: dict) -> None:
-        """Show the frames moved back by a Find drift result as a "drift corrected" panel on the right."""
+        """Show the frames moved back by a Find drift result as a "drift corrected" panel on the right.
+
+        Not in a live stream (``Show3D.stream`` appending frames): the panel would replace its one stack, and the
+        next append would stop the stream. There the drift chart and velocity show; the corrected panel is for a
+        viewer of frames already taken.
+        """
         drift = change["new"] or {}
         if not drift.get("shift_px") or self.is_rgb or self._data is None:
+            return
+        if getattr(self, "_stream_worker", None) is not None:      # live: keep appending, never stop for a panel
             return
         if self._drift_source is None:
             if self.n_panels > 1:

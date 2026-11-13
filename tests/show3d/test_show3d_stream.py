@@ -148,3 +148,16 @@ def test_stream_requires_native_pixels_and_append_requires_a_stream():
     with pytest.raises(RuntimeError, match="Show3D.stream"):
         plain.append(np.zeros((4, 4)))
     plain.close()
+
+
+def test_find_drift_in_a_live_stream_does_not_stop_it():
+    """A Find drift result in a live stream keeps its one stack: frames appended after it still arrive."""
+    import numpy as np
+
+    from quantem.widget import Show3D
+
+    viewer = Show3D.stream(np.zeros((3, 8, 8), np.float32))
+    viewer.drift = {"shift_px": [[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]], "velocity": [0.1, 0.1], "velocity_unit": "nm/s"}
+    assert int(viewer.n_panels) == 1                                    # no drift-corrected panel in a live stream
+    viewer.append(np.ones((8, 8), np.float32))
+    assert viewer._stream_wait_sent(5) and int(viewer.n_slices) == 4    # the stream goes on
