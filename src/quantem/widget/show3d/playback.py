@@ -90,7 +90,10 @@ class Show3DPlayback:
         self._offline_mins = []
         self._offline_maxs = []
         self._offline_stack = b""
-        self._offline_float_stack = arr.tobytes()
+        # The stack's own memory, not a second copy of it in the kernel. Cleared first: a view of the
+        # same array would compare equal to the last one and skip the sync after an in-place change.
+        self._offline_float_stack = b""
+        self._offline_float_stack = memoryview(arr).cast("B")
 
     def _pack_offline_u8_stack(self) -> None:
         """Quantize the display stack to uint8 for compact standalone HTML.

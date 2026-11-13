@@ -24,6 +24,7 @@
  * check it against the Python estimator.
  */
 
+import { asFloat32, type VolumeArray } from "../format";
 import { WebGPUFFT, fft2d, nextPow2, requireWebGPUFFT } from "../display/fft";
 import { selectKth } from "../display/filter";
 
@@ -822,7 +823,7 @@ function fitFromAdjacent(adjacent: number[][], numSlices: number, backend: "webg
  * 16 x 1688 x 1688 stack that is a few hundred KB rather than ~1.2 GB.
  */
 async function estimateResident(
-  volume: Float32Array,
+  volume: VolumeArray,
   numCols: number,
   numRows: number,
   numSlices: number,
@@ -924,7 +925,7 @@ async function estimateResident(
  *   (Show3DSlices); Show3D's drift uses 100, the 1/100 px of quantem.gpu's registration.
  */
 export async function estimateSliceAlignment(
-  volume: Float32Array,
+  volume: VolumeArray,
   numCols: number,
   numRows: number,
   numSlices: number,
@@ -940,7 +941,7 @@ export async function estimateSliceAlignment(
   let paddedWidth = numCols;
   let paddedHeight = numRows;
   for (let sliceIndex = 0; sliceIndex < numSlices; sliceIndex++) {
-    const prepared = registrationImage(volume.subarray(sliceIndex * planeSize, (sliceIndex + 1) * planeSize), numCols, numRows);
+    const prepared = registrationImage(asFloat32(volume.subarray(sliceIndex * planeSize, (sliceIndex + 1) * planeSize)), numCols, numRows);
     let energy = 0;
     for (let i = 0; i < prepared.length; i++) energy += prepared[i] * prepared[i];
     energies.push(energy);

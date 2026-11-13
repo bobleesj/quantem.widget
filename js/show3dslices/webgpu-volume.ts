@@ -1,7 +1,8 @@
 /// <reference types="@webgpu/types" />
 /** WebGPU volume renderer: ray casting with slice-plane indicators. */
 
-import { getGPUDevice } from "../display/device";
+import type { VolumeArray } from "../format";
+import { getGPUDevice, guardGPUMemory } from "../display/device";
 
 // ============================================================================
 // Types
@@ -437,6 +438,15 @@ const UNIFORM_BUFFER_SIZE = 192;
 // VolumeRenderer class
 // ============================================================================
 
+// Frame-time limits of the 3D view (see VolumeRenderer.render).
+const SLOW_FRAME_MS = 50;
+const TOO_SLOW_FRAME_MS = 700;
+const SETTLE_MS = 200;
+const DRAFT_STEPS = 64;
+
+// Bytes normalized and uploaded per queue.writeTexture call (the browser copies each call's bytes).
+const UPLOAD_CHUNK_BYTES = 32 * 1024 * 1024;
+
 export class VolumeRenderer {
   private device: GPUDevice;
   private context: GPUCanvasContext;
@@ -451,6 +461,12 @@ export class VolumeRenderer {
   private aspectRatio: [number, number, number] = [1, 1, 1];
   private canvas: HTMLCanvasElement;
   private deviceLost: boolean = false;
+  private inFlight = false;
+  private waiting: [VolumeRenderParams, CameraState, [number, number, number], RenderOptions] | null = null;
+  private fullFrameMs = 0;
+  private framesDrawn = 0;
+  private settleTimer = 0;
+  private saidCapped = false;
 
   static isSupported(): boolean {
     return typeof navigator !== "undefined" && !!navigator.gpu;
@@ -551,9 +567,9 @@ export class VolumeRenderer {
     });
   }
 
-  uploadVolume(data: Float32Array, numCols: number, numRows: number, numSlices: number): void {
+  uploadVolume(data: VolumeArray, numCols: number, numRows: number, numSlices: number): void {
     if (this.deviceLost) return;
-    // Normalize to uint8 [0, 255]: r8unorm always supports linear filtering.
+    // The 3D view samples 8-bit levels over the volume's range: r8unorm always supports linear filtering.
     let min = Infinity, max = -Infinity;
     for (let i = 0; i < data.length; i++) {
       const value = data[i];
@@ -561,53 +577,46 @@ export class VolumeRenderer {
       if (value < min) min = value;
       if (value > max) max = value;
     }
-    const normalized = new Uint8Array(data.length);
-    if (!Number.isFinite(min) || !Number.isFinite(max) || min === max) {
-      normalized.fill(128);
-    } else {
-      const invRange = 255 / (max - min);
-      for (let i = 0; i < data.length; i++) {
-        const value = Number.isFinite(data[i]) ? data[i] : min;
-        normalized[i] = Math.max(0, Math.min(255, Math.round((value - min) * invRange)));
-      }
-    }
+    const flat = !Number.isFinite(min) || !Number.isFinite(max) || min === max;
+    const invRange = flat ? 0 : 255 / (max - min);
 
     // Compute aspect ratio (longest axis = 1.0)
     const maxDim = Math.max(numCols, numRows, numSlices);
     this.aspectRatio = [numCols / maxDim, numRows / maxDim, numSlices / maxDim];
 
     this.volumeTexture.destroy();
-    this.volumeTexture = this.device.createTexture({
+    this.volumeTexture = guardGPUMemory(this.device, `the 3D view of a ${numSlices} x ${numRows} x ${numCols} volume`, () => this.device.createTexture({
       dimension: "3d",
       size: [numCols, numRows, numSlices],
       format: "r8unorm",
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-    });
+    }));
 
-    // Upload data. WebGPU requires bytesPerRow aligned to 256. When numCols is
-    // already a multiple of 256 the row stride matches and we can skip the
-    // padded copy entirely (saves a transient numCols*numRows*numSlices Uint8Array
-    // allocation and one full pass).
-    const bytesPerRow = Math.ceil(numCols / 256) * 256;
-    let payload: Uint8Array;
-    if (bytesPerRow === numCols) {
-      payload = normalized;
-    } else {
-      payload = new Uint8Array(bytesPerRow * numRows * numSlices);
-      for (let slice = 0; slice < numSlices; slice++) {
-        for (let row = 0; row < numRows; row++) {
-          const srcOffset = (slice * numRows + row) * numCols;
-          const dstOffset = (slice * numRows + row) * bytesPerRow;
-          payload.set(normalized.subarray(srcOffset, srcOffset + numCols), dstOffset);
+    // Normalize and upload a few slices at a time: the working copy is one chunk, never a second
+    // volume. queue.writeTexture takes rows of any length, so the rows need no padding.
+    const sliceCount = numCols * numRows;
+    const slicesPerChunk = Math.max(1, Math.floor(UPLOAD_CHUNK_BYTES / Math.max(1, sliceCount)));
+    const chunk = new Uint8Array(Math.min(numSlices, slicesPerChunk) * sliceCount);
+    for (let slice = 0; slice < numSlices; slice += slicesPerChunk) {
+      const layers = Math.min(slicesPerChunk, numSlices - slice);
+      const count = layers * sliceCount;
+      const offset = slice * sliceCount;
+      if (flat) {
+        chunk.fill(128, 0, count);
+      } else {
+        for (let i = 0; i < count; i++) {
+          const raw = data[offset + i];
+          const value = Number.isFinite(raw) ? raw : min;
+          chunk[i] = Math.max(0, Math.min(255, Math.round((value - min) * invRange)));
         }
       }
+      this.device.queue.writeTexture(
+        { texture: this.volumeTexture, origin: { x: 0, y: 0, z: slice } },
+        chunk,
+        { bytesPerRow: numCols, rowsPerImage: numRows },
+        { width: numCols, height: numRows, depthOrArrayLayers: layers },
+      );
     }
-    this.device.queue.writeTexture(
-      { texture: this.volumeTexture },
-      payload as unknown as GPUAllowSharedBufferSource,
-      { bytesPerRow, rowsPerImage: numRows },
-      { width: numCols, height: numRows, depthOrArrayLayers: numSlices },
-    );
 
     this.rebuildBindGroup();
   }
@@ -640,7 +649,62 @@ export class VolumeRenderer {
     this.rebuildBindGroup();
   }
 
+  /**
+   * Draw the volume, never faster than the GPU finishes frames.
+   *
+   * A full-quality frame marches up to 512 steps for every device pixel. A fast GPU does that in a few
+   * milliseconds; an integrated GPU can need seconds, and frames queued on every pointer move then pile
+   * up until the driver's watchdog resets the GPU and the page loses its device. So:
+   * - one frame is in flight at a time; a request made meanwhile replaces the waiting one;
+   * - when the last full frame took longer than SLOW_FRAME_MS, requests draw a draft (one canvas pixel
+   *   per CSS pixel, DRAFT_STEPS steps) and one full frame follows SETTLE_MS after the last request;
+   * - when even one full frame takes longer than TOO_SLOW_FRAME_MS, full frames keep the draft's pixel
+   *   density and half the steps, and the console says so once.
+   */
   render(params: VolumeRenderParams, camera: CameraState, bgColor: [number, number, number], options: RenderOptions): void {
+    if (this.deviceLost) return;
+    if (this.inFlight) {
+      this.waiting = [params, camera, bgColor, options];
+      return;
+    }
+    window.clearTimeout(this.settleTimer);
+    const slow = !options.draft && this.fullFrameMs > SLOW_FRAME_MS;
+    this.submitFrame(params, camera, bgColor, slow ? { ...options, draft: { dpr: 1, numSteps: DRAFT_STEPS } } : options, () => {
+      if (!slow) return;
+      this.settleTimer = window.setTimeout(() => {
+        if (this.deviceLost || this.inFlight) return;
+        const steps = Math.min(512, Math.max(128, Math.max(params.numCols, params.numRows, params.numSlices) * 2));
+        const capped = this.fullFrameMs > TOO_SLOW_FRAME_MS;
+        if (capped && !this.saidCapped) {
+          this.saidCapped = true;
+          console.info(`Show3DSlices: a full-quality 3D frame takes ${Math.round(this.fullFrameMs)} ms on this GPU, so the 3D view `
+            + "is drawn at one canvas pixel per CSS pixel with half the ray steps. A smaller 3D panel draws faster.");
+        }
+        this.submitFrame(params, camera, bgColor, capped ? { ...options, draft: { dpr: 1, numSteps: Math.ceil(steps / 2) } } : options, () => {}, true);
+      }, SETTLE_MS);
+    });
+  }
+
+  private submitFrame(
+    params: VolumeRenderParams, camera: CameraState, bgColor: [number, number, number], options: RenderOptions,
+    done: () => void, measureAsFull = !options.draft,
+  ): void {
+    this.inFlight = true;
+    const started = performance.now();
+    this.draw(params, camera, bgColor, options);
+    const finish = () => {
+      this.inFlight = false;
+      // The first frame also waits for the pipeline to compile: it says nothing about frame time.
+      if (measureAsFull && this.framesDrawn++ > 0) this.fullFrameMs = performance.now() - started;
+      const next = this.waiting;
+      this.waiting = null;
+      if (next) this.render(...next);
+      else done();
+    };
+    this.device.queue.onSubmittedWorkDone().then(finish, () => { this.inFlight = false; });
+  }
+
+  private draw(params: VolumeRenderParams, camera: CameraState, bgColor: [number, number, number], options: RenderOptions): void {
     if (this.deviceLost) return;
     const canvas = this.canvas;
     const { sliceStretch, orthographic: orthographicView, draft } = options;
@@ -801,6 +865,8 @@ export class VolumeRenderer {
   }
 
   dispose(): void {
+    window.clearTimeout(this.settleTimer);
+    this.waiting = null;
     if (this.deviceLost) return;
     this.volumeTexture.destroy();
     this.colormapTexture.destroy();

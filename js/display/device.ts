@@ -29,6 +29,37 @@ export function onGPULost(callback: () => void): () => void {
  */
 export function webGPULostReason(): string | null { return lostMessage; }
 
+/**
+ * Stop using WebGPU on this page for `reason`, as after a lost device: the device is destroyed, the
+ * loss callbacks run, and display math stays in JavaScript until the page reloads.
+ */
+export function abandonGPU(reason: string): void {
+  if (lostMessage !== null) return;
+  lostMessage = reason;
+  console.warn(`quantem.widget: WebGPU is off for this page (${reason}). Widgets now draw with JavaScript; reload the page to try WebGPU again.`);
+  const device = gpuDevice;
+  gpuDevice = null;
+  devicePromise = null;
+  if (device) device.destroy();  // its lost promise resolves and runs the loss callbacks
+  else [...lostCallbacks].forEach((callback) => callback());
+}
+
+/**
+ * Run `create` (a large buffer or texture allocation) and leave WebGPU, with the reason on screen, when
+ * the GPU has no memory for it. Without the check an allocation that failed is used anyway: the page
+ * draws nothing, or the GPU process dies. An integrated GPU shares the computer's memory and reaches
+ * this point with volumes a discrete GPU holds easily.
+ */
+export function guardGPUMemory<T>(device: GPUDevice, what: string, create: () => T): T {
+  device.pushErrorScope("out-of-memory");
+  const created = create();
+  void device.popErrorScope().then(
+    (error) => { if (error) abandonGPU(`the GPU has no memory for ${what}`); },
+    () => {},
+  );
+  return created;
+}
+
 // Memoize the in-flight requestDevice so concurrent first callers share ONE device.
 // Without this guard, decode + colormap + FFT + render all call getGPUDevice() before
 // gpuDevice is assigned, each runs requestDevice(), and pipelines/bind-groups built on
@@ -62,6 +93,9 @@ async function createGPUDevice(): Promise<GPUDevice | null> {
       "maxBufferSize",
       "maxStorageBufferBindingSize",
       "maxTextureDimension2D",
+      // a volume deeper than the default 256 layers, or wider than 2048 voxels, stays in a texture
+      "maxTextureArrayLayers",
+      "maxTextureDimension3D",
       "maxComputeInvocationsPerWorkgroup",
       "maxComputeWorkgroupSizeX",
     ] as const) {

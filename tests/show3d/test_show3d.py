@@ -82,6 +82,8 @@ def test_playback_stack_holds_every_frame_exactly_native_by_default(capsys):
     assert native.display_bin == 1 and capsys.readouterr().out == ""  # lossless default, nothing to announce
     assert native.smooth is False  # each pixel drawn as a sharp block; bilinear Smooth is opt-in
     np.testing.assert_array_equal(np.frombuffer(native._offline_float_stack, dtype=np.float32).reshape(stack.shape), stack)
+    # the synced stack is the widget's own array, not a second copy of it in the kernel
+    assert np.shares_memory(np.frombuffer(native._offline_float_stack, dtype=np.float32), native._data)
     widget = Show3D(stack, display_bin=4, verbose=False)
     sent = np.frombuffer(widget._offline_float_stack, dtype=np.float32).reshape(6, 16, 16)
     np.testing.assert_array_equal(sent, stack.reshape(6, 16, 4, 16, 4).mean(axis=(2, 4)))

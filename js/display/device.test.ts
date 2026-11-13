@@ -85,3 +85,49 @@ describe("WebGPU display shaders", () => {
     warn.mockRestore();
   });
 });
+
+describe("GPU memory guard", () => {
+  // A device whose next allocation reports out-of-memory (or not) through its error scope.
+  function fakeDevice(outOfMemory: boolean) {
+    let resolveLost: (info: { reason: string; message: string }) => void = () => {};
+    const device = {
+      lost: new Promise<{ reason: string; message: string }>(resolve => { resolveLost = resolve; }),
+      pushErrorScope: vi.fn(),
+      popErrorScope: vi.fn(async () => (outOfMemory ? { message: "out of memory" } : null)),
+      destroy: vi.fn(() => resolveLost({ reason: "destroyed", message: "" })),
+    };
+    return device;
+  }
+
+  async function loaded(outOfMemory: boolean) {
+    vi.resetModules();
+    const fake = fakeDevice(outOfMemory);
+    const requestAdapter = vi.fn(async () => ({ limits: {}, features: new Set(), info: { description: "Test GPU" }, requestDevice: async () => fake }));
+    vi.stubGlobal("navigator", { gpu: { requestAdapter } });
+    const device = await import("./device");
+    expect(await device.getGPUDevice()).toBe(fake);
+    return { device, fake };
+  }
+
+  it("leaves WebGPU with the reason when an allocation runs out of GPU memory", async () => {
+    const { device, fake } = await loaded(true);
+    const lost = vi.fn();
+    device.onGPULost(lost);
+    const texture = device.guardGPUMemory(fake as unknown as GPUDevice, "a 512 x 512 x 512 volume", () => "texture");
+    expect(texture).toBe("texture");
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(fake.destroy).toHaveBeenCalledTimes(1);
+    expect(lost).toHaveBeenCalledTimes(1);
+    expect(device.webGPULostReason()).toBe("the GPU has no memory for a 512 x 512 x 512 volume");
+    expect(await device.getGPUDevice()).toBeNull();  // JavaScript paths until the page reloads
+  });
+
+  it("changes nothing when the allocation fits", async () => {
+    const { device, fake } = await loaded(false);
+    device.guardGPUMemory(fake as unknown as GPUDevice, "a small volume", () => 1);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(fake.destroy).not.toHaveBeenCalled();
+    expect(device.webGPULostReason()).toBeNull();
+    expect(await device.getGPUDevice()).toBe(fake);
+  });
+});

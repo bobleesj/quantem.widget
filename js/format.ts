@@ -29,6 +29,42 @@ export function extractFloat32(dataView: DataView | ArrayBuffer | Uint8Array, ex
   return new Float32Array(bytes.buffer, bytes.byteOffset, usableBytes / 4);
 }
 
+/**
+ * A volume or stack in the sample type it arrived in. Integer types stay integers in the page and on
+ * the GPU, every value exact: an 8-bit stack costs one byte per voxel instead of the four of float32.
+ */
+export type VolumeArray = Float32Array | Uint8Array | Int8Array | Uint16Array | Int16Array;
+
+const VOLUME_ARRAY_TYPES = {
+  float32: Float32Array, uint8: Uint8Array, int8: Int8Array, uint16: Uint16Array, int16: Int16Array,
+} as const;
+export type VolumeDtype = keyof typeof VOLUME_ARRAY_TYPES;
+
+/** View the synced bytes as `dtype` (float32 when the name is unknown) without copying; null if empty. */
+export function extractVolumeArray(
+  dataView: DataView | ArrayBuffer | Uint8Array, dtype: string, expectedCount?: number,
+): VolumeArray | null {
+  const Type = VOLUME_ARRAY_TYPES[dtype as VolumeDtype] ?? Float32Array;
+  if (Type === Float32Array) return extractFloat32(dataView, expectedCount);
+  const bytes = extractBytes(dataView);
+  const size = Type.BYTES_PER_ELEMENT;
+  const usableBytes = expectedCount !== undefined
+    ? Math.max(0, Math.min(bytes.byteLength, Math.floor(expectedCount) * size))
+    : bytes.byteLength;
+  if (usableBytes === 0 || usableBytes % size !== 0) return null;
+  if (bytes.byteOffset % size !== 0) {
+    const aligned = new Uint8Array(usableBytes);
+    aligned.set(bytes.subarray(0, usableBytes));
+    return new Type(aligned.buffer);
+  }
+  return new Type(bytes.buffer as ArrayBuffer, bytes.byteOffset, usableBytes / size);
+}
+
+/** The values as float32: the same array when it already is, else a converted copy (integers are exact). */
+export function asFloat32(data: VolumeArray): Float32Array {
+  return data instanceof Float32Array ? data : new Float32Array(data);
+}
+
 /** Download a Blob as a file. */
 export function downloadBlob(blob: Blob, filename: string): void {
   const link = document.createElement("a");
