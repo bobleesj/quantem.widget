@@ -124,8 +124,13 @@ def _build(args: argparse.Namespace) -> int:
         if installed:
             return installed
     command = [npm, "run", "build", "--", "--watch"] if args.watch else [npm, "run", "build"]
+    environment = dict(os.environ)
+    gpu = importlib.util.find_spec("quantem.gpu")
+    if gpu is not None and gpu.origin and "QUANTEM_GPU_SRC" not in environment and "PYTHON" not in environment:
+        # the build reads quantem.gpu's kernels: point it at the installed checkout, wherever its folder is
+        environment["QUANTEM_GPU_SRC"] = str(pathlib.Path(gpu.origin).resolve().parents[2])
     try:
-        return subprocess.run(command, cwd=checkout).returncode
+        return subprocess.run(command, cwd=checkout, env=environment).returncode
     except KeyboardInterrupt:
         # Ctrl+C is how a watch ends
         return 0

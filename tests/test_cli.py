@@ -985,7 +985,7 @@ def test_build_runs_npm_in_the_checkout_and_installs_packages_once(monkeypatch, 
     checkout = pathlib.Path(cli.__file__).resolve().parents[3]
     calls = []
     monkeypatch.setattr(cli.shutil, "which", lambda name: "npm")
-    monkeypatch.setattr(cli.subprocess, "run", lambda command, cwd: calls.append((command, cwd)) or SimpleNamespace(returncode=0))
+    monkeypatch.setattr(cli.subprocess, "run", lambda command, cwd, env=None: calls.append((command, cwd)) or SimpleNamespace(returncode=0))
     monkeypatch.setattr(pathlib.Path, "is_dir", lambda self: self.name != "node_modules")
     monkeypatch.chdir(tmp_path)
     assert cli.main(["build", "--watch"] if watch else ["build"]) == 0
