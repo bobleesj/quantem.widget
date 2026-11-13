@@ -188,6 +188,8 @@ export class ThumbnailRenderer {
   private readonly ranges: GPUBuffer;
   private small: GPUBuffer | null = null;
   private smallCapacity = 0;
+  // An integer frame converts here for its thumbnail, so drawing the strip keeps no float32 view of every frame.
+  private values: GPUBuffer | null = null;
   private readonly configured = new WeakSet<GPUCanvasContext>();
   /** Set when the pipelines fail GPU validation; every later draw is refused instead of leaving black canvases. */
   failure: string | null = null;
@@ -251,13 +253,22 @@ export class ThumbnailRenderer {
     const lut = this.engine.namedLutBuffer(layout.lutName, layout.lut);
     // "auto" layouts hold only the bindings an entry point uses: downsample reads src, panel_range writes ranges.
     const encoder = this.device.createCommandEncoder();
+    let source: GPUBuffer;
+    if (slot.integer && !slot.integer.float) {
+      if (!this.values || this.values.size < slot.count * 4) {
+        this.values?.destroy();
+        this.values = this.device.createBuffer({ size: slot.count * 4, usage: GPUBufferUsage.STORAGE });
+      }
+      this.engine.encodeIntegerToFloat(encoder, slot, this.values, 0);
+      source = this.values;
+    } else source = slot.dataBuffer;
     const down = encoder.beginComputePass();
     down.setPipeline(this.downsamplePipeline!);
     down.setBindGroup(0, this.device.createBindGroup({
       layout: this.downsamplePipeline!.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: this.params } },
-        { binding: 1, resource: { buffer: slot.dataBuffer } },
+        { binding: 1, resource: { buffer: source } },
         { binding: 2, resource: { buffer: small } },
       ],
     }));
@@ -311,5 +322,7 @@ export class ThumbnailRenderer {
     this.ranges.destroy();
     this.small?.destroy();
     this.small = null;
+    this.values?.destroy();
+    this.values = null;
   }
 }

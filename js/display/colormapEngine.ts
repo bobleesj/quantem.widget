@@ -10,6 +10,46 @@ import { VolumeSlices } from "./volumeSlice";
 
 export type GPUBufferOwnership = "owned" | "borrowed";
 
+/** An integer frame kept on the GPU in its own type: 8 or 16 bits, unsigned or signed. */
+export type IntegerFrame = Uint8Array | Int8Array | Uint16Array | Int16Array;
+type IntegerKind = "u8" | "i8" | "u16" | "i16";
+
+function integerKind(data: IntegerFrame): IntegerKind {
+  if (data instanceof Uint8Array) return "u8";
+  if (data instanceof Int8Array) return "i8";
+  if (data instanceof Uint16Array) return "u16";
+  return "i16";
+}
+
+// Each kind's value at index i of the packed words, widened to i32 (exact for every 8- and 16-bit value).
+const INTEGER_READ: Record<IntegerKind, string> = {
+  u8: "i32((words[i >> 2u] >> ((i & 3u) * 8u)) & 0xFFu)",
+  i8: "bitcast<i32>(words[i >> 2u] << (24u - (i & 3u) * 8u)) >> 24u",
+  u16: "i32((words[i >> 1u] >> ((i & 1u) * 16u)) & 0xFFFFu)",
+  i16: "bitcast<i32>(words[i >> 1u] << (16u - (i & 1u) * 16u)) >> 16u",
+};
+
+// Writes the float32 values of packed integer words into `values` from `offset` on. A 2D grid, so frames
+// past 65535 workgroups of 256 still convert.
+function integerToFloatShader(kind: IntegerKind): string {
+  return /* wgsl */ `
+struct Params { count: u32, offset: u32, row_groups: u32, _pad: u32 };
+@group(0) @binding(0) var<uniform> params: Params;
+@group(0) @binding(1) var<storage, read> words: array<u32>;
+@group(0) @binding(2) var<storage, read_write> values: array<f32>;
+@compute @workgroup_size(256)
+fn main(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
+  let i = (group.y * params.row_groups + group.x) * 256u + lane;
+  if (i >= params.count) { return; }
+  values[params.offset + i] = f32(${INTEGER_READ[kind]});
+}
+`;
+}
+
+// Integer frames whose float32 view stays on the GPU between draws: the frame on screen and the one before.
+// Frames drawn together in one task all keep theirs (a gallery of panels).
+const FLOAT_VIEWS_KEPT = 2;
+
 export type GPUSlot = {
   dataBuffer: GPUBuffer;
   dataOwnership: GPUBufferOwnership;
@@ -49,6 +89,9 @@ export type GPUSlot = {
   directOnly: boolean;
   // rgb: interleaved true-color floats, 3 per pixel (count = 3 * width * height).
   dataKind: "f32" | "u8" | "rgb";
+  // An integer frame (uploadIntegerData): its values packed in their own type, and the float32 view the
+  // draws read through `dataBuffer`, converted on the GPU when drawn and dropped when not on screen.
+  integer?: { kind: IntegerKind; words: GPUBuffer; float: GPUBuffer | null; stale: boolean; usedTick: number };
 };
 
 // A pooled canvas's context and format, so a transfer can hand the canvas back to its pool.
@@ -92,6 +135,11 @@ export class GPUColormapEngine {
   // Scratch for the 24-byte colormap params; writeBuffer copies it before reuse.
   private colormapParams = new ArrayBuffer(24);
   private retiredSlots: GPUSlot[] = [];
+  // Integer slots holding a float32 view, oldest use first, and the task counter that keeps a draw's views.
+  private floatViews = new Set<GPUSlot>();
+  private useTick = 0;
+  private useTickPending = false;
+  private integerPipelines = new Map<IntegerKind, GPUComputePipeline>();
   // Configured WebGPU OffscreenCanvases by size and format. A canvas stays configured after
   // transferToImageBitmap, so a durable frame borrows one and returns it after the transfer
   // instead of creating and configuring a canvas per frame.
@@ -113,7 +161,12 @@ export class GPUColormapEngine {
   getDevice(): GPUDevice { return this.device; }
 
   private destroySlot(slot: GPUSlot): void {
-    if (slot.dataOwnership === "owned") slot.dataBuffer.destroy();
+    if (slot.integer) {
+      slot.integer.words.destroy();
+      slot.integer.float?.destroy();
+      slot.integer.float = null;
+      this.floatViews.delete(slot);
+    } else if (slot.dataOwnership === "owned") slot.dataBuffer.destroy();
     slot.rgbaBuffer.destroy();
     slot.readBuffer.destroy();
     slot.paramsBuffer.destroy();
@@ -240,7 +293,8 @@ export class GPUColormapEngine {
     });
     const encoder = this.device.createCommandEncoder();
     sources.forEach((slot, sourceIdx) => {
-      encoder.copyBufferToBuffer(slot.dataBuffer, 0, this.avgScratch!, sourceIdx * frameBytes, frameBytes);
+      if (slot.integer && !slot.integer.float) this.encodeIntegerToFloat(encoder, slot, this.avgScratch!, sourceIdx * first.count);
+      else encoder.copyBufferToBuffer(slot.dataBuffer, 0, this.avgScratch!, sourceIdx * frameBytes, frameBytes);
     });
     const pass = encoder.beginComputePass();
     pass.setPipeline(this.avgPipeline!);
@@ -319,7 +373,7 @@ export class GPUColormapEngine {
     const byteSize = data.byteLength;
     const rgbaCapacity = directOnly ? 1 : Math.max(1, Math.round(rgbaCapacityHint ?? data.length));
     const existing = this.slots[idx];
-    if (existing && existing.dataOwnership === "owned" && existing.dataKind === "f32" && existing.directOnly === directOnly && existing.count === data.length && existing.width === width && existing.height === height && existing.rgbaCapacity >= rgbaCapacity) {
+    if (existing && !existing.integer && existing.dataOwnership === "owned" && existing.dataKind === "f32" && existing.directOnly === directOnly && existing.count === data.length && existing.width === width && existing.height === height && existing.rgbaCapacity >= rgbaCapacity) {
       this.device.queue.writeBuffer(existing.dataBuffer, 0, data.buffer as ArrayBuffer, data.byteOffset, data.byteLength);
       return;
     }
@@ -345,7 +399,7 @@ export class GPUColormapEngine {
     }
     while (this.slots.length <= idx) this.slots.push(null as never);
     const existing = this.slots[idx];
-    if (existing && existing.dataOwnership === "owned" && existing.dataKind === "rgb" && existing.count === data.length && existing.width === width && existing.height === height) {
+    if (existing && !existing.integer && existing.dataOwnership === "owned" && existing.dataKind === "rgb" && existing.count === data.length && existing.width === width && existing.height === height) {
       this.device.queue.writeBuffer(existing.dataBuffer, 0, data.buffer as ArrayBuffer, data.byteOffset, data.byteLength);
       return;
     }
@@ -381,6 +435,7 @@ export class GPUColormapEngine {
     const existing = this.slots[idx];
     if (
       existing
+      && !existing.integer
       && existing.dataOwnership === "owned"
       && existing.dataKind === "u8"
       && existing.count === data.length
@@ -398,6 +453,150 @@ export class GPUColormapEngine {
     });
     this.device.queue.writeBuffer(dataBuffer, 0, upload.buffer as ArrayBuffer, upload.byteOffset, upload.byteLength);
     this.slots[idx] = this.createSlot(dataBuffer, "owned", "u8", data.length, width, height, rgbaCapacity, rgbaCapacity * 4, false);
+  }
+
+  /**
+   * Upload one 8- or 16-bit integer image for slot `idx` in its own type: a quarter (8-bit) or half
+   * (16-bit) of the GPU memory of float32. Every draw, range and histogram reads the slot through
+   * `dataBuffer` as usual: the values convert to float32 on the GPU when the frame is drawn (exactly, as
+   * every 8- and 16-bit value is a float32), and only the frames on screen keep that float32 view.
+   */
+  uploadIntegerData(
+    idx: number, data: IntegerFrame, width: number, height: number, rgbaCapacityHint?: number, directOnly: boolean = false,
+  ): void {
+    if (width < 1 || height < 1 || width * height !== data.length) {
+      throw new Error(`display dimensions ${width}x${height} do not match ${data.length} pixels`);
+    }
+    this.ensurePipeline();
+    while (this.slots.length <= idx) this.slots.push(null as never);
+    const kind = integerKind(data);
+    const bytes = new Uint8Array(data.buffer as ArrayBuffer, data.byteOffset, data.byteLength);
+    // writeBuffer moves whole 4-byte words
+    const wordBytes = Math.max(4, Math.ceil(bytes.byteLength / 4) * 4);
+    const upload = wordBytes === bytes.byteLength && bytes.byteOffset % 4 === 0 ? bytes : (() => {
+      const padded = new Uint8Array(wordBytes);
+      padded.set(bytes);
+      return padded;
+    })();
+    const rgbaCapacity = directOnly ? 1 : Math.max(1, Math.round(rgbaCapacityHint ?? data.length));
+    const existing = this.slots[idx];
+    if (
+      existing?.integer && existing.integer.kind === kind && existing.directOnly === directOnly
+      && existing.count === data.length && existing.width === width && existing.height === height
+      && existing.rgbaCapacity >= rgbaCapacity
+    ) {
+      this.device.queue.writeBuffer(existing.integer.words, 0, upload.buffer as ArrayBuffer, upload.byteOffset, upload.byteLength);
+      existing.integer.stale = true;
+      return;
+    }
+    if (existing) this.destroySlot(existing);
+    const words = this.device.createBuffer({ size: wordBytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    this.device.queue.writeBuffer(words, 0, upload.buffer as ArrayBuffer, upload.byteOffset, upload.byteLength);
+    const slot = this.createSlot(words, "owned", "f32", data.length, width, height, rgbaCapacity, rgbaCapacity * 4, directOnly);
+    slot.integer = { kind, words, float: null, stale: true, usedTick: -1 };
+    Object.defineProperty(slot, "dataBuffer", { get: () => this.integerFloatView(slot), enumerable: true, configurable: true });
+    this.slots[idx] = slot;
+  }
+
+  /** Bytes the integer slots hold on the GPU: their packed values and the float32 views now kept. */
+  integerBytes(): { packed: number; float: number } {
+    let packed = 0;
+    let float = 0;
+    for (const slot of this.slots) {
+      if (!slot?.integer) continue;
+      packed += slot.integer.words.size;
+      float += slot.integer.float?.size ?? 0;
+    }
+    return { packed, float };
+  }
+
+  private integerPipeline(kind: IntegerKind): GPUComputePipeline {
+    let pipeline = this.integerPipelines.get(kind);
+    if (!pipeline) {
+      pipeline = computePipeline(this.device, integerToFloatShader(kind));
+      this.integerPipelines.set(kind, pipeline);
+    }
+    return pipeline;
+  }
+
+  /** Record the conversion of integer slot `slot` into float32 `target`, starting at value `offset`. */
+  encodeIntegerToFloat(encoder: GPUCommandEncoder, slot: GPUSlot, target: GPUBuffer, offset: number): void {
+    const integer = slot.integer!;
+    const pipeline = this.integerPipeline(integer.kind);
+    const groups = Math.ceil(slot.count / 256);
+    const rowGroups = Math.min(groups, this.device.limits.maxComputeWorkgroupsPerDimension);
+    const params = this.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.device.queue.writeBuffer(params, 0, new Uint32Array([slot.count, offset, rowGroups, 0]));
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, this.device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: params } },
+        { binding: 1, resource: { buffer: integer.words } },
+        { binding: 2, resource: { buffer: target } },
+      ],
+    }));
+    pass.dispatchWorkgroups(rowGroups, Math.ceil(groups / rowGroups));
+    pass.end();
+    void this.device.queue.onSubmittedWorkDone().catch(() => {}).finally(() => params.destroy());
+  }
+
+  /**
+   * The float32 view of integer slot `slot`, converted on the GPU when its values changed or it had none.
+   * The conversion is submitted now, so it runs before any draw that binds the view. Views of frames
+   * not used in this task are dropped, oldest first, beyond FLOAT_VIEWS_KEPT.
+   */
+  private integerFloatView(slot: GPUSlot): GPUBuffer {
+    const integer = slot.integer!;
+    if (!this.useTickPending) {
+      this.useTickPending = true;
+      setTimeout(() => { this.useTick++; this.useTickPending = false; }, 0);
+    }
+    integer.usedTick = this.useTick;
+    this.floatViews.delete(slot);
+    this.floatViews.add(slot);
+    if (!integer.float) {
+      for (const held of this.floatViews) {
+        if (this.floatViews.size <= FLOAT_VIEWS_KEPT) break;
+        if (held === slot || held.integer!.usedTick === this.useTick) continue;
+        this.dropFloatView(held);
+      }
+      integer.float = this.device.createBuffer({
+        size: slot.count * 4,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+      });
+      integer.stale = true;
+    }
+    if (integer.stale) {
+      const encoder = this.device.createCommandEncoder();
+      this.encodeIntegerToFloat(encoder, slot, integer.float, 0);
+      this.device.queue.submit([encoder.finish()]);
+      integer.stale = false;
+    }
+    return integer.float;
+  }
+
+  /** Free an integer slot's float32 view and forget every binding built on it. */
+  private dropFloatView(slot: GPUSlot): void {
+    const float = slot.integer!.float;
+    slot.integer!.float = null;
+    this.floatViews.delete(slot);
+    slot.directGridBindGroup = null;
+    slot.directSlotBindGroup = null;
+    slot.directCanvasBindGroup = null;
+    slot.directCanvasLut = null;
+    slot.colormapBindGroup = null;
+    slot.colormapLut = null;
+    slot.directRegionBindGroups = slot.directRegionBindGroups.map(() => null);
+    const live = slot.liveRange;
+    slot.liveRange = undefined;
+    // work already submitted may still read these
+    void this.device.queue.onSubmittedWorkDone().catch(() => {}).finally(() => {
+      float?.destroy();
+      live?.partials.destroy();
+      live?.parameters.destroy();
+    });
   }
 
   /** Display caller-owned storage; the caller retains its lifetime. */
@@ -420,7 +619,7 @@ export class GPUColormapEngine {
   adoptBuffer(idx: number, buffer: GPUBuffer, width: number, height: number, ownership: GPUBufferOwnership = "owned"): void {
     while (this.slots.length <= idx) this.slots.push(null as never);
     const old = this.slots[idx];
-    if (old && old.dataBuffer === buffer) {
+    if (old && !old.integer && old.dataBuffer === buffer) {
       if (old.width === width && old.height === height) {
         old.dataOwnership = ownership;
         return;

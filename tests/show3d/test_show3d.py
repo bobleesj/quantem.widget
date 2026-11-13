@@ -509,3 +509,19 @@ def test_set_image_follows_the_new_stacks_type():
     np.testing.assert_array_equal(np.frombuffer(widget._offline_float_stack, dtype=np.uint16).reshape(3, 8, 8), replacement)
     widget.set_image(replacement.astype(np.float64))
     assert widget._stack_dtype == "float32"
+
+
+def test_html_export_keeps_an_integer_stack_in_its_own_type():
+    stack = np.arange(4 * 6 * 8, dtype=np.int16).reshape(4, 6, 8) - 50
+    widget = Show3D(stack, verbose=False)
+    clone = widget._clone_for_html_export(quantized=False)
+    try:
+        assert clone._stack_dtype == "int16"
+        assert bytes(clone._offline_float_stack) == stack.tobytes()
+        binned = widget._clone_for_html_export(quantized=False, image_bin=2)
+        try:
+            assert binned._stack_dtype == "float32"  # a mean of 2 x 2 pixels is not an integer
+        finally:
+            widget._release_export_clone(binned)
+    finally:
+        widget._release_export_clone(clone)

@@ -71,9 +71,12 @@ class Show3DExport:
         image_bin = int(image_bin)
 
         def binned(panel: np.ndarray) -> np.ndarray:
-            """One gray panel stack mean-binned by ``image_bin``, as contiguous float32."""
+            """One gray panel stack mean-binned by ``image_bin`` as contiguous float32; unbinned 8- and 16-bit
+            stacks keep their own type, as the widget itself does (every value exact)."""
             if image_bin > 1:
                 return np.ascontiguousarray(bin2d(panel, factor=image_bin, mode="mean"), dtype=np.float32)
+            if panel.dtype.name in ("uint8", "int8", "uint16", "int16") and panel.dtype.isnative:
+                return np.ascontiguousarray(panel)
             return np.ascontiguousarray(panel, dtype=np.float32)
 
         def binned_rgb(stack: np.ndarray) -> np.ndarray:

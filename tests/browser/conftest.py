@@ -152,11 +152,13 @@ def open_page(chrome):
     """Open a page with WebGPU on or removed; returns the page and its error list (and console messages)."""
     contexts = []
 
-    def open_(url: str, *, webgpu: bool):
+    def open_(url: str, *, webgpu: bool, init_script: str | None = None):
         context = chrome.new_context(viewport={"width": 1600, "height": 1050}, device_scale_factor=1)
         contexts.append(context)
         if not webgpu:
             context.add_init_script(NO_WEBGPU_SCRIPT)
+        if init_script:
+            context.add_init_script(init_script)
         page = context.new_page()
         page.errors = []
         page.on("pageerror", lambda error: page.errors.append(str(error)[:300]))

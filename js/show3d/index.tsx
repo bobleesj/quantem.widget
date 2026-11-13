@@ -115,6 +115,7 @@ import { type PanelAnnotationSpec, type PanelOverlaySpec, type OverlaySelection,
 import { Histogram } from "../shared/Histogram";
 import { applyDisplayFilterBrowser, browserFilterSupported, filterKnobsActive } from "../display/filter";
 import { COLORMAPS, COLORMAP_NAMES, applyColormap, displayNormalize, renderToOffscreen, renderToOffscreenReuse, createGPUColormapEngine, GPUColormapEngine } from "../display/colormaps";
+import type { IntegerFrame } from "../display/colormapEngine";
 import { histogramBins } from "../display/cpuColormap";
 import { getGPUInfo, getHardwareGPUDevice, onGPULost, webGPULostReason } from "../display/device";
 import { findDrift } from "./drift";
@@ -762,6 +763,14 @@ function Show3D() {
     }
     return EMPTY_FRAME;
   }, [offlineStack, offlineFloatStack, stackDtype, offlineMin, offlineMax, offlineMins, offlineMaxs, liveSliceIdx, width, height, nPanels, numPanelCols, isRgb]);
+  // Frame `idx` of an integer stack in its own type, for the GPU (which keeps it in that type); null for float32 or RGB stacks.
+  const getIntegerFrame = React.useCallback((idx: number): IntegerFrame | null => {
+    if (isRgb || stackDtype === "float32" || !offlineFloatStack || offlineFloatStack.byteLength === 0) return null;
+    const frameCount = Math.max(1, nSlices || 1);
+    const normalized = ((Math.round(idx) % frameCount) + frameCount) % frameCount;
+    const native = stackFrameView(offlineFloatStack, stackDtype, normalized, width * height);
+    return native && !(native instanceof Float32Array) ? native : null;
+  }, [offlineFloatStack, stackDtype, isRgb, nSlices, width, height]);
   const getOfflineFrame = React.useCallback((idx: number): Float32Array | null => {
     // Cache per-frame Float32Array objects by frame index. The previous single
     // scratch buffer was unsafe because pointer-equality upload guards could skip
@@ -4600,7 +4609,9 @@ function Show3D() {
         renderLogScale = upload.logScale ? false : settings.logScale;
       } else if (rawCurrentFrame && rawCurrentFrame.length >= settings.width * settings.height) {
         const rgbaCapacity = Math.max(1, Math.round(settings.canvasW * settings.canvasH));
-        engine.uploadData(normalized, rawCurrentFrame, settings.width, settings.height, rgbaCapacity);
+        const integerFrame = getIntegerFrame(normalized);
+        if (integerFrame) engine.uploadIntegerData(normalized, integerFrame, settings.width, settings.height, rgbaCapacity);
+        else engine.uploadData(normalized, rawCurrentFrame, settings.width, settings.height, rgbaCapacity);
         gpuFrameCacheUploadedRef.current.add(normalized);
         slotIdx = normalized;
       }
@@ -4951,12 +4962,15 @@ function Show3D() {
         for (let position = 0; position < order.length; position++) {
           if (cancelled) return;
           const idx = order[position];
-          const frame = getOfflineFrame(idx);
+          // an integer stack stays in its own type on the GPU, without a float32 copy in the page
+          const integerFrame = getIntegerFrame(idx);
+          const frame = integerFrame ?? getOfflineFrame(idx);
           if (!frame || frame.length < frameSize) {
             throw new Error(`display frame ${idx + 1} is unavailable`);
           }
-          if (isRgb) engine.uploadRgbData(idx, frame.length === frameSize ? frame : frame.subarray(0, frameSize), width, height);
-          else engine.uploadData(idx, frame, width, height, 1, true);
+          if (integerFrame) engine.uploadIntegerData(idx, integerFrame, width, height, 1, true);
+          else if (isRgb) engine.uploadRgbData(idx, frame.length === frameSize ? frame as Float32Array : (frame as Float32Array).subarray(0, frameSize), width, height);
+          else engine.uploadData(idx, frame as Float32Array, width, height, 1, true);
           uploaded.add(idx);
           setGpuResidency({ stage: "uploading", ready: uploaded.size, error: "" });
           if (position === 0) renderGpuCachedSliceDirect(current, false);
@@ -4989,7 +5003,7 @@ function Show3D() {
     };
   // The embedded stack identity and geometry define GPU residency. Display
   // controls repaint resident slots and must never trigger another upload.
-  }, [offlineFloatStack, stackDtype, offlineStack, width, height, nSlices, isRgb, displayBin, gpuCmapChecked, gpuCmapReady]);
+  }, [offlineFloatStack, stackDtype, offlineStack, width, height, nSlices, isRgb, displayBin, gpuCmapChecked, gpuCmapReady, getIntegerFrame]);
 
 
   // Slider gestures temporarily own the displayed frame without changing Play.
