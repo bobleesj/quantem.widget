@@ -218,7 +218,7 @@ export function ThumbnailStrip(props: ThumbnailStripProps) {
           {Array.from({ length: frames }, (_, position) => (props.newestFirst ? frames - 1 - position : position)).map((frame) => {
             const selected = frame === currentFrame;
             // frames count from 1 as the slider does; a label that is only the 0-based index adds nothing
-            const custom = labels?.[frame] && labels[frame] !== String(frame) ? labels[frame] : "";
+            const custom = labels?.[frame] && labels[frame] !== String(frame) && labels[frame] !== String(frame + 1) ? labels[frame] : "";   // never the number again
             return (
               <Box key={frame} data-frame={frame} title={custom ? `Frame ${frame + 1}: ${custom}` : `Frame ${frame + 1}`}
                 onPointerEnter={() => preview(frame)}
