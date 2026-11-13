@@ -724,7 +724,7 @@ class Show3D(
         drift = change["new"] or {}
         if not drift.get("shift_px") or self.is_rgb or self._data is None:
             return
-        if getattr(self, "_stream_worker", None) is not None:      # live: keep appending, never stop for a panel
+        if getattr(self, "_stream_worker", None) is not None:      # still streaming: keep appending (end_stream() ends it)
             return
         if self._drift_source is None:
             if self.n_panels > 1:
