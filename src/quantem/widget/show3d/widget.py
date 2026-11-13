@@ -117,35 +117,48 @@ def _validated_float32(stack: np.ndarray, panel_name: str) -> np.ndarray:
     return stack_f32
 
 
-def drift_corrected(stack: np.ndarray, drift: Mapping, *, frame_times_s: Sequence[float] | None = None) -> np.ndarray:
-    """``stack`` with every frame moved back onto the first frame Find drift picked.
+def drift_corrected(stack: np.ndarray, drift: Mapping, *, frame_times_s: Sequence[float] | None = None,
+                    device: str | None = "auto") -> np.ndarray:
+    """``stack`` with every frame moved back onto the first frame Find drift picked, computed on the GPU.
 
     The picked frames move back by their measured ``shift_px``; the others by the fitted velocity,
     at their own time when ``frame_times_s`` gives one per frame, else at their frame index.
-    A Fourier shift: sub-pixel, and the edges wrap around.
+    A Fourier shift: sub-pixel, and the edges wrap around. Batched FFTs in torch on ``device``
+    (``"auto"``: CUDA, then Metal, then the CPU only when there is no GPU), a few frames at a time so a
+    long stack fits a small GPU.
 
     Examples
     --------
     >>> corrected = drift_corrected(frames, viewer.drift, frame_times_s=viewer.frame_times_s)  # doctest: +SKIP
     """
+    from quantem.widget.device import resolve_device
+
     frames = [int(frame) for frame in drift["frames"]]
     measured = {frame: shift for frame, shift in zip(frames, drift["shift_px"])}
     velocity = np.asarray(drift.get("velocity_px_per_frame", (0.0, 0.0)), dtype=np.float64)
     per_second = drift.get("velocity_px_per_s")
     timed = frame_times_s is not None and len(frame_times_s) == stack.shape[0] and per_second is not None
-    rows = np.fft.fftfreq(stack.shape[1])[:, None]
-    cols = np.fft.fftfreq(stack.shape[2])[None, :]
-    out = np.empty(stack.shape, dtype=np.float32)
+    shifts = np.empty((stack.shape[0], 2), dtype=np.float64)        # where the specimen sits in each frame, px
     for frame in range(stack.shape[0]):
         if frame in measured:
-            shift = np.asarray(measured[frame], dtype=np.float64)
+            shifts[frame] = np.asarray(measured[frame], dtype=np.float64)
         elif timed:
-            shift = np.asarray(per_second, dtype=np.float64) * (frame_times_s[frame] - frame_times_s[frames[0]])
+            shifts[frame] = np.asarray(per_second, dtype=np.float64) * (frame_times_s[frame] - frame_times_s[frames[0]])
         else:
-            shift = velocity * (frame - frames[0])
+            shifts[frame] = velocity * (frame - frames[0])
+    target = torch.device(resolve_device(device))
+    rows = torch.fft.fftfreq(stack.shape[1], device=target, dtype=torch.float64)[:, None]
+    cols = torch.fft.fftfreq(stack.shape[2], device=target, dtype=torch.float64)[None, :]
+    out = np.empty(stack.shape, dtype=np.float32)
+    # 8 frames of 2048 x 2048: about 0.5 GB of complex work on the GPU at once
+    batch = max(1, int(8 * 2048 * 2048 // max(1, stack.shape[1] * stack.shape[2])))
+    for first in range(0, stack.shape[0], batch):
+        chunk = torch.as_tensor(np.ascontiguousarray(stack[first:first + batch], dtype=np.float32), device=target)
+        shift = torch.as_tensor(shifts[first:first + batch], device=target)
         # the specimen moved by shift; f(r + shift) <-> F(k) exp(+2 pi i k . shift)
-        phase = np.exp(2j * np.pi * (rows * shift[0] + cols * shift[1]))
-        out[frame] = np.fft.ifft2(np.fft.fft2(stack[frame]) * phase).real
+        phase = torch.exp(2j * math.pi * (rows[None] * shift[:, 0, None, None] + cols[None] * shift[:, 1, None, None]))
+        moved = torch.fft.ifft2(torch.fft.fft2(chunk) * phase.to(torch.complex64)).real
+        out[first:first + len(chunk)] = moved.cpu().numpy()
     return out
 
 

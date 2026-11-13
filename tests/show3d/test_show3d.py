@@ -452,3 +452,31 @@ def test_frame_times_s_are_one_increasing_time_per_frame_and_time_the_corrected_
     assert np.abs(by_index[2] - base).max() > 1e-2
     widget.drift = drift
     assert widget.n_panels == 2 and widget.frame_times_s == times   # the corrected panel keeps the times
+
+
+def test_drift_correction_runs_on_the_gpu_and_matches_the_fourier_shift():
+    """The drift-corrected panel is computed with torch on the GPU (CPU only without one) and equals the plain
+    Fourier shift, frame by frame, measured and fitted frames alike."""
+    import numpy as np
+    import pytest
+    import torch
+
+    from quantem.widget.show3d.widget import drift_corrected
+
+    rng = np.random.default_rng(1)
+    stack = rng.random((5, 32, 48)).astype(np.float32)
+    drift = {"frames": [0, 2], "shift_px": [[0.0, 0.0], [1.25, -0.5]], "velocity_px_per_frame": [0.625, -0.25],
+             "velocity_px_per_s": [0.3, -0.1]}
+    times = [0.0, 1.0, 2.5, 3.0, 4.5]
+    expected = np.empty_like(stack)
+    rows, cols = np.fft.fftfreq(32)[:, None], np.fft.fftfreq(48)[None, :]
+    for frame in range(5):
+        shift = (np.asarray(drift["shift_px"][drift["frames"].index(frame)]) if frame in drift["frames"]
+                 else np.asarray(drift["velocity_px_per_s"]) * times[frame])
+        expected[frame] = np.fft.ifft2(np.fft.fft2(stack[frame]) * np.exp(2j * np.pi * (rows * shift[0] + cols * shift[1]))).real
+    devices = ["cpu"] + (["cuda"] if torch.cuda.is_available() else []) + (["mps"] if torch.backends.mps.is_available() else [])
+    for device in devices:
+        got = drift_corrected(stack, drift, frame_times_s=times, device=device)
+        assert got.dtype == np.float32 and np.allclose(got, expected, atol=1e-4), device
+    if len(devices) == 1:
+        pytest.skip("no GPU here: checked the CPU fallback only")
