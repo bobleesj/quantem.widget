@@ -9,7 +9,7 @@ from quantem.widget.adapters import gpu as gpu_adapter
 ARRIVING_LOOKAHEAD = 4
 
 
-class WatchedFolder:
+class LiveFolder:
     """The newest complete acquisitions under one folder, loaded as they finish arriving.
 
     ``Show4DSTEM.stream`` follows it as a recording (``lock``, ``datasets``, ``receiving``, ``error``). One thread
@@ -26,7 +26,7 @@ class WatchedFolder:
                  device: str | None, hot_pixel_correction: str, scan_shape=None):
         self.folder = Path(folder).expanduser()
         if not self.folder.is_dir():
-            raise FileNotFoundError(f"{self.folder} is not a folder to watch.")
+            raise FileNotFoundError(f"{self.folder} is not a folder to show live.")
         if int(latest) != latest or latest < 1:
             raise ValueError("latest is how many of the newest scans stay loaded: a whole number, 1 or more.")
         self.latest = int(latest)
@@ -43,17 +43,20 @@ class WatchedFolder:
         # files that could not be loaded, by fingerprint: tried again only after they change
         self._declined: dict[Path, tuple] = {}
         self._device_holds = self.latest
-        # held during a look; a fit on a watched scan holds it too, so no scan loads or leaves under the fit
+        # held during a look; a fit on a live scan holds it too, so no scan loads or leaves under the fit
         self.busy = threading.Lock()
         self._stop = threading.Event()
         self._thread = None
+        # told after a scan loads (``scan_loaded(path)``) and before one is let go (``scan_released(path)``),
+        # with ``busy`` held: a ShowPtycho.live panel closes its session on a scan before the scan closes
+        self.listeners: list = []
 
     @property
     def title(self) -> str:
-        return f"Watching {self.folder.name} · {len(self.datasets)} of the latest {self.latest}"
+        return f"Live · {self.folder.name} · {len(self.datasets)} of the latest {self.latest}"
 
     def start(self) -> None:
-        self._thread = threading.Thread(target=self._follow, name="Show4DSTEM-watch", daemon=True)
+        self._thread = threading.Thread(target=self._follow, name="Show4DSTEM-live", daemon=True)
         self._thread.start()
 
     def close(self, timeout: float = 120.0) -> None:
@@ -63,11 +66,14 @@ class WatchedFolder:
         if thread is not None and thread.is_alive() and thread is not threading.current_thread():
             thread.join(timeout)
             if thread.is_alive():
-                raise RuntimeError("Show4DSTEM is still loading a scan from the watched folder. Wait for it to "
+                raise RuntimeError("Show4DSTEM is still loading a scan from the live folder. Wait for it to "
                                    "finish, then call close() again.")
         self.receiving = False
         with self.lock:
-            datasets, self.datasets, self.paths = self.datasets, [], []
+            paths, datasets, self.datasets, self.paths = self.paths, self.datasets, [], []
+        for path in paths:
+            for listener in list(self.listeners):
+                listener.scan_released(path)
         for dataset in datasets:
             dataset.close()
         self.viewer = None
@@ -161,14 +167,14 @@ class WatchedFolder:
                 self._declined[path] = fingerprint
                 reason = ("does not fit on the device even alone" if out_of_memory
                           else " ".join(str(error).split()) or type(error).__name__)
-                print(f"Show4DSTEM.watch: skipped {path.name}: {reason}.")
+                print(f"Show4DSTEM.live: skipped {path.name}: {reason}.")
                 return released_for_room
         if self.datasets and tuple(dataset.shape) != tuple(self.datasets[0].shape):
             if not newest:
                 dataset.close()
                 self._declined[path] = fingerprint
                 return released_for_room
-            print(f"Show4DSTEM.watch: {path.name} is {tuple(dataset.shape)}, the scans before it "
+            print(f"Show4DSTEM.live: {path.name} is {tuple(dataset.shape)}, the scans before it "
                   f"{tuple(self.datasets[0].shape)}; one comparison holds one scan and detector shape, so they "
                   "were released.")
             for other in list(self.paths):
@@ -177,14 +183,18 @@ class WatchedFolder:
             self.datasets.append(dataset)
             self.paths.append(path)
             held = len(self.paths)
+        for listener in list(self.listeners):
+            listener.scan_loaded(path)
         if released_for_room and held < self._device_holds:
             self._device_holds = held
-            print(f"Show4DSTEM.watch: the device holds {held} of these scans, not latest={self.latest}; "
+            print(f"Show4DSTEM.live: the device holds {held} of these scans, not latest={self.latest}; "
                   "the older one was released. Scans stay lossless: nothing is binned to make room.")
         return True
 
     def _release(self, path: Path) -> None:
-        """Drop one scan: the viewer closes its sessions on it first, so closing it frees the device."""
+        """Drop one scan: its listeners and the viewer close their sessions on it first, so closing it frees the device."""
+        for listener in list(self.listeners):
+            listener.scan_released(path)
         with self.lock:
             index = self.paths.index(path)
             dataset = self.datasets.pop(index)

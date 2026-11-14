@@ -187,14 +187,13 @@ opened from a path, `Show4DSTEM(path)`; acquisitions you pass to
 shows a compact GPU memory label in its title row when CUDA or MPS memory is visible. Exported HTML has no live
 Python GPU allocation, so it does not expose a "free GPU memory" control.
 
-## Watch a folder
+## Live: the folder a detector writes into
 
-`Show4DSTEM.watch(folder)` follows a folder a detector writes into and shows each scan as soon as it has finished
-arriving:
+`Show4DSTEM.live(folder)` shows the scans a detector writes into a folder, live: each as soon as it has finished
+arriving. The viewer appears where the cell runs; nothing is saved.
 
 ```python
-viewer = Show4DSTEM.watch("scans", latest=2)
-viewer
+viewer = Show4DSTEM.live("scans", latest=2)
 ```
 
 - The folder is looked at every `refresh_s` seconds (2 by default). A scan is read once its files are complete and
@@ -207,20 +206,29 @@ viewer
   shown about 2 s after its file appeared at `refresh_s=0.5`).
 - `pattern="*.qem"` follows saved acquisitions instead of `*_master.h5`; `scan_shape=(rows, cols)` is for scans
   that are not square. A scan of another scan or detector shape replaces the ones before it.
-- A file that cannot be read is skipped with its reason on one line, and the folder is still watched.
-- `viewer.close()` stops watching and frees the scans. `widget watch <folder>` writes this cell as a notebook.
+- A file that cannot be read is skipped with its reason on one line, and the folder is still followed.
+- `viewer.close()` stops it and frees the scans. `widget live <folder>` writes this cell as a notebook.
 
-Direct ptychography on the scan the watch shows is the second cell, or the **Direct ptycho** control:
+Direct ptychography of each scan shown live is the second cell, a ShowPtycho panel below the viewer; the viewer
+itself stays a viewer:
 
 ```python
-phase = viewer.direct_phase()
+ptycho = ShowPtycho.live(viewer)
 ```
 
-On a device too small for the whole scan's spectra (a 4 GB card and a 512 x 512 x 192 x 192 scan) the fit reads the
-central 128 x 128 scan region and prints it; the viewer closes its detector sessions, the encoded scan waits in host
-memory during the fit, the folder watch waits too, and the whole scan is then reconstructed from the encoded counts in
-batches of detector columns. Rehearsed with the device held to 4096 MiB free: 5 s for fit and phase, 3602 MiB at the
-peak; not yet run on a 4 GB card. `direct_calibration_json` then carries `fit_scan_region`.
+Each scan's aberrations through fifth order are fitted on the central 256 x 256 scan region and the whole scan's
+phase is shown (see the ShowPtycho page, *Live*). `viewer.direct_phase()` still fits the shown scan from Python.
+
+On a device too small for the whole scan's spectra (a 4 GB card and a 512 x 512 x 192 x 192 scan) the fit still reads
+every scan position: it holds the spectra only at the frequencies the fit scores (1.6 GB instead of 9.5 GB) and gives
+the same aberrations as on a large card. The viewer closes its detector sessions, the encoded scan waits in host
+memory during the fit, the live folder waits too, and the whole scan is then reconstructed from the encoded counts
+in batches of detector columns. Rehearsed with the device held to 3700 MiB free: 7 s for fit and phase of a oxide scan,
+20 s for a scan whose band of frequencies is larger than the device, 3206 MiB at the peak; not yet run on a 4 GB card.
+A scan whose encoded counts do not fit beside the CUDA context stays in page-locked host memory and the GPU reads it
+there, with the same counts, and one line says so: the fit runs, a new virtual image takes about 0.2 s instead of
+5 ms and a detector drag about 50 ms. When even the fit's frequencies do not fit, the fit reads a central scan region,
+prints it, and `direct_calibration_json` carries `fit_scan_region`.
 
 ## Direct ptychography
 
@@ -527,7 +535,7 @@ compare-grid signoff.
 
 ```{eval-rst}
 .. autoclass:: quantem.widget.show4dstem.Show4DSTEM
-   :members: watch, selected_scan_region, export_html, direct_phase, apply_preset, state_dict, save, load_state_dict, free, close, pattern, virtual_image
+   :members: live, selected_scan_region, export_html, direct_phase, apply_preset, state_dict, save, load_state_dict, free, close, pattern, virtual_image
 ```
 
 ```{note}

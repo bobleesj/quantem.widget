@@ -35,7 +35,7 @@ class StreamFollower:
         self.refresh_s = refresh_s
         self.options = options
         self.title = options.get("title") or "Live acquisition"
-        # a watched folder shows each scan as it lands; a live recording keeps the scan the user selected
+        # a live folder shows each scan as it lands; a live recording keeps the scan the user selected
         self.select_newest = getattr(recording, "select_newest", False)
 
     def snapshot(self) -> list:

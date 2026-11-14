@@ -6,12 +6,17 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
-- `Show4DSTEM.watch(folder, latest=2)` follows a folder a detector writes into: each scan is shown once its files are
+- `Show4DSTEM.live(folder, latest=2)` shows a folder a detector writes into, live: each scan is shown once its files are
   complete, the newest `latest` stay loaded, and the oldest is released before the next one loads. When the device
-  cannot hold `latest` scans it keeps fewer and says so. `widget watch <folder>` writes the notebook.
+  cannot hold `latest` scans it keeps fewer and says so. The viewer appears where the cell runs and nothing is saved.
+  `widget live <folder>` writes the notebook.
+- `ShowPtycho.live(viewer)` shows direct ptychography of each scan a `Show4DSTEM.live` viewer shows, in a panel below
+  it: the aberrations through fifth order are fitted on the central 256 x 256 scan region (or `scan_region=`, or a
+  region drawn in the panel) and the whole scan's phase is shown. The viewer itself stays a viewer.
 - `Show4DSTEM.direct_phase()` (the Direct ptycho control) runs on a device too small for the whole scan's spectra: the
-  fit reads the central scan region while the encoded scan waits in host memory, the whole scan is reconstructed in
-  batches, and `direct_calibration_json` records `fit_scan_region`.
+  fit reads the whole scan at the frequencies it scores while the encoded scan waits in host memory, and the whole
+  scan is reconstructed in batches. Only when even that does not fit does it read a central scan region, recorded as
+  `fit_scan_region` in `direct_calibration_json`.
 - The command is `widget` (was `quantem-widget`), with no alias: `widget show2d`, `widget show3d`, `widget show3dslices`,
   `widget show4dstem`, `widget github`.
 - `widget build` builds the widgets' JavaScript in a source checkout installed with `pip install -e`, from any folder;

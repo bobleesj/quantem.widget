@@ -1046,14 +1046,14 @@ def test_update_fast_forwards_the_checkout_then_builds_and_refuses_a_diverged_on
     assert _git(checkout, "rev-parse", "HEAD") == mine and builds == [False, False]
 
 
-def test_watch_writes_a_notebook_that_follows_the_folder(tmp_path, capsys):
+def test_live_writes_a_notebook_that_shows_the_folder_live(tmp_path, capsys):
     scans = tmp_path / "today"
     scans.mkdir()
-    assert cli.main(["watch", str(scans), "--latest", "1", "--pattern", "*.qem", "--no-open",
+    assert cli.main(["live", str(scans), "--latest", "1", "--pattern", "*.qem", "--no-open",
                      "--save-dir", str(tmp_path / "out")]) == 0
-    notebook = json.loads((tmp_path / "out" / "watch_today.ipynb").read_text())
+    notebook = json.loads((tmp_path / "out" / "live_today.ipynb").read_text())
     assert "".join(notebook["cells"][1]["source"]) == (
         "from quantem.widget import Show4DSTEM\n\n"
-        f"viewer = Show4DSTEM.watch({str(scans.resolve())!r}, latest=1, pattern='*.qem')\nviewer\n")
-    assert cli.main(["watch", str(tmp_path / "missing"), "--no-open"]) == 1
-    assert "is not a folder to watch" in capsys.readouterr().err
+        f"viewer = Show4DSTEM.live({str(scans.resolve())!r}, latest=1, pattern='*.qem')\nviewer\n")
+    assert cli.main(["live", str(tmp_path / "missing"), "--no-open"]) == 1
+    assert "is not a folder to show live" in capsys.readouterr().err

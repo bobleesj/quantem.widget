@@ -78,14 +78,14 @@ def main(argv: list[str] | None = None) -> int:
                        help="Keep running and rebuild each widget when one of its source files is saved.")
     subparsers.add_parser(
         "update", help="Pull the quantem.gpu and quantem.widget source checkouts (fast-forward only), then build.")
-    watch = subparsers.add_parser(
-        "watch", help="Open a Show4DSTEM notebook that follows a folder: the newest scans load as they finish arriving.")
-    watch.add_argument("folder", help="Folder the detector writes its scans into.")
-    watch.add_argument("--latest", type=int, default=2, help="How many of the newest scans stay loaded (default 2).")
-    watch.add_argument("--pattern", default="*_master.h5",
+    live = subparsers.add_parser(
+        "live", help="Open a Show4DSTEM notebook live on a folder: the newest scans show as they finish arriving.")
+    live.add_argument("folder", help="Folder the detector writes its scans into.")
+    live.add_argument("--latest", type=int, default=2, help="How many of the newest scans stay loaded (default 2).")
+    live.add_argument("--pattern", default="*_master.h5",
                        help='Files to follow (default "*_master.h5"; "*.qem" for saved acquisitions).')
-    watch.add_argument("--save-dir", default=None, help="Folder the notebook is written into (default ~/Downloads).")
-    watch.add_argument("--no-open", action="store_true", help="Write the notebook but do not launch JupyterLab.")
+    live.add_argument("--save-dir", default=None, help="Folder the notebook is written into (default ~/Downloads).")
+    live.add_argument("--no-open", action="store_true", help="Write the notebook but do not launch JupyterLab.")
     args = parser.parse_args(argv)
     # What a user can fix (a path, an argument, a missing package, too little memory) prints one
     # line and exits 1; anything else is a bug and keeps its traceback.
@@ -102,8 +102,8 @@ def main(argv: list[str] | None = None) -> int:
             return _build(args)
         if args.command == "update":
             return _update()
-        if args.command == "watch":
-            return _watch(args)
+        if args.command == "live":
+            return _live(args)
         return _show4dstem(args)
     except (OSError, ValueError, ImportError, MemoryError, NotImplementedError) as error:
         if isinstance(error, ImportError) and (error.name or "").startswith("quantem.widget"):
@@ -1276,24 +1276,24 @@ def _render_4dstem_notebook(masters: list[str], label: str, args: argparse.Names
     return _write_viewer_notebook(_out_dir(args.save_dir) / f"{label}.ipynb", title, "viewer", source)
 
 
-def _watch(args: argparse.Namespace) -> int:
-    """Write and open a notebook whose one cell follows ``folder`` with ``Show4DSTEM.watch``."""
+def _live(args: argparse.Namespace) -> int:
+    """Write and open a notebook whose one cell shows ``folder`` live with ``Show4DSTEM.live``."""
     folder = pathlib.Path(args.folder).expanduser().resolve()
     if not folder.is_dir():
-        raise ValueError(f"{folder} is not a folder to watch")
+        raise ValueError(f"{folder} is not a folder to show live")
     if args.latest < 1:
         raise ValueError("--latest is how many of the newest scans stay loaded: 1 or more")
     pattern = "" if args.pattern == "*_master.h5" else f", pattern={args.pattern!r}"
     source = (
         "from quantem.widget import Show4DSTEM\n"
         "\n"
-        f"viewer = Show4DSTEM.watch({str(folder)!r}, latest={args.latest}{pattern})\n"
+        f"viewer = Show4DSTEM.live({str(folder)!r}, latest={args.latest}{pattern})\n"
         "viewer\n"
     )
-    title = [f"# Watching {folder.name}\n",
+    title = [f"# Live: {folder.name}\n",
              f"\nThe newest {args.latest} scan(s) under `{folder}` load as they finish arriving. "
-             "`viewer.close()` stops watching and frees them."]
-    notebook = _write_viewer_notebook(_out_dir(args.save_dir) / f"watch_{folder.name}.ipynb", title, "viewer", source)
+             "`viewer.close()` stops it and frees them."]
+    notebook = _write_viewer_notebook(_out_dir(args.save_dir) / f"live_{folder.name}.ipynb", title, "viewer", source)
     _launch_notebook(notebook, no_open=args.no_open)
     return 0
 

@@ -14,7 +14,7 @@ widget show4dstem ./masters/                      # *_master.h5        -> live S
 widget show4dstem a_master.h5 b_master.h5         # several masters    -> one comparison viewer
 widget show4dstem ./masters/ --html               # 4D-STEM            -> shareable offline HTML
 widget show4dstem a.qem b.qem --html              # native QEM files   -> browser viewer folder
-widget watch ./scans/ --latest 2                  # a detector's folder  -> notebook that shows each new scan
+widget live ./scans/ --latest 2                   # a detector's folder  -> notebook that shows each new scan live
 widget github tutorial_github.ipynb --no-execute  # optional static copy for GitHub preview
 widget build                                      # source checkout    -> build the widgets' JavaScript
 widget build --watch                              # source checkout    -> rebuild on every save
@@ -32,7 +32,7 @@ Python: `widget.export_html(...)`, or `jupyter nbconvert --to html notebook.ipyn
 | `widget show3d <stack / files / folder>` | a `.npy` or `.tif` stack, several stacks, 2D frame files, or a folder of frames | one Show3D HTML page |
 | `widget show4dstem <master(s) / folder>` | one or more `*_master.h5` | a live Show4DSTEM notebook (or `--html`) |
 | `widget show4dstem <file.qem ...> --html` | one or more native `.qem` files | a WebGPU folder that reads the encoded acquisitions |
-| `widget watch <folder> [--latest N] [--pattern GLOB]` | a folder a detector writes `*_master.h5` (or `.qem`) scans into | a notebook whose one cell is `Show4DSTEM.watch(folder, latest=N)`: the newest scans load as they finish arriving |
+| `widget live <folder> [--latest N] [--pattern GLOB]` | a folder a detector writes `*_master.h5` (or `.qem`) scans into | a notebook whose one cell is `Show4DSTEM.live(folder, latest=N)`: the newest scans show as they finish arriving |
 | `widget github <notebook.ipynb>` | an optional static copy of a notebook | strips widget state and embeds compressed pictures for GitHub's notebook preview |
 | `widget build [--watch]` | a source checkout installed with `pip install -e` (needs Node.js 20 or newer) | the widgets' JavaScript bundles; installs the Node packages on the first run; `--watch` rebuilds on save |
 | `widget update` | the quantem.gpu and quantem.widget source checkouts (needs Git) | each fast-forwarded on its own branch, then built; stops without changing anything when a checkout has local commits or edits in the way |

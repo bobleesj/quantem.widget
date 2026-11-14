@@ -28,7 +28,7 @@ from quantem.widget.adapters import gpu as gpu_adapter
 from quantem.widget.adapters.core import make_dataset
 from quantem.widget.show4dstem import preview, reader
 from quantem.widget.show4dstem.detector import detector_mask, bright_field_disk, roi_mask
-from quantem.widget.show4dstem.watching import WatchedFolder
+from quantem.widget.show4dstem.live import LiveFolder
 from quantem.widget.counts import tensor_dtype
 from quantem.widget.show4dstem import export as html_export
 from quantem.widget.show4dstem.export import bundle_master_urls, check_html_payload, export_data_array, write_webgpu_bundle
@@ -178,11 +178,11 @@ def test_stream_opens_on_the_first_acquisition_and_appends_the_rest_as_they_comp
             acquisition.close()
 
 
-def _watched(tmp_path, monkeypatch, **options):
-    """A viewer watching ``tmp_path`` whose looks at the folder the test makes itself, one at a time."""
-    monkeypatch.setattr(WatchedFolder, "start", lambda self: None)
-    widget = Show4DSTEM.watch(tmp_path, verbose=False, **options)
-    return widget, widget._watched_folder
+def _live(tmp_path, monkeypatch, **options):
+    """A viewer live on ``tmp_path`` whose looks at the folder the test makes itself, one at a time."""
+    monkeypatch.setattr(LiveFolder, "start", lambda self: None)
+    widget = Show4DSTEM.live(tmp_path, verbose=False, **options)
+    return widget, widget._live_folder
 
 
 def _arrive(folder: Path, stem: str, values: np.ndarray, age_s: float) -> Path:
@@ -194,8 +194,28 @@ def _arrive(folder: Path, stem: str, values: np.ndarray, age_s: float) -> Path:
     return master
 
 
-def test_watch_shows_each_scan_once_it_is_complete_and_keeps_the_latest_two(tmp_path, accelerator, monkeypatch):
-    widget, watched = _watched(tmp_path, monkeypatch, latest=2)
+def test_live_draws_its_viewer_once_where_it_is_called(tmp_path, accelerator, monkeypatch):
+    """In a notebook kernel ``live`` shows the viewer as it runs; the viewer it returns does not draw it again."""
+    from types import SimpleNamespace
+
+    import IPython
+    import IPython.display
+
+    drawn = []
+    events = SimpleNamespace(register=lambda *_: None, unregister=lambda *_: None)
+    shell = SimpleNamespace(kernel=SimpleNamespace(get_parent=lambda: {}), events=events)
+    monkeypatch.setattr(IPython, "get_ipython", lambda: shell)
+    monkeypatch.setattr(IPython.display, "display", lambda viewer: drawn.append(viewer))
+    widget, _ = _live(tmp_path, monkeypatch, latest=1)
+    try:
+        assert drawn == [widget] and widget._drawn_live
+        assert widget._ipython_display_() is None and drawn == [widget]
+    finally:
+        widget.close()
+
+
+def test_live_shows_each_scan_once_it_is_complete_and_keeps_the_latest_two(tmp_path, accelerator, monkeypatch):
+    widget, watched = _live(tmp_path, monkeypatch, latest=2)
     try:
         assert widget.n_frames == 0 and widget.title == "Waiting for acquisition"
         _arrive(tmp_path, "a", _counts(0), age_s=30)
@@ -222,15 +242,15 @@ def test_watch_shows_each_scan_once_it_is_complete_and_keeps_the_latest_two(tmp_
         widget.refresh_stream()
         assert widget.frame_labels == ["b", "c"] and widget.frame_idx == 1 and widget.stream_error is None
         np.testing.assert_array_equal(_pattern(widget), _counts(2)[widget.pos_row, widget.pos_col])
-        assert widget.title == f"Watching {tmp_path.name} · 2 of the latest 2"
+        assert widget.title == f"Live · {tmp_path.name} · 2 of the latest 2"
         kept = list(watched.datasets)
     finally:
         widget.close()
     assert watched.datasets == [] and all(dataset.data.is_released for dataset in kept)
 
 
-def test_watch_keeps_the_selected_scan_when_following_is_off(tmp_path, accelerator, monkeypatch):
-    widget, watched = _watched(tmp_path, monkeypatch, latest=2)
+def test_live_keeps_the_selected_scan_when_following_is_off(tmp_path, accelerator, monkeypatch):
+    widget, watched = _live(tmp_path, monkeypatch, latest=2)
     try:
         for stem, age_s in (("a", 30), ("b", 20)):
             _arrive(tmp_path, stem, _counts(age_s), age_s=age_s)
@@ -247,8 +267,8 @@ def test_watch_keeps_the_selected_scan_when_following_is_off(tmp_path, accelerat
         widget.close()
 
 
-def test_watch_holds_fewer_scans_when_the_device_has_no_room_and_says_so(tmp_path, accelerator, monkeypatch, capsys):
-    widget, watched = _watched(tmp_path, monkeypatch, latest=2)
+def test_live_holds_fewer_scans_when_the_device_has_no_room_and_says_so(tmp_path, accelerator, monkeypatch, capsys):
+    widget, watched = _live(tmp_path, monkeypatch, latest=2)
     load, attempts = gpu_adapter.load_acquisition, []
 
     def one_scan_device(path, *args, **kwargs):
@@ -277,8 +297,8 @@ def test_watch_holds_fewer_scans_when_the_device_has_no_room_and_says_so(tmp_pat
         widget.close()
 
 
-def test_watch_starts_over_when_the_scan_shape_changes(tmp_path, accelerator, monkeypatch, capsys):
-    widget, watched = _watched(tmp_path, monkeypatch, latest=2)
+def test_live_starts_over_when_the_scan_shape_changes(tmp_path, accelerator, monkeypatch, capsys):
+    widget, watched = _live(tmp_path, monkeypatch, latest=2)
     try:
         _arrive(tmp_path, "a", _counts(0), age_s=30)
         watched.look(), watched.look()
@@ -291,7 +311,7 @@ def test_watch_starts_over_when_the_scan_shape_changes(tmp_path, accelerator, mo
         widget.refresh_stream()
         assert widget.frame_labels == ["small"] and (widget.shape_rows, widget.shape_cols) == (4, 4)
         np.testing.assert_array_equal(_pattern(widget), _counts(1, scan=(4, 4))[widget.pos_row, widget.pos_col])
-        # a file that cannot be read is skipped with its reason, and the folder is still watched
+        # a file that cannot be read is skipped with its reason, and the folder is still followed
         (tmp_path / "broken_master.h5").write_bytes(b"not an HDF5 file")
         watched.look(), watched.look()
         assert [path.name for path in watched.paths] == ["small_master.h5"] and watched.error is None

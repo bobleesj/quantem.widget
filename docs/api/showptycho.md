@@ -287,6 +287,29 @@ budget to hold every BF pixel's complex64 Hermitian half-plane when needed
 output buffers require additional memory. A GPU with insufficient capacity
 rejects the run; detector pixels are never removed to make it fit.
 
+## Live: the scans a Show4DSTEM.live viewer shows
+
+```python
+viewer = Show4DSTEM.live(folder, latest=1, semiangle_mrad=30)
+ptycho = ShowPtycho.live(viewer)
+```
+
+The second cell shows a panel below the viewer. Each scan that arrives is fitted through fifth order on a square scan
+region, the central 256 x 256 unless you choose another, and its whole phase is shown in a ShowPtycho at the fitted
+aberrations; a status line above it says which scan, which region and how long the fit took. When the next scan
+arrives, the panel and its session close before the viewer lets the old scan go, and the new scan is fitted.
+
+- `ptycho.scan_region = (row_start, row_stop, col_start, col_stop)` fits the shown scan there and every later scan
+  (128, 256, 512 or 1024 scan pixels per side); `None` returns to the centre.
+- The dashed box on the phase is the fit region. Drag it and the scan is fitted there when you let go; choose 256 or
+  128 scan positions a side beside it. The whole scan stays shown, and a refit keeps the scan rotation.
+- `ptycho.ptycho` is the ShowPtycho of the scan shown; `ptycho.close()` stops the panel.
+- The fit holds the live folder, so no scan loads or leaves under it. On a device too small for the dense spectrum
+  the region is fitted on its band spectrum (quantem.gpu `aberrations(scan_region=...)`).
+
+On the RTX PRO 6000 a 512 x 512 oxide scan was shown 5.5 s after its files landed and fitted on its central region
+5.5 s later (2026-11-14).
+
 ## Real-Space Crop And Refit
 
 For a region-specific probe/aberration fit, open the prepared direct ptychography session with
@@ -498,7 +521,7 @@ reference images, or detector-binned copies by default.
 
 ```{eval-rst}
 .. autoclass:: quantem.widget.showptycho.ShowPtycho
-   :members: export
+   :members: live, export
 ```
 
 ## Interactive Controls

@@ -701,7 +701,7 @@ function ImagePanel({
   offscreen, label, size, tc, zoom, onZoomChange,
   showResize, onResizeStart,
   pixelSize, realSpacePixelSize, imageWidth, isFFT, resetZoom = ZOOM_RESET,
-  rawData, smooth, inset, cropRegion, cropSelecting, onCropChange,
+  rawData, smooth, inset, cropRegion, cropSelecting, onCropChange, fitRegion, onFitRegionMove, onFitRegionDrop,
 }: {
   offscreen: HTMLCanvasElement | null;
   offscreenVersion?: number;
@@ -723,6 +723,11 @@ function ImagePanel({
   cropRegion?: [number, number, number, number] | null;
   cropSelecting?: boolean;
   onCropChange?: (startRow: number, startCol: number, endRow: number, endCol: number) => void;
+  // the scan region the aberrations are fitted on (image pixels), dragged as a whole on a live panel
+  fitRegion?: [number, number, number, number] | null;
+  onFitRegionMove?: (rowStart: number, colStart: number) => void;
+  // the box was let go: fit there
+  onFitRegionDrop?: () => void;
 }) {
   const imageBoxRef = React.useRef<HTMLDivElement>(null);
   const canvasRef = React.useRef<HTMLCanvasElement>(null);
@@ -955,6 +960,38 @@ function ImagePanel({
     };
   }, [cropRegion, isFFT, offscreen, size, zoom]);
 
+  const fitOverlay = React.useMemo(() => {
+    if (!fitRegion || !offscreen || isFFT) return null;
+    const [rowStart, rowEnd, colStart, colEnd] = fitRegion;
+    const scale = Math.min(size / offscreen.width, size / offscreen.height) * zoom.zoom;
+    return {
+      scale,
+      left: (size - offscreen.width * scale) / 2 + zoom.panX + colStart * scale,
+      top: (size - offscreen.height * scale) / 2 + zoom.panY + rowStart * scale,
+      width: (colEnd - colStart) * scale,
+      height: (rowEnd - rowStart) * scale,
+    };
+  }, [fitRegion, isFFT, offscreen, size, zoom]);
+  const startFitRegionDrag = React.useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0 || !fitRegion || !fitOverlay || !offscreen || !onFitRegionMove) return;
+    e.preventDefault(); e.stopPropagation();
+    const [rowStart, rowEnd, colStart, colEnd] = fitRegion;
+    const x0 = e.clientX, y0 = e.clientY, scale = fitOverlay.scale;
+    const move = (event: MouseEvent) => {
+      const row = Math.round(rowStart + (event.clientY - y0) / scale);
+      const col = Math.round(colStart + (event.clientX - x0) / scale);
+      onFitRegionMove(
+        Math.max(0, Math.min(offscreen.height - (rowEnd - rowStart), row)),
+        Math.max(0, Math.min(offscreen.width - (colEnd - colStart), col)));
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up);
+      onFitRegionDrop?.();
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  }, [fitOverlay, fitRegion, offscreen, onFitRegionDrop, onFitRegionMove]);
+
   return (
     <Box sx={{ width: size, flexShrink: 0, display: "flex", flexDirection: "column" }}>
       <Box ref={imageBoxRef} sx={{ ...container.imageBox, bgcolor: tc.bgAlt, border: `1px solid ${tc.border}`, width: size, height: size }}>
@@ -977,6 +1014,18 @@ function ImagePanel({
         <Typography sx={{ position: "absolute", top: 4, left: 5, px: 0.5,
           fontSize: 10, fontFamily: "monospace", color: "#fff",
           bgcolor: "rgba(0,0,0,0.5)", pointerEvents: "none" }}>{label}</Typography>
+        {fitOverlay && !cropOverlay && (
+          <Box data-showptycho-fit-region onMouseDown={startFitRegionDrag}
+            title="The aberrations are fitted on this region. Drag it to fit somewhere else."
+            sx={{
+              position: "absolute", cursor: onFitRegionMove ? "move" : "default",
+              left: fitOverlay.left, top: fitOverlay.top, width: fitOverlay.width, height: fitOverlay.height,
+              border: "2px dashed #54e36a", boxShadow: "0 0 0 1px rgba(2, 24, 8, 0.88)", boxSizing: "border-box",
+            }}>
+            <Box sx={{ position: "absolute", left: 0, top: 0, px: .5, fontSize: 11, lineHeight: "16px",
+              color: "#021808", bgcolor: "#54e36a", pointerEvents: "none" }}>Fit region</Box>
+          </Box>
+        )}
         {cropOverlay && (
           <Box sx={{
             position: "absolute", pointerEvents: "none",
@@ -1410,8 +1459,10 @@ function SamplePanel({
 }
 
 function HigherOrderPanel({
-  tc, open, onToggle, activeCount, values: committedValues, setValues, onDrag, onCommit, disabled = false,
+  tc, open, onToggle, activeCount, values: committedValues, setValues, onDrag, onCommit, disabled = false, note = "",
 }: {
+  /** What the fit's half-band check says of the higher orders, shown in the header. */
+  note?: string;
   tc: ThemeColors;
   open: boolean;
   onToggle: () => void;
@@ -1556,16 +1607,18 @@ function HigherOrderPanel({
       {/* Header row: click to expand/collapse, shows badge when active. */}
       <Box
         sx={{
-          display: "inline-flex", alignItems: "center", gap: `${SPACING.MD}px`,
+          display: "inline-flex", alignItems: "center", flexWrap: "wrap", rowGap: 0, gap: `${SPACING.MD}px`,
           px: 1, py: 0.5, cursor: "pointer", userSelect: "none",
           borderBottom: open ? `1px solid ${tc.border}` : "none",
         }}
         onClick={onToggle}
       >
         <Typography sx={{ ...typography.label, color: tc.accent }}>
-          {open ? "▾" : "▸"} Higher-order (n=2..5)
+          {open ? "▾" : "▸"} Higher orders
         </Typography>
-        {activeCount > 0 && (
+        {note && <Typography data-showptycho-higher-order-note
+          sx={{ ...typography.value, color: tc.textMuted, order: 9, flex: "1 1 100%", whiteSpace: "normal" }}>{note}</Typography>}
+        {activeCount > 0 && !/^not measured/.test(note) && (
           <Tooltip title={`${activeCount} higher-order magnitude(s) non-zero. Reconstruction uses all 14 coefficients. Automatic fitting initializes with 200 trials, then jointly refines through fifth order with tilt and depth.`} placement="top" arrow>
             <Box sx={{
               fontSize: 10, px: 0.8, py: 0.1, borderRadius: 0,
@@ -1684,6 +1737,7 @@ function Explore() {
   const [computeLoss] = useModelState<boolean>("compute_loss");
   const [autoLoss] = useModelState<number | null>("fitted_loss");
   const [fitAgreement] = useModelState<number | null>("fitted_sample_agreement");
+  const [higherOrderNote] = useModelState<string>("higher_order_note");
   const [tiltFitGain] = useModelState<number | null>("fitted_tilt_fit_gain");
   // an array carries the pixel size of its image; a session the scan step, which the output sampling divides
   const [objectSamplingA] = useModelState<number[]>("object_sampling_A");
@@ -1737,6 +1791,12 @@ function Explore() {
   const [cropRefitAvailable] = useModelState<boolean>("crop_refit_available");
   const [cropRefitStatus] = useModelState<string>("crop_refit_status");
   const [, setCropRefitRequestJson] = useModelState<string>("crop_refit_request_json");
+  // a live panel (ShowPtycho.live): the scan region the aberrations were fitted on, and the request to fit another
+  const [fitRegion] = useModelState<number[]>("fit_region");
+  const [fitRegionStatus] = useModelState<string>("fit_region_status");
+  const [, setFitRegionRequestJson] = useModelState<string>("fit_region_request_json");
+  const [fitRegionDraft, setFitRegionDraft] = React.useState<number[] | null>(null);
+  React.useEffect(() => { setFitRegionDraft(null); }, [fitRegion]);
   const [sampleJsonModel, setSampleJson] = useModelState<string>("sample_json");
   const [tiltCorrection, setTiltCorrection] = useModelState<boolean>("tilt_correction");
   const [sampleAvailable] = useModelState<boolean>("sample_available");
@@ -1940,6 +2000,35 @@ function Explore() {
     setScanCrop(null);
     setCropSelecting(false);
   }, []);
+  const shownFitRegion = fitRegionDraft ?? (fitRegion && fitRegion.length === 4 ? fitRegion : null);
+  const fitRegionScale = (rawPhaseRef.current?.h || phaseHeight) / (scanRows || phaseHeight);
+  const displayedFitRegion: [number, number, number, number] | null = shownFitRegion
+    ? [shownFitRegion[0] * fitRegionScale, shownFitRegion[1] * fitRegionScale,
+       shownFitRegion[2] * fitRegionScale, shownFitRegion[3] * fitRegionScale] : null;
+  const moveFitRegion = React.useCallback((rowStart: number, colStart: number) => {
+    if (!shownFitRegion) return;
+    const side = shownFitRegion[1] - shownFitRegion[0];
+    const row = Math.max(0, Math.min((scanRows || side) - side, Math.round(rowStart / fitRegionScale)));
+    const col = Math.max(0, Math.min((scanCols || side) - side, Math.round(colStart / fitRegionScale)));
+    setFitRegionDraft([row, row + side, col, col + side]);
+  }, [fitRegionScale, scanCols, scanRows, shownFitRegion]);
+  const fitRegionDraftRef = React.useRef<number[] | null>(null);
+  fitRegionDraftRef.current = fitRegionDraft;
+  // letting the box go fits there; so does choosing its other size (the fit takes 256 or 128 scan positions a side)
+  const requestFitRegion = React.useCallback((region?: number[]) => {
+    const wanted = region ?? fitRegionDraftRef.current;
+    if (!wanted || (fitRegion && wanted.every((value, index) => value === fitRegion[index]))) return;
+    setFitRegionRequestJson(JSON.stringify({ id: Date.now(), scan_region: wanted }));
+  }, [fitRegion, setFitRegionRequestJson]);
+  const resizeFitRegion = React.useCallback((side: number) => {
+    if (!shownFitRegion) return;
+    const rowCentre = (shownFitRegion[0] + shownFitRegion[1]) / 2, colCentre = (shownFitRegion[2] + shownFitRegion[3]) / 2;
+    const row = Math.max(0, Math.min((scanRows || side) - side, Math.round(rowCentre - side / 2)));
+    const col = Math.max(0, Math.min((scanCols || side) - side, Math.round(colCentre - side / 2)));
+    const region = [row, row + side, col, col + side];
+    setFitRegionDraft(region);
+    requestFitRegion(region);
+  }, [requestFitRegion, scanCols, scanRows, shownFitRegion]);
   const requestCropRefit = React.useCallback(() => {
     if (!scanCrop || !cropRefitAvailable) return;
     setCropSelecting(false);
@@ -1998,6 +2087,11 @@ function Explore() {
   const ampDataRef = React.useRef<{ data: Float32Array; w: number; h: number } | null>(null);
 
   const [panel, setPanel] = React.useState<number>(DEFAULT_PANEL);
+  // a live panel (ShowPtycho.live) opens at a fixed image size with its controls beside the image, so the viewer
+  // above it and this panel fit one screen; the controls drop below the image when the window is narrow
+  const [panelPx] = useModelState<number>("panel_px");
+  const [controlsBeside] = useModelState<boolean>("controls_beside");
+  React.useEffect(() => { if (panelPx > 0) setPanel(panelPx); }, [panelPx]);
   const shownPanelRef = React.useRef(DEFAULT_PANEL);
   // content width of the widget root (its parent's width less the root padding)
   const rootRef = React.useRef<HTMLDivElement>(null);
@@ -3954,6 +4048,21 @@ function Explore() {
           flexWrap: "wrap", rowGap: `${SPACING.XS}px`,
         }}
       >
+        {shownFitRegion && (
+          <Box data-showptycho-fit-controls sx={{ display: "inline-flex", alignItems: "center", whiteSpace: "nowrap", gap: 0.5 }}>
+            <Typography sx={{ ...typography.label, color: tc.text }}>Fit region</Typography>
+            <Select size="small" value={shownFitRegion[1] - shownFitRegion[0]}
+              inputProps={{ "aria-label": "Fit region size" }}
+              onChange={event => resizeFitRegion(Number(event.target.value))}
+              sx={{ ...typography.label, height: 24 }}>
+              {[256, 128].filter(side => side <= Math.min(scanRows || side, scanCols || side)).map(side =>
+                <MenuItem key={side} value={side}>{side} × {side}</MenuItem>)}
+            </Select>
+            <Typography sx={{ ...typography.value, color: tc.textMuted }}>
+              {`at row ${shownFitRegion[0]}, col ${shownFitRegion[2]}`}{fitRegionStatus ? ` · ${fitRegionStatus}` : ""}
+            </Typography>
+          </Box>
+        )}
         {tuning && (sampleAvailable || webgpuStandalone) && (
           <Tooltip title="Compare with zero sample tilt while retaining the fitted depth spread and aberrations. Save keeps the fitted tilt for reconstruction." placement="top" arrow>
             <Box sx={{ display: "inline-flex", alignItems: "center", whiteSpace: "nowrap", gap: 0.5 }}>
@@ -4023,7 +4132,9 @@ function Explore() {
         <Box sx={{ flex: 1 }} />
         {(rawPhaseRef.current?.w || phaseWidth) > 0 && (rawPhaseRef.current?.h || phaseHeight) > 0 && (
           <Typography sx={{ ...typography.value, color: tc.textMuted, opacity: 0.7 }}>
-            {rawPhaseRef.current?.w || phaseWidth}×{rawPhaseRef.current?.h || phaseHeight}
+            {scanRows > 0 && scanCols > 0 && (rawPhaseRef.current?.h || phaseHeight) % scanRows === 0
+              ? `${scanRows} × ${scanCols} scan, shown ${(rawPhaseRef.current?.h || phaseHeight) / scanRows === 1 ? "at its own sampling" : `upsampled ${(rawPhaseRef.current?.h || phaseHeight) / scanRows}×`}`
+              : `${rawPhaseRef.current?.w || phaseWidth} × ${rawPhaseRef.current?.h || phaseHeight}`}
           </Typography>
         )}
         {(cropSelecting || scanCrop) && (
@@ -4126,7 +4237,7 @@ function Explore() {
               {renderRangeEditor("rot", "rot", "deg", 1)}
               </Box>
             </Box>}
-            {tuning && cropRefitAvailable && <Box component="details" onToggle={() => settingsPopover.current?.updatePosition()}
+            {tuning && cropRefitAvailable && !controlsBeside && <Box component="details" onToggle={() => settingsPopover.current?.updatePosition()}
               sx={{ borderTop: `1px solid ${tc.border}`, pt: 1 }}>
               <Box component="summary" sx={{ ...typography.label, cursor: "pointer", color: cropSelecting || scanCrop ? tc.accent : tc.text }}>Direct ptycho crop</Box>
               <Box component="label" sx={{ ...typography.label, display: "flex", alignItems: "center", justifyContent: "space-between", mt: 1 }}>
@@ -4161,6 +4272,9 @@ function Explore() {
 
       {localTilt?.toolbar}
 
+      <Box data-showptycho-body sx={controlsBeside
+        ? { display: "flex", flexWrap: "wrap", alignItems: "flex-start", gap: `${SPACING.SM}px`, maxWidth: "100%" }
+        : { display: "contents" }}>
       {/* ---- Two panels ---- */}
       <Box data-showptycho-images sx={{display:localTiltEnabled?'grid':'flex',flexWrap:'wrap',gap:`${PANEL_GAP}px`,
         gridTemplateColumns:`repeat(${columns}, ${shownPanel+2}px)`,maxWidth:'100%'}}>
@@ -4174,6 +4288,9 @@ function Explore() {
           cropRegion={cropRefitAvailable ? displayedScanCrop : null}
           cropSelecting={cropRefitAvailable && cropSelecting}
           onCropChange={chooseCropRectangle}
+          fitRegion={displayedFitRegion}
+          onFitRegionMove={moveFitRegion}
+          onFitRegionDrop={requestFitRegion}
           inset={<>{localTilt?.overlay}{fftAsInset ? (
             <FFTInset
               offscreen={fftOff}
@@ -4225,7 +4342,8 @@ function Explore() {
 
       {/* ---- Controls ---- */}
       <Box component="fieldset" disabled={controlsLocked}
-        sx={{ border:0, p:0, minWidth:0, width: totalW, maxWidth: "100%", mt: `${SPACING.XS}px`, display: "flex", flexDirection: "column", gap: `${SPACING.XS}px` }}>
+        sx={{ border:0, p:0, minWidth:0, maxWidth: "100%", display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`,
+          ...(controlsBeside ? { flex: "0 1 520px", m: 0 } : { width: totalW, mt: `${SPACING.XS}px` }) }}>
         {localTiltEnabled && <Typography sx={typography.label}>
           Controls · {regionalMode ? (activeFit?.label || 'Selected region') : 'Overview'}
           {regionalMode && !regionalReady ? ' · refit this region to edit' : ''}
@@ -4233,15 +4351,40 @@ function Explore() {
         </Typography>}
 
         {tuning && <Box sx={controlBand(tc)}>
+          {/* a live panel shows the phase of the mean wave only: no method to choose */}
+          {!controlsBeside && <>
           <Typography sx={typography.label}>Reconstruction</Typography>
           <Select size="small" value={reconstructionControls.method}
             inputProps={{ "aria-label": "Reconstruction method" }}
             onChange={event => changeReconstruction({ method: event.target.value }, true)}
             sx={{ ...typography.label, height: 28 }}>
             <MenuItem value="phase_of_mean">Phase of mean</MenuItem>
-            <MenuItem value="phase" disabled={!regularizationAvailable || webgpuStandalone || !!localTiltJson}>Phase · experimental</MenuItem>
-            <MenuItem value="complex" disabled={!regularizationAvailable || webgpuStandalone || !!localTiltJson}>Amplitude + phase · experimental</MenuItem>
+            <MenuItem value="phase" disabled={!regularizationAvailable || webgpuStandalone || !!localTiltJson}>Phase</MenuItem>
+            <MenuItem value="complex" disabled={!regularizationAvailable || webgpuStandalone || !!localTiltJson}>Amplitude + phase</MenuItem>
           </Select>
+          </>}
+              <Typography sx={{ ...typography.label, fontSize: 10 }}>Color</Typography>
+              <Select
+                value={cmap} onChange={(e) => setCmap(e.target.value)}
+                size="small" sx={{ ...themedSelect, minWidth: 78, fontSize: 10 }}
+                MenuProps={themedMenuProps}
+              >
+                {COLORMAP_NAMES.map(n => (
+                  <MenuItem key={n} value={n}>{n.charAt(0).toUpperCase() + n.slice(1)}</MenuItem>
+                ))}
+              </Select>
+              <Typography sx={{ ...typography.label, fontSize: 10 }} title="Auto-contrast: snap histogram clip to 1–99 percentile on every new reconstruction. Dragging the histogram slider flips this OFF.">Auto</Typography>
+              <Switch
+                checked={autoContrast}
+                onChange={(e) => { const on = e.target.checked; setAutoContrast(on); if (on) setContrastRange([1, 99]); }}
+                size="small" sx={switchStyles.small}
+              />
+              <Typography sx={{ ...typography.label, fontSize: 10 }} title="CSS bilinear interpolation on the phase canvas. Same data, browser softens pixel grid. Useful when upscaling small phase images on a large canvas.">Smooth</Typography>
+              <Switch
+                checked={smooth}
+                onChange={(_, checked) => setSmooth(checked)}
+                size="small" sx={switchStyles.small}
+              />
           {reconstructionControls.method !== "phase_of_mean" && <>
             {(["phase_damp", ...(reconstructionControls.method === "complex" ? ["amplitude_damp"] : [])] as const).map(key => {
               const name = key as "phase_damp" | "amplitude_damp";
@@ -4293,26 +4436,6 @@ function Explore() {
                     )}
                   </Typography>
                 </Tooltip>
-              )}
-              {/* Inline readout of every non-zero higher-order coefficient.
-                  Shows magnitude (with unit) and angle (if any) so the user can
-                  see what they've dialed in without opening the HO panel. */}
-              {[2, 3, 4, 5].flatMap(order =>
-                HO_BY_ORDER[order]
-                  .map(entry => {
-                    const mag = higherOrder[higherOrderMagnitudeKey(entry.name)] ?? 0;
-                    if (Math.abs(mag) === 0) return null;
-                    const angle = entry.hasAngle ? (higherOrder[higherOrderAzimuthKey(entry.name)] ?? 0) : null;
-                    const label = `${formatHOValue(mag, entry.mag_max, entry.display_scale)} ${entry.unit_display}${angle != null ? ` / ${angle.toFixed(0)}°` : ""}`;
-                    return (
-                      <Tooltip key={entry.name} title={entry.tooltip} placement="top" arrow>
-                        <Typography sx={{ ...typography.label, color: tc.textMuted, fontFamily: "monospace", cursor: "help" }}>
-                          {entry.name} <Box component="span" sx={{ color: tc.accent }}>{label}</Box>
-                        </Typography>
-                      </Tooltip>
-                    );
-                  })
-                  .filter(Boolean)
               )}
               </>}
               {busy && <Box component="span" sx={{ color: tc.accent }}>●</Box>}
@@ -4426,30 +4549,6 @@ function Explore() {
 
             {/* Display controls: color/contrast controls stay below the stats; primary
                 real-space view mode lives in the top toolbar next to BF. */}
-            <Box sx={{ ...controlBand(tc), width: "fit-content" }}>
-              <Typography sx={{ ...typography.label, fontSize: 10 }}>Color</Typography>
-              <Select
-                value={cmap} onChange={(e) => setCmap(e.target.value)}
-                size="small" sx={{ ...themedSelect, minWidth: 78, fontSize: 10 }}
-                MenuProps={themedMenuProps}
-              >
-                {COLORMAP_NAMES.map(n => (
-                  <MenuItem key={n} value={n}>{n.charAt(0).toUpperCase() + n.slice(1)}</MenuItem>
-                ))}
-              </Select>
-              <Typography sx={{ ...typography.label, fontSize: 10 }} title="Auto-contrast: snap histogram clip to 1–99 percentile on every new reconstruction. Dragging the histogram slider flips this OFF.">Auto</Typography>
-              <Switch
-                checked={autoContrast}
-                onChange={(e) => { const on = e.target.checked; setAutoContrast(on); if (on) setContrastRange([1, 99]); }}
-                size="small" sx={switchStyles.small}
-              />
-              <Typography sx={{ ...typography.label, fontSize: 10 }} title="CSS bilinear interpolation on the phase canvas. Same data, browser softens pixel grid. Useful when upscaling small phase images on a large canvas.">Smooth</Typography>
-              <Switch
-                checked={smooth}
-                onChange={(_, checked) => setSmooth(checked)}
-                size="small" sx={switchStyles.small}
-              />
-            </Box>
           </Box>
 
           {/* Keep contrast for every visible image together, including an inset FFT. */}
@@ -4487,23 +4586,6 @@ function Explore() {
           </Box>
         </Box>
 
-        {/* Sample tilt first: for thick, tilted crystals it decides what the lattice looks like before any aberration does. */}
-        {(sampleAvailable || webgpuStandalone) && (
-          <SamplePanel
-            tc={tc}
-            open={sampleOpen}
-            onToggle={() => setSampleOpen(open => !open)}
-            values={sample}
-            setValues={setSample}
-            onCommit={commitSample}
-            onFit={requestSampleFit}
-            onReset={doReset}
-            fitBusy={regionalMode ? regionFitBusy : sampleFitBusy}
-            fitStatus={regionalMode ? '' : (sampleFitStatus || "")}
-            fitAvailable={!webgpuStandalone}
-            disabled={controlsLocked}
-          />
-        )}
         {tuning && <>
         {/* Aberration sliders.  Each is a 3-thumb slider: outer thumbs = PLAY
             sweep bounds, middle thumb = current value.  CSS below dims the outer
@@ -4601,6 +4683,23 @@ function Explore() {
           </Tooltip>
         </Box>
 
+        {/* The order one adjusts in: defocus and astigmatism above, then sample tilt and depth, then the higher orders. */}
+        {(sampleAvailable || webgpuStandalone) && (
+          <SamplePanel
+            tc={tc}
+            open={sampleOpen}
+            onToggle={() => setSampleOpen(open => !open)}
+            values={sample}
+            setValues={setSample}
+            onCommit={commitSample}
+            onFit={requestSampleFit}
+            onReset={doReset}
+            fitBusy={regionalMode ? regionFitBusy : sampleFitBusy}
+            fitStatus={regionalMode ? '' : (sampleFitStatus || "")}
+            fitAvailable={!webgpuStandalone}
+            disabled={controlsLocked}
+          />
+        )}
         {/* Higher-order aberration panel (collapsible).  Shows 11 Krivanek
             coefficients (C21 through C56), grouped by order.  When any
             magnitude is non-zero the engine routes through the 14-coef
@@ -4614,6 +4713,7 @@ function Explore() {
           setValues={setHigherOrder}
           onDrag={dragHigherOrder}
           onCommit={commitSample}
+          note={higherOrderNote}
         />}
 
         {/* Single compact action row: PLAY + PIN + SAVE CALIBRATION.
@@ -4764,7 +4864,7 @@ function Explore() {
 
         {/* Retained search candidates carry their own optics and sample model.
             The fitted reference includes the later local refinement. */}
-        {trials.length > 0 && (
+        {trials.length > 0 && !controlsBeside && (
           <Box sx={{ pt: `${SPACING.XS}px`, borderTop: `1px solid ${tc.border}` }}>
             <Stack direction="row" alignItems="center" spacing={`${SPACING.SM}px`} sx={{ mb: `${SPACING.XS}px` }}>
               <Box
@@ -5014,6 +5114,7 @@ function Explore() {
             </Stack>
           </Box>
         )}
+      </Box>
       </Box>
     </Box>
   );

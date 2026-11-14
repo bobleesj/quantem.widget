@@ -69,7 +69,7 @@ from quantem.widget.show4dstem.preview import static_png_b64
 from quantem.widget.show4dstem.reader import acquisition_name
 from quantem.widget.show4dstem.session import DetectorSessionSource, SessionSeries
 from quantem.widget.show4dstem.streaming import StreamFollower
-from quantem.widget.show4dstem.watching import WatchedFolder
+from quantem.widget.show4dstem.live import LiveFolder
 from quantem.widget.state import SavedStateMixin
 from quantem.widget.units import acquisition_calibration, per_axis, stated, wrap_degrees
 from quantem.widget.utils.array import device_array
@@ -243,6 +243,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         Browser WebGPU source over linked HDF5 masters or .qem acquisitions,
         written by the CLI and ``show4dstem.export.write_qem_bundle``.
     """
+
+    # set once Show4DSTEM.live has drawn this viewer where it was called (see _ipython_display_)
+    _drawn_live = False
 
     _esm = pathlib.Path(__file__).parent.parent / "static" / "show4dstem.js"
 
@@ -453,7 +456,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._owned_acquisitions = []
         self._stream_lock = threading.RLock()
         self._stream_follower = None
-        self._watched_folder = None
+        self._live_folder = None
         self._stream_source_serial = 0
         self._stream_display_view = None
         self._stream_display_views: dict[str, bool] = {}
@@ -1056,7 +1059,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             super().close()
 
     def _stop_stream(self) -> None:
-        watched, self._watched_folder = self._watched_folder, None
+        watched, self._live_folder = self._live_folder, None
         if watched is not None:
             # no scan may load while the viewer lets go; the scans the folder loaded close with it
             watched.close()
@@ -1204,9 +1207,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         return viewer
 
     @classmethod
-    def watch(cls, folder, *, latest: int = 2, pattern: str = "*_master.h5", recursive: bool = True,
-              refresh_s: float = 2.0, **viewer_kwargs) -> Self:
-        """Show the newest scans of a folder a detector writes into, each as soon as it has finished arriving.
+    def live(cls, folder, *, latest: int = 2, pattern: str = "*_master.h5", recursive: bool = True,
+             refresh_s: float = 2.0, **viewer_kwargs) -> Self:
+        """Show the newest scans of a folder a detector writes into, live: each as soon as it has finished arriving.
 
         The folder is looked at every ``refresh_s`` seconds. A scan is read once its files are complete and
         have stopped changing between two looks, so a scan still being written is never opened. The newest
@@ -1216,31 +1219,51 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         scans, fewer stay loaded and one line says how many: nothing is binned or cropped to make room.
         ``pattern`` chooses the files (``"*.qem"`` for saved acquisitions) and ``recursive`` whether child
         folders count; ``scan_shape=(rows, cols)`` is for scans that are not square. A scan of another scan or
-        detector shape replaces the ones before it: one comparison holds one shape. Returns at once with a waiting viewer; ``close()`` stops watching and frees the scans.
+        detector shape replaces the ones before it: one comparison holds one shape. In a notebook the viewer is
+        shown where ``live`` is called, at once, waiting for the first scan; the viewer returned is for later
+        cells (``viewer.close()`` stops it and frees the scans) and is not drawn a second time. Nothing is saved.
+        The panels open at a fixed 450 px (``size="medium"``); pass ``size=`` for another.
 
         Examples
         --------
-        >>> viewer = Show4DSTEM.watch("scans")  # doctest: +SKIP
-        >>> viewer = Show4DSTEM.watch("scans", latest=1, pattern="*.qem")  # doctest: +SKIP
+        >>> viewer = Show4DSTEM.live("scans")  # doctest: +SKIP
+        >>> viewer = Show4DSTEM.live("scans", latest=1, pattern="*.qem")  # doctest: +SKIP
         """
         if not math.isfinite(refresh_s) or refresh_s <= 0:
             raise ValueError("refresh_s must be finite and positive.")
         device = viewer_kwargs.get("device", "auto")
-        watched = WatchedFolder(
+        watched = LiveFolder(
             folder, latest=latest, pattern=pattern, recursive=recursive, refresh_s=refresh_s,
             device=None if device == "auto" else device,
             hot_pixel_correction=viewer_kwargs.pop("hot_pixel_correction", "median"),
             scan_shape=viewer_kwargs.pop("scan_shape", None),
         )
+        if not {"size", "dp_size", "image_size"} & viewer_kwargs.keys():
+            # a live viewer opens at one fixed size (450 px panels), whatever the window: size= changes it
+            viewer_kwargs["size"] = "medium"
         viewer = cls.stream(watched, refresh_s=min(refresh_s, 0.25), **viewer_kwargs)
-        viewer._watched_folder = watched
+        viewer._live_folder = watched
         watched.viewer = viewer
         try:
             watched.start()
         except RuntimeError:  # the thread could not start
             viewer.close()
             raise
+        from IPython import get_ipython
+        from IPython.display import display
+
+        shell = get_ipython()
+        if shell is not None and getattr(shell, "kernel", None) is not None:
+            display(viewer)
+            viewer._drawn_live = True
         return viewer
+
+    def _ipython_display_(self):
+        """The notebook display, except for a viewer ``live`` already drew where it was called: one call shows
+        one viewer, and the viewer it returns, as a cell's last line or shown again, draws nothing."""
+        if self._drawn_live:
+            return None
+        return super()._ipython_display_()
 
     def refresh_stream(self, scan_id: str | None = None) -> None:
         """Refresh a stream after unloading scans, optionally selecting a stable scan ID.
@@ -1763,6 +1786,42 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             raise ValueError(f"{name} must be a positive scalar or length-2 pair, got {value!r}.")
         return pair
 
+    def _direct_calibration(self) -> dict:
+        """The voltage, convergence semiangle, scan step and detector step direct ptychography of the shown scan uses.
+
+        What the dataset or file records, or, for an input that records none, the constructor keywords; a detector
+        step recorded in reciprocal angstrom converts to mrad at the voltage, and a missing semiangle follows from the
+        bright-field disk edge (quantem.gpu's rule) with one line saying so. ``direct_phase`` and ``ShowPtycho.live``
+        both open their sessions with it.
+        """
+        if not self.scan_sampling_A:
+            raise ValueError("Direct ptycho needs the scan step in angstrom and the data record none. For an array or an "
+                             "uncalibrated file, construct Show4DSTEM(data, scan_sampling_A=(row_A, col_A)).")
+        if self.voltage_kV is None:
+            raise ValueError("Direct ptycho needs the accelerating voltage and the data record none. For an array or an "
+                             "uncalibrated file, construct Show4DSTEM(data, voltage_kV=300).")
+        detector_sampling_mrad = tuple(self.detector_sampling_mrad) or None
+        if detector_sampling_mrad is None and self.detector_sampling_inv_A:
+            # Direct ptychography takes the detector step in mrad; a step recorded in reciprocal angstrom converts at this voltage
+            detector_sampling_mrad = gpu_adapter.detector_sampling_mrad_from_inv_A(self.detector_sampling_inv_A, self.voltage_kV)
+        semiangle = self.semiangle_mrad
+        if semiangle is None:
+            if detector_sampling_mrad is None:
+                raise ValueError("Direct ptycho needs the convergence semiangle and the data record none. Construct "
+                                 "Show4DSTEM(data, semiangle_mrad=...), or give the detector step in mrad per pixel "
+                                 "(detector_sampling_mrad=) so it follows from the bright-field disk edge.")
+            # quantem.gpu's rule: the disk edge sits at the semiangle. The equal-area edge radius
+            # of an elliptical disk takes the geometric mean of the two detector steps.
+            edge_radius_px = gpu_adapter.disk_edge_radius(self._session(int(self.frame_idx)).mean_pattern())
+            semiangle = edge_radius_px * math.sqrt(detector_sampling_mrad[0] * detector_sampling_mrad[1])
+            print(f"Show4DSTEM: semiangle_mrad is not recorded; direct ptycho uses {semiangle:.3f} mrad, the bright-field "
+                  f"disk edge ({edge_radius_px:.2f} px, quantem.gpu.detector.disk_edge_radius) times the detector step. "
+                  "Pass Show4DSTEM(data, semiangle_mrad=...) to set it.")
+        if semiangle <= 0:
+            raise ValueError(f"semiangle_mrad must be positive, got {semiangle}.")
+        return {"voltage_kV": self.voltage_kV, "semiangle_mrad": float(semiangle),
+                "scan_sampling_A": tuple(self.scan_sampling_A), "detector_sampling_mrad": detector_sampling_mrad}
+
     def _direct_phase_maps(
         self,
         *,
@@ -1791,32 +1850,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         """
         if self.n_frames != 1:
             raise ValueError("Direct ptycho runs on a single 4D dataset. For a series, open the target dataset as a 4D widget.")
-        # the calibration the dataset or file records (or, for an input that records none, the constructor keywords)
-        if not self.scan_sampling_A:
-            raise ValueError("Direct ptycho needs the scan step in angstrom and the data record none. For an array or an "
-                             "uncalibrated file, construct Show4DSTEM(data, scan_sampling_A=(row_A, col_A)).")
-        if self.voltage_kV is None:
-            raise ValueError("Direct ptycho needs the accelerating voltage and the data record none. For an array or an "
-                             "uncalibrated file, construct Show4DSTEM(data, voltage_kV=300).")
-        detector_sampling_mrad = tuple(self.detector_sampling_mrad) or None
-        if detector_sampling_mrad is None and self.detector_sampling_inv_A:
-            # Direct ptychography takes the detector step in mrad; a step recorded in reciprocal angstrom converts at this voltage
-            detector_sampling_mrad = gpu_adapter.detector_sampling_mrad_from_inv_A(self.detector_sampling_inv_A, self.voltage_kV)
-        semiangle = self.semiangle_mrad
-        if semiangle is None:
-            if detector_sampling_mrad is None:
-                raise ValueError("Direct ptycho needs the convergence semiangle and the data record none. Construct "
-                                 "Show4DSTEM(data, semiangle_mrad=...), or give the detector step in mrad per pixel "
-                                 "(detector_sampling_mrad=) so it follows from the bright-field disk edge.")
-            # quantem.gpu's rule: the disk edge sits at the semiangle. The equal-area edge radius
-            # of an elliptical disk takes the geometric mean of the two detector steps.
-            edge_radius_px = gpu_adapter.disk_edge_radius(self._session(int(self.frame_idx)).mean_pattern())
-            semiangle = edge_radius_px * math.sqrt(detector_sampling_mrad[0] * detector_sampling_mrad[1])
-            print(f"Show4DSTEM: semiangle_mrad is not recorded; direct ptycho uses {semiangle:.3f} mrad, the bright-field "
-                  f"disk edge ({edge_radius_px:.2f} px, quantem.gpu.detector.disk_edge_radius) times the detector step. "
-                  "Pass Show4DSTEM(data, semiangle_mrad=...) to set it.")
-        if semiangle <= 0:
-            raise ValueError(f"semiangle_mrad must be positive, got {semiangle}.")
+        calibration = self._direct_calibration()
+        detector_sampling_mrad, semiangle = calibration["detector_sampling_mrad"], calibration["semiangle_mrad"]
         trials = int(self.direct_trials if trials is None else trials)
         if trials < 0:
             raise ValueError(f"trials must be >= 0, got {trials}.")
@@ -1863,8 +1898,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             # an earlier fit on a full device left the scan in host memory: it returns before anything reads it
             source.data.restore()
         manual = bool(lock_aberrations and aberrations is not None)
-        # a watched folder loads and releases scans from its own thread: not while this scan is being fitted
-        watched = self._watched_folder
+        # a live folder loads and releases scans from its own thread: not while this scan is being fitted
+        watched = self._live_folder
         with (watched.busy if watched is not None else nullcontext()), gpu_adapter.DirectSession.open(
             source,
             voltage_kV=self.voltage_kV,

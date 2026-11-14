@@ -362,6 +362,8 @@ class DirectSession:
             # the kept fit's model agreement (higher is better) and its gain over standard direct ptychography; None before a fit
             "sample_agreement": _finite_or_none(getattr(fit, "sample_agreement", None)),
             "tilt_fit_gain": _finite_or_none(getattr(fit, "tilt_fit_gain", None)),
+            # the fit's half-band check of its higher orders (trusted, half_band_rms_rad, max_half_band_rms_rad), or None
+            "higher_order_consistency": (getattr(fit, "optimizer", None) or {}).get("higher_order_consistency"),
         }
 
     def trials(self) -> list[dict]:

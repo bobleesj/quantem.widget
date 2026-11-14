@@ -227,7 +227,7 @@ def test_direct_methods_and_regularization_follow_live_slider_requests(jupyter, 
     # a separate release gate. Canvas fallback must retain the same controls.
     select = page.get_by_role("combobox", name="Reconstruction method")
     select.click()
-    page.get_by_role("option", name="Phase · experimental", exact=True).click()
+    page.get_by_role("option", name="Phase", exact=True).click()
     slider = page.get_by_role("slider", name="Phase damping", exact=True)
     slider.wait_for(state="visible")
     slider.focus()
@@ -235,7 +235,7 @@ def test_direct_methods_and_regularization_follow_live_slider_requests(jupyter, 
     page.keyboard.press("ArrowRight")
     page.wait_for_timeout(1500)
     select.click()
-    page.get_by_role("option", name="Amplitude + phase · experimental", exact=True).click()
+    page.get_by_role("option", name="Amplitude + phase", exact=True).click()
     amplitude = page.get_by_role("slider", name="Amplitude damping", exact=True)
     amplitude.wait_for(state="visible")
     amplitude.focus()
