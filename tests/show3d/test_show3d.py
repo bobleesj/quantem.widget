@@ -524,7 +524,8 @@ def test_frame_times_s_are_one_increasing_time_per_frame_and_time_the_corrected_
     by_index = drift_corrected(stack, drift)          # without times the velocity per frame index misplaces it
     assert np.abs(by_index[2] - base).max() > 1e-2
     widget.drift = drift
-    assert widget.n_panels == 2 and widget.frame_times_s == times   # the corrected panel keeps the times
+    # the view narrows to the measured frames (1, 2, 4), each with its own time: one time per frame shown
+    assert widget.n_panels == 2 and widget.n_slices == 3 and widget.frame_times_s == [0.0, 10.0, 40.0]
 
 
 def test_drift_correction_runs_on_the_gpu_and_matches_the_fourier_shift():

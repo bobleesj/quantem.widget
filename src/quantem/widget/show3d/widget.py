@@ -803,8 +803,8 @@ class Show3D(
                 display_bin=display_bin,
             )
             self.dim_sampling, self.dim_unit, self.slice_idx = kept[0], kept[1], kept[2]
-            if len(times) == source.shape[0]:
-                self.frame_times_s = [times[frame] for frame in measured]   # each measured frame keeps its own time
+            # each measured frame keeps its own time (times are of the whole stack, before it was narrowed)
+            self.frame_times_s = [times[frame] for frame in measured] if len(times) == len(shown) else []
             self.panel_cmaps = []
             self.columns = 2
             self.link_contrast = True   # one quantity, before and after: the same contrast reads the correction
