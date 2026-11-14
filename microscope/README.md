@@ -11,7 +11,8 @@ Set up the Python once with conda (`environments/README.md`, the `arina-pc` envi
 `QUANTEM_PYTHON` if set, else the active conda environment, else conda's `arina-pc` environment.
 
 **Measured** on a 4 GB RTX A400 (Windows): a 512 x 512 scan on a 192 x 192 detector (19.3 GB of counts) loads in
-about 10 s as 2.4 GB on the card and fits fifth order in about 15 s. Close a scan before the next one:
+about 9 s as 2.4 GB on the card; the fifth-order fit (128 x 128 box) takes about 10 s and its whole phase shows at
+13 s; a refit at a moved box shows at about 11 s. Close a scan before the next one:
 `ptycho.close()`, `viewer.close()`, `quantem.gpu.device.release_cached_memory()`.
 
 **On a Python that also has Intel MKL** (a vendor's Python, such as a microscope control PC's): MKL and PyTorch
