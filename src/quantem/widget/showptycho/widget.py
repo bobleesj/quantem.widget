@@ -854,7 +854,7 @@ class ShowPtycho(anywidget.AnyWidget):
             self.local_tilt_can_fit = True
             self.local_tilt_can_reconstruct = True
         state = self._direct.state()
-        self.regularization_available = state["backend"] == "cuda"
+        self.regularization_available = state["backend"] == "cuda" and state.get("dense_spectrum", True)
         self._check_method()
         self._source_path = state["source_path"]
         self._source_scan_shape = state["input_scan_shape"]

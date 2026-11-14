@@ -221,7 +221,7 @@ def test_a_star_and_a_delete_change_the_kept_fits_and_save_writes_the_scan_named
         saved = json.loads(path.read_text())
         assert path == tmp_path / "scan_0013.json" and "saved scan_0013.json" in ptycho.status.value
         assert saved["schema"] == "quantem.direct-calibration/9" and saved["aberrations"] == {"C10_nm": 2.8}
-        assert saved["scan"] == "scan_0013_master.h5" and saved["scan_region"] == [94, 222, 283, 411]
+        assert saved["scan"] == "scan_0013_master.h5" and saved["fit_region"] == [94, 222, 283, 411]
         assert saved["fits"] == [
             {"scan_region": [128, 384, 128, 384], "C10_nm": 2.8, "C12_nm": 1.5, "phi12_deg": 40.0, "starred": True},
             {"scan_region": [94, 222, 283, 411], "C10_nm": 2.8, "C12_nm": 1.5, "phi12_deg": 40.0, "starred": False}]

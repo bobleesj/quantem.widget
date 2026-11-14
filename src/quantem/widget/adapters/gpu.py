@@ -348,6 +348,9 @@ class DirectSession:
         fit = getattr(direct, "_aberration_search", None)
         return {
             "backend": direct.backend, "scan_shape": tuple(int(size) for size in direct.scan_shape), "source_path": direct.source_path,
+            # the damped reconstructions solve on the dense bright-field spectrum: a session that reads the scan
+            # in batches (a device too small to hold that spectrum) shows the phase of the mean wave only
+            "dense_spectrum": getattr(direct, "_streamed", None) is None,
             "input_scan_shape": direct.input_scan_shape,
             "voltage_kV": direct.voltage_kV, "semiangle_mrad": direct.semiangle_mrad, "scan_sampling_A": list(direct.scan_sampling_A),
             "detector_sampling_mrad": None if direct.detector_sampling_mrad is None else list(direct.detector_sampling_mrad),

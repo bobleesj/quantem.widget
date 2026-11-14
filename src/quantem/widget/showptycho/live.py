@@ -2,8 +2,10 @@
 
 import json
 import pathlib
+import tempfile
 import threading
 import time
+import uuid
 
 import ipywidgets
 import numpy as np
@@ -39,7 +41,8 @@ class LivePtycho:
     shown scan there, and every later scan; dragging the panel's fit box does the same. Each region fitted on the
     shown scan is kept in ``fits`` with its defocus, astigmatism and a thumbnail of its phase, drawn as a strip
     under the controls once there are two: hovering one shows its phase, a click fits there again, its star marks
-    it and its cross drops it. ``save()`` writes the shown fit and the kept regions to ``<scan>.json``. ShowPtycho.live returns it, already shown
+    it and its cross drops it. ``save()`` writes the shown fit and the kept regions to ``<scan>.json``;
+    ``load()`` shows that saved fit again without fitting. ShowPtycho.live returns it, already shown
     where the cell ran; it is not drawn again.
     """
 
@@ -89,25 +92,90 @@ class LivePtycho:
 
         The file is the record ``ShowPtycho.calibration()`` returns for the panel as it stands (aberrations
         through fifth order, sample tilt, scan rotation, acquisition), with ``scan`` (the scan's file name),
-        ``scan_region`` (where the aberrations were fitted) and ``fits``: every region kept in the strip with its
-        defocus, astigmatism and star. Saving again replaces the file.
+        ``fit_region`` (where the aberrations were fitted) and ``fits``: every region kept in the strip with its
+        defocus, astigmatism and star. Saving again replaces the file; ``load()`` reads it.
 
         Examples
         --------
         >>> ptycho.save()
         """
+        from quantem.widget.showptycho.widget import utc_now
+
         with self._lock:
             if self.ptycho is None:
                 raise ValueError("save() writes the fit shown; no scan is fitted yet.")
             name = self._path.name.removesuffix("_master.h5").removesuffix(".qem")
             path = pathlib.Path(self.folder.folder if save_dir is None else save_dir) / f"{name}.json"
             shown = tuple(self.ptycho.fit_region) or None
-            payload = {**self.ptycho.calibration(), "scan": self._path.name, "scan_region": shown,
+            payload = {**self.ptycho.calibration(), "id": uuid.uuid4().hex[:12], "generated_at_utc": utc_now(),
+                       "scan": self._path.name, "fit_region": shown,
                        "fits": [{key: value for key, value in kept.items() if key != "phase"}
                                 for kept in self.fits]}
             path.write_text(json.dumps(payload, indent=2))
         self.status.value = f"{self.status.value.split(' · saved')[0]} · saved {path.name}"
         return path
+
+    def load(self, path=None) -> pathlib.Path:
+        """Show the fit ``save()`` wrote for the scan shown, without fitting: ``<scan>.json`` in the live folder
+        unless ``path`` is given.
+
+        The saved aberrations, sample tilt, scan rotation and reconstruction choice are set on a new session of
+        the scan and its whole phase is shown; the fit box sits where that fit was made, and the regions the file
+        kept come back with their stars (their thumbnails return when a region is fitted again). A file saved
+        for another scan, or for other acquisition values, is refused.
+
+        Examples
+        --------
+        >>> ptycho.load()
+        """
+        from quantem.widget.showptycho.widget import CALIBRATION_FILENAME, ShowPtycho
+
+        with self.folder.busy, self._lock:
+            with self.folder.lock:
+                if not self.folder.paths:
+                    raise ValueError("load() shows a saved fit of the scan shown; no scan has arrived yet.")
+                scan, dataset = self.folder.paths[-1], self.folder.datasets[-1]
+            name = scan.name.removesuffix("_master.h5").removesuffix(".qem")
+            path = pathlib.Path(self.folder.folder) / f"{name}.json" if path is None else pathlib.Path(path)
+            saved = json.loads(path.read_text())
+            if saved.get("scan") != scan.name:
+                raise ValueError(f"{path.name} is the saved fit of {saved.get('scan')}, not of {scan.name}, the scan shown.")
+            self.viewer.refresh_stream()
+            # the shown session goes first: a small device has no room for two
+            self._release_shown(f"<b>Direct ptycho</b> · {name} · loading {path.name}…")
+            direct = gpu_adapter.DirectPtycho(dataset, **self.viewer._direct_calibration())
+            direct.on_park = self.viewer._let_go_of_the_scan
+            note = ""
+            try:
+                ptycho = self._restored(ShowPtycho, direct, saved, CALIBRATION_FILENAME)
+                if "Regularized direct reconstruction" in ptycho.calibration_status:
+                    # the saved damped method cannot run on this session (the scan is read in batches on a small
+                    # device): the saved aberrations are shown as the phase of the mean wave, and the status says so
+                    ptycho.close()
+                    ptycho = self._restored(ShowPtycho, direct, {**saved, "reconstruction": {"method": "phase_of_mean"}},
+                                            CALIBRATION_FILENAME)
+                    note = f" · shown as phase of mean (saved as {saved['reconstruction']['method']}; no room for it here)"
+            except BaseException:
+                direct.close()
+                raise
+            if not ptycho.calibration_status.startswith("Restored"):
+                reason = ptycho.calibration_status
+                self._close(ptycho, direct)
+                self.status.value = f"<b>Direct ptycho</b> · {name} · {path.name} not loaded"
+                raise ValueError(f"{path.name}: {reason}")
+            region = saved.get("fit_region")
+            # the regions the file kept, without their phases: listed in the next save, drawn once fitted again
+            self.fits = [{**kept, "scan_region": tuple(kept["scan_region"]), "phase": None} for kept in saved.get("fits", [])]
+            self._show(ptycho, direct, scan, region, f"<b>Direct ptycho</b> · {name} · loaded {path.name}{note}", keep_display=False)
+        return path
+
+    @staticmethod
+    def _restored(ShowPtycho, direct, saved: dict, filename: str):
+        """A ShowPtycho on ``direct`` with the record ``saved`` restored: ShowPtycho restores the calibration file
+        of its save folder, so the record is written under that name in a folder of its own."""
+        with tempfile.TemporaryDirectory() as folder:
+            (pathlib.Path(folder) / filename).write_text(json.dumps(saved))
+            return ShowPtycho(direct, save_dir=folder, restore=True)
 
     def change_fit(self, action: str, scan_region) -> None:
         """Star (``"star"``, a toggle) or drop (``"delete"``) the kept fit of ``scan_region``; the shown fit stays."""
@@ -170,27 +238,37 @@ class LivePtycho:
                                      "The viewer still shows the scan.")
                 return
             seconds = time.perf_counter() - started
-            ptycho = ShowPtycho(direct, restore=False)
-            ptycho._live = self
-            # the viewer's panel size, controls beside the image: both fit one screen
-            ptycho.panel_px, ptycho.controls_beside = 450, True
-            # the box drawn on the phase: where the aberrations were fitted, dragged to fit elsewhere
-            ptycho.fit_region = list(region or ())  # a scan fitted whole has no box to move
-            previous = self.ptycho, self._direct
-            if previous[0] is not None:
-                # the colormap, FFT inset and reconstruction method chosen on the panel before stay chosen
-                for choice in KEPT_DISPLAY:
-                    setattr(ptycho, choice, getattr(previous[0], choice))
-            elif ptycho.regularization_available:
-                ptycho.method = "phase"  # a live panel opens on the damped phase; Complex is its other choice
             if path != self._path:
                 self.fits = []  # a new scan starts its own strip
-            self.ptycho, self._direct, self._path = ptycho, direct, path
-            self._rotation = float(direct.scan_detector_rotation_deg)
-            self.status.value = f"<b>Direct ptycho</b> · {name} · fitted in {seconds:.1f} s"
-            self._record(ptycho, region)
-            self.panel.children = (self.status, ptycho)
-            self._close(*previous)
+            self._show(ShowPtycho(direct, restore=False), direct, path, region,
+                       f"<b>Direct ptycho</b> · {name} · fitted in {seconds:.1f} s", keep_display=True)
+
+    def _show(self, ptycho, direct, path, region, status: str, *, keep_display: bool) -> None:
+        """Make ``ptycho`` (on session ``direct``, of scan ``path``, fitted on ``region``) the panel shown.
+
+        With ``keep_display`` the reader's choices on the panel before stay chosen, and a first panel opens on the
+        damped phase; a loaded fit keeps the choices its file recorded.
+        """
+        ptycho._live = self
+        # the viewer's panel size, controls beside the image: both fit one screen
+        ptycho.panel_px, ptycho.controls_beside = 450, True
+        # the box drawn on the phase: where the aberrations were fitted, dragged to fit elsewhere
+        ptycho.fit_region = list(region or ())  # a scan fitted whole has no box to move
+        previous = self.ptycho, self._direct
+        if keep_display and previous[0] is not None:
+            # the colormap, FFT inset and reconstruction method chosen on the panel before stay chosen
+            for choice in KEPT_DISPLAY:
+                # a damped method chosen where it could run stays off where it cannot (a batched session)
+                if choice != "method" or previous[0].method == "phase_of_mean" or ptycho.regularization_available:
+                    setattr(ptycho, choice, getattr(previous[0], choice))
+        elif keep_display and ptycho.regularization_available:
+            ptycho.method = "phase"  # a live panel opens on the damped phase; Complex is its other choice
+        self.ptycho, self._direct, self._path = ptycho, direct, path
+        self._rotation = float(direct.scan_detector_rotation_deg)
+        self.status.value = status
+        self._record(ptycho, region)
+        self.panel.children = (self.status, ptycho)
+        self._close(*previous)
 
     def _fitted_session(self, dataset, region, rotation=None):
         """A quantem.gpu.DirectPtycho session on ``dataset`` fitted through fifth order on ``region``; at the scan
@@ -236,9 +314,10 @@ class LivePtycho:
     def _send_fits(self, ptycho) -> None:
         """Hand ``ptycho`` the kept fits: their records as ``fits_json``, their phases as ``fits_phase``."""
         with ptycho.hold_sync():
-            ptycho.fits_phase = b"".join(kept["phase"].tobytes() for kept in self.fits)
+            drawn = [kept for kept in self.fits if kept["phase"] is not None]  # a loaded region has none yet
+            ptycho.fits_phase = b"".join(kept["phase"].tobytes() for kept in drawn)
             ptycho.fits_json = json.dumps([{**{name: value for name, value in kept.items() if name != "phase"},
-                                            "shape": list(kept["phase"].shape)} for kept in self.fits])
+                                            "shape": list(kept["phase"].shape)} for kept in drawn])
 
     def _release_shown(self, status: str) -> None:
         """Close the panel shown and its session, leaving the status line; the scan stays the one fitted."""

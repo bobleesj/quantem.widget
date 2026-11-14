@@ -300,7 +300,12 @@ cell saves it under the scan's own name:
 
 ```python
 ptycho.save()  # <scan>.json in the live folder: the fit shown and every region kept
+ptycho.load()  # later: the saved fit of the scan shown, without fitting
 ```
+
+The panel offers the damped Phase and Complex reconstructions when the GPU holds the dense bright-field spectrum.
+On a GPU too small for it (4 GB with a 512 x 512 scan) the session reads the scan in batches and the panel shows
+Phase of mean; nothing is set by hand.
 
 
 The second cell shows a panel below the viewer. Each scan that arrives is fitted through fifth order on a square scan

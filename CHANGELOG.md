@@ -14,10 +14,13 @@ new `rcN` heading when that rc is published to TestPyPI.
   under the controls, with the colormap and contrast of the phase. Hovering one shows its whole phase again, leaving
   returns to the current one, a click fits there again; a star (top left) marks it and a cross (top right) drops it.
   `ptycho.save()` writes the fit shown and every kept region to `<scan>.json` in the live folder (or `save_dir`).
+  `ptycho.load()` shows that saved fit of the scan shown again without fitting (0.4 s on a 512 x 512 scan).
 - `ShowPtycho.live`: the panel opens on the damped Phase reconstruction, with Complex as the other choice, an FFT
   switch that draws the transform as a draggable inset on the phase, and plain slider names (Defocus C10,
   Astigmatism C12, Scan rotation). The colormap, FFT and reconstruction chosen stay chosen when the region is fitted
   again. On a small device a refit lets the shown session go first when both do not fit.
+  Phase and Complex are offered where the session holds the dense bright-field spectrum; a session that reads the
+  scan in batches (a GPU too small for that spectrum) shows Phase of mean, chosen without a setting.
 - `ShowPtycho.live(viewer)` shows direct ptychography of each scan a `Show4DSTEM.live` viewer shows, in a panel below
   it: the aberrations through fifth order are fitted on the central 256 x 256 scan region (or `scan_region=`, or a
   region drawn in the panel) and the whole scan's phase is shown. The viewer itself stays a viewer.
