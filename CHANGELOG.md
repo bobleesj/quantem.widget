@@ -6,6 +6,8 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- `Show4DSTEM.live(path)` takes one scan file: that scan alone is shown, and `ShowPtycho.live(viewer)` below fits
+  it. `environments/browse_direct_ptycho.ipynb` holds the cells: set `SCAN`, browse, direct ptychography.
 - `Show4DSTEM.live(folder, latest=2)` shows a folder a detector writes into, live: each scan is shown once its files are
   complete, the newest `latest` stay loaded, and the oldest is released before the next one loads. When the device
   cannot hold `latest` scans it keeps fewer and says so. The viewer appears where the cell runs and nothing is saved.

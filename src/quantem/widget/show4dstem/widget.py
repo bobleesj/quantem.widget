@@ -19,6 +19,7 @@ sessions; this file owns the traits the frontend syncs and the bookkeeping
 between them.
 """
 
+import glob
 import json
 import math
 import os
@@ -1222,6 +1223,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         detector shape replaces the ones before it: one comparison holds one shape. In a notebook the viewer is
         shown where ``live`` is called, at once, waiting for the first scan; the viewer returned is for later
         cells (``viewer.close()`` stops it and frees the scans) and is not drawn a second time. Nothing is saved.
+        ``folder`` may also be one scan file: that scan alone is shown, and ``ShowPtycho.live(viewer)`` fits it.
         The panels open at a fixed 450 px (``size="medium"``); pass ``size=`` for another.
 
         Examples
@@ -1231,6 +1233,10 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         """
         if not math.isfinite(refresh_s) or refresh_s <= 0:
             raise ValueError("refresh_s must be finite and positive.")
+        chosen = pathlib.Path(folder).expanduser()
+        if chosen.is_file():
+            # one chosen scan: its folder is watched for that file alone, so nothing else in it loads
+            folder, pattern, recursive = chosen.parent, glob.escape(chosen.name), False
         device = viewer_kwargs.get("device", "auto")
         watched = LiveFolder(
             folder, latest=latest, pattern=pattern, recursive=recursive, refresh_s=refresh_s,
