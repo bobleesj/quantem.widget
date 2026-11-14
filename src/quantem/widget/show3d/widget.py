@@ -451,6 +451,8 @@ class Show3D(
     thumbnail_columns = traitlets.Int(2).tag(sync=True)
     # the newest frame at the top of the strip, as a live stream needs (no scrolling down to what just arrived)
     newest_first = traitlets.Bool(False).tag(sync=True)
+    # frames are still arriving (Show3D.stream until end_stream): Find drift then measures the newest frames
+    streaming = traitlets.Bool(False).tag(sync=True)
 
     @traitlets.validate("thumbnail_columns")
     def _validate_thumbnail_columns(self, proposal: dict) -> int:
@@ -751,8 +753,21 @@ class Show3D(
             title = given if given and not (self.n_panels == 1 and given == "Panel 1") else "frames"
             self._drift_source = (np.ascontiguousarray(source, dtype=np.float32), title)
         source, title = self._drift_source
-        corrected = drift_corrected(source, drift, frame_times_s=self.frame_times_s or None)
-        kept = (self.dim_sampling, self.dim_unit, self.slice_idx, list(self.labels))
+        # the frames on screen, as indices into the frames first shown (all of them until a result narrows it)
+        shown = self._drift_shown if self._drift_shown is not None else list(range(source.shape[0]))
+        measured = [shown[int(frame)] for frame in drift["frames"]]
+        # only the frames Find drift measured: 6 picked of 500 live frames take well under a second, all 500 minutes
+        source = source[measured]
+        corrected = drift_corrected(source, dict(drift, frames=list(range(len(measured)))), frame_times_s=None)
+        labels = list(self.labels) if len(self.labels) == len(shown) else [str(index) for index in range(len(shown))]
+
+        def numbered(index: int, frame: int) -> str:
+            """The frame's own label, or the number the thumbnail strip showed for it (1 for the first frame)."""
+            return str(frame + 1) if labels[index] == str(index) else labels[index]
+
+        kept = (self.dim_sampling, self.dim_unit, len(measured) - 1,
+                [numbered(int(index), frame) for index, frame in zip(drift["frames"], measured)])
+        self._drift_shown = measured
         display_bin = max(1, int(self.display_bin))
         with self.hold_sync():
             self._load_stack(
@@ -875,6 +890,7 @@ class Show3D(
         self._rgb_data = None
         self._source_panels = None
         self._drift_source = None   # the frames Find drift measured, kept when the corrected panel is added
+        self._drift_shown = None    # which of those frames the viewer shows (after a result, the measured ones)
         self._configure_static_fallback(
             notebook_preview_format=notebook_preview_format,
             notebook_preview_quality=notebook_preview_quality,

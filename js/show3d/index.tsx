@@ -117,7 +117,7 @@ import { applyDisplayFilterBrowser, browserFilterSupported, filterKnobsActive } 
 import { COLORMAPS, COLORMAP_NAMES, applyColormap, displayNormalize, renderToOffscreen, renderToOffscreenReuse, createGPUColormapEngine, GPUColormapEngine } from "../display/colormaps";
 import { histogramBins } from "../display/cpuColormap";
 import { getGPUInfo, getHardwareGPUDevice, onGPULost, webGPULostReason } from "../display/device";
-import { findDrift } from "./drift";
+import { findDrift, DRIFT_LIVE_FRAMES } from "./drift";
 import type { DriftReadout } from "./DriftChart";
 import { DisplayFFT, getDisplayFFT, fftshift, computeMagnitude, autoEnhanceFFT, nextPow2, applyHannWindow2D, fftClickReadout } from "../display/fft";
 import {
@@ -1623,6 +1623,10 @@ function Show3D() {
   const [driftFrames, setDriftFrames] = useModelState<number[]>("drift_frames");
   const [frameTimesS] = useModelState<number[]>("frame_times_s");
   const [driftBusy, setDriftBusy] = React.useState(false);
+  const driftBusyRef = React.useRef(false);
+  // frames still arriving (Show3D.stream): Find drift with no picks follows the newest frames until clicked again
+  const [streaming] = useModelState<boolean>("streaming");
+  const [driftFollow, setDriftFollow] = React.useState(false);
   const [driftStatus, setDriftStatus] = React.useState("");
   const [subpixelAlignReference, setSubpixelAlignReference] = useModelState<number>("subpixel_align_reference");
   const [subpixelAlignStatus, setSubpixelAlignStatus] = React.useState("Off");
@@ -2932,8 +2936,12 @@ function Show3D() {
   /** Find drift over the picked frames (all when fewer than two), on the first panel, on WebGPU when there is one. */
   const handleFindDrift = React.useCallback(async () => {
     if (isRgb) { setDriftStatus("Find drift needs a grayscale stack"); return; }
+    if (driftBusyRef.current) return;
     const frameCount = Math.max(1, nSlices || 1);
-    const frames = driftFrames && driftFrames.length >= 2 ? driftFrames : Array.from({ length: frameCount }, (_, i) => i);
+    const newest = streaming ? Math.min(frameCount, DRIFT_LIVE_FRAMES) : frameCount;
+    const frames = driftFrames && driftFrames.length >= 2 ? driftFrames
+      : Array.from({ length: newest }, (_, i) => frameCount - newest + i);
+    if (frames.length < 2) { setDriftStatus("Find drift needs at least two frames"); return; }
     const panelWidth = sharedPanelSource || (nPanels || 1) <= 1 ? width : Math.max(1, numPanelCols || Math.round(width / Math.max(1, nPanels)));
     const frameOf = (index: number): Float32Array | null => {
       const full = getOfflineFrame(index);
@@ -2942,6 +2950,7 @@ function Show3D() {
       for (let row = 0; row < height; row++) panel.set(full.subarray(row * width, row * width + panelWidth), row * panelWidth);
       return panel;
     };
+    driftBusyRef.current = true;
     setDriftBusy(true);
     setDriftStatus(`Finding drift over ${frames.length} frames…`);
     try {
@@ -2955,10 +2964,27 @@ function Show3D() {
     } catch (error) {
       setDriftStatus(`Find drift failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
+      driftBusyRef.current = false;
       setDriftBusy(false);
     }
-  }, [isRgb, nSlices, driftFrames, sharedPanelSource, nPanels, numPanelCols, width, height, getOfflineFrame,
+  }, [isRgb, nSlices, streaming, driftFrames, sharedPanelSource, nPanels, numPanelCols, width, height, getOfflineFrame,
       pixelSize, pixelUnit, dimSampling, dimUnit, frameTimesS, setDrift]);
+
+  /** The Find drift button: while frames arrive with none picked, it starts (or stops) following the newest frames. */
+  const clickFindDrift = React.useCallback(() => {
+    const picked = !!driftFrames && driftFrames.length >= 2;
+    if (streaming && !picked) {
+      if (driftFollow) { setDriftFollow(false); setDriftStatus(""); return; }
+      setDriftFollow(true);
+    }
+    void handleFindDrift();
+  }, [streaming, driftFrames, driftFollow, handleFindDrift]);
+  React.useEffect(() => {
+    if (!streaming || (driftFrames && driftFrames.length >= 2)) setDriftFollow(false);
+  }, [streaming, driftFrames]);
+  React.useEffect(() => {
+    if (driftFollow && streaming) void handleFindDrift();     // each new frame: the newest frames again
+  }, [driftFollow, streaming, nSlices]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const computeSubpixelAlignment = React.useCallback(async () => {
     const serial = ++subpixelAlignSerialRef.current;
@@ -11520,7 +11546,8 @@ function Show3D() {
               starred={normalizedBookmarkedFrames}
               chosen={driftFrames || []}
               onChoose={setDriftFrames}
-              onFindDrift={handleFindDrift}
+              onFindDrift={clickFindDrift}
+              driftFollow={driftFollow}
               driftBusy={driftBusy}
               driftStatus={driftStatus}
               drift={drift && Array.isArray((drift as { shift_px?: unknown }).shift_px) ? (drift as unknown as DriftReadout) : null}

@@ -58,6 +58,8 @@ export type ThumbnailStripProps = {
   /** The button's words while it runs, or the last result's status. */
   driftStatus?: string;
   driftBusy?: boolean;
+  /** Find drift is following the newest frames as they arrive: the button stops it. */
+  driftFollow?: boolean;
   /** The last Find drift result, drawn as a chart under the thumbnails. */
   drift?: DriftReadout | null;
   /** The newest frame first (at the top), as a live stream needs; frame numbers and picking are unchanged. */
@@ -197,13 +199,14 @@ export function ThumbnailStrip(props: ThumbnailStripProps) {
         <Typography sx={{ fontSize: 11, color: colors.textMuted, flex: 1 }}>{chosen.size ? `${chosen.size} of ${frames}` : frames}</Typography>
         {props.onFindDrift && (
           <Box role="button" aria-label="Find drift" data-testid="show3d-find-drift"
-            title={"Find drift: register the picked frames (⌘/Ctrl-click, Shift-click; all when none) on the GPU, " +
+            title={"Find drift: register the picked frames (⌘/Ctrl-click, Shift-click; all when none, or while frames " +
+              "arrive the newest 6, again as each arrives) on the GPU, " +
               "to 1/100 px, and fit the drift velocity"}
-            onClick={props.driftBusy ? undefined : props.onFindDrift}
+            onClick={props.driftBusy && !props.driftFollow ? undefined : props.onFindDrift}
             sx={{ px: "6px", height: 20, display: "flex", alignItems: "center", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap",
-              border: `1px solid ${colors.accent}`, color: props.driftBusy ? colors.textMuted : colors.accent,
-              cursor: props.driftBusy ? "progress" : "pointer", "&:hover": { bgcolor: props.driftBusy ? "transparent" : colors.controlBg } }}>
-            {props.driftBusy ? "Finding…" : "Find drift"}
+              border: `1px solid ${colors.accent}`, color: props.driftBusy && !props.driftFollow ? colors.textMuted : colors.accent,
+              cursor: props.driftBusy && !props.driftFollow ? "progress" : "pointer", "&:hover": { bgcolor: props.driftBusy ? "transparent" : colors.controlBg } }}>
+            {props.driftFollow ? "Stop drift" : props.driftBusy ? "Finding…" : "Find drift"}
           </Box>
         )}
         <Box role="group" aria-label="Thumbnails across" sx={{ display: "flex", border: `1px solid ${colors.border}` }}>

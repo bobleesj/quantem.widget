@@ -17,6 +17,8 @@ import { estimateSliceAlignment } from "../show3dslices/sliceAlignment";
 
 /** Subpixel refinement grid: 1/100 px, as quantem.gpu's drift registration. */
 export const DRIFT_UPSAMPLE = 100;
+/** While frames arrive and none are picked, Find drift measures this many of the newest, as each one arrives. */
+export const DRIFT_LIVE_FRAMES = 6;
 
 /** Seconds per unit of the frame axis, for the units a time axis is given in; null when not a time. */
 const SECONDS_PER: Record<string, number> = { s: 1, ms: 1e-3, us: 1e-6, "µs": 1e-6, min: 60, h: 3600 };

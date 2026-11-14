@@ -83,6 +83,7 @@ class Show3DStream:
         self.on_msg(self._handle_stream_msg)
         self._stream_worker = LiveDisplayWorker("Show3D-stream", self._stream_flush)
         self._stream_worker.start()
+        self.streaming = True
 
     def append(self, image, label: str | None = None) -> None:
         """Add one 2D frame to the end of a streamed stack.
@@ -268,6 +269,7 @@ class Show3DStream:
             return False
         worker.stop()
         self._stream_worker = None
+        self.streaming = False
         return True
 
     def close(self) -> None:

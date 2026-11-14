@@ -473,14 +473,18 @@ def test_find_drift_result_adds_a_drift_corrected_panel_that_undoes_the_shift():
     widget.drift = {"frames": [0, 1, 3], "shift_px": [[0, 0], list(shifts[1]), list(shifts[3])],
                     "velocity_px_per_frame": [0.4, -0.3], "fit_r2": [1, 1]}
     assert widget.n_panels == 2 and widget.panel_titles == ["frames", "drift corrected"]
-    assert len(widget._offline_float_stack) == 2 * stack.nbytes and widget.frame_seq >= 1   # the browser gets both panels
+    # only the frames Find drift measured (0, 1, 3), before and after: the browser gets both panels
+    assert len(widget._offline_float_stack) == 2 * stack[[0, 1, 3]].nbytes and widget.frame_seq >= 1
+    assert widget.n_slices == 3 and widget.labels == ["1", "2", "4"]
     assert len(widget.denoise_modes) == 2 and widget.columns == 2
     assert (widget.dim_sampling, widget.dim_unit) == (2.0, "s") and widget.pixel_size == pytest.approx(0.5)
     corrected = drift_corrected(stack, widget.drift)
     for frame in range(4):   # measured (0, 1, 3) and fitted (2): every frame back on frame 0
         np.testing.assert_allclose(corrected[frame], base, atol=1e-4)
-    widget.drift = dict(widget.drift)   # a second result corrects the original frames again, not the panels
-    assert widget.n_panels == 2
+    # a second result picks from the frames on screen (frames 1 and 4): those original frames, again
+    widget.drift = {"frames": [0, 2], "shift_px": [[0, 0], list(shifts[3])], "velocity_px_per_frame": [0.4, -0.3],
+                    "fit_r2": [1, 1]}
+    assert widget.n_panels == 2 and widget.n_slices == 2 and widget.labels == ["1", "4"]
 
 
 def test_frame_times_s_are_one_increasing_time_per_frame_and_time_the_corrected_frames():

@@ -182,3 +182,25 @@ def test_find_drift_after_the_stream_ends_adds_the_drift_corrected_panel():
 
     with pytest.raises(RuntimeError, match="running viewer"):
         viewer.append(np.ones((8, 8), np.float32))                      # ended: no more frames
+
+
+def test_streaming_tells_the_page_frames_are_arriving_and_the_corrected_panel_holds_the_measured_frames():
+    """While frames arrive, streaming is True (Find drift then measures the newest frames, again as each arrives);
+    after end_stream() a result over the newest 6 of 500 frames corrects those 6, not all 500 (11-13: minutes)."""
+    import numpy as np
+
+    from quantem.widget import Show3D
+
+    plain = Show3D(np.zeros((2, 8, 8), np.float32), verbose=False)
+    assert plain.streaming is False
+    plain.close()
+    viewer = Show3D.stream(np.zeros((1, 8, 8), np.float32))
+    assert viewer.streaming is True
+    for _ in range(9):
+        viewer.append(np.ones((8, 8), np.float32))
+    assert viewer.end_stream(5) and viewer.streaming is False and int(viewer.n_slices) == 10
+    newest = list(range(4, 10))
+    viewer.drift = {"frames": newest, "shift_px": [[0.0, 0.0]] * 6, "velocity_px_per_frame": [0.0, 0.0]}
+    assert int(viewer.n_panels) == 2 and int(viewer.n_slices) == 6     # the measured frames, before and after
+    assert viewer.labels == [str(frame + 1) for frame in newest]          # as the strip numbered them
+    viewer.close()
