@@ -8068,7 +8068,7 @@ function Show4DSTEM() {
       </Box>
       {/* Row 2: Color + Scale + Colorbar */}
       <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-        <Typography component="span" role="img" aria-label="Colormap" title="Colormap" sx={{ ...themedTypography.label, fontSize: 13, lineHeight: 1 }}>🎨</Typography>
+        <Typography component="span" title="Colormap" sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted }}>Color</Typography>
         <Select value={dpColormap} onChange={(event) => setDpColormap(String(event.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
           {COLORMAP_OPTIONS}
         </Select>
@@ -8237,7 +8237,7 @@ function Show4DSTEM() {
       </Box>
       {/* Row 2: Color + Scale */}
       <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-        <Typography component="span" role="img" aria-label="Colormap" title="Colormap" sx={{ ...themedTypography.label, fontSize: 13, lineHeight: 1 }}>🎨</Typography>
+        <Typography component="span" title="Colormap" sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted }}>Color</Typography>
         <Select value={viColormap} onChange={(event) => setViColormap(String(event.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
           {COLORMAP_OPTIONS}
         </Select>
@@ -9110,7 +9110,7 @@ function Show4DSTEM() {
                       </Box>
                       {/* Row 2: Color */}
                       <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                        <Typography component="span" role="img" aria-label="Colormap" title="Colormap" sx={{ ...themedTypography.label, fontSize: 13, lineHeight: 1 }}>🎨</Typography>
+                        <Typography component="span" title="Colormap" sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted }}>Color</Typography>
                         <Select value={fftColormap} onChange={(event) => setFftColormap(String(event.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
                           {COLORMAP_OPTIONS}
                         </Select>
