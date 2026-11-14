@@ -36,6 +36,18 @@ Show4DSTEM(data)
 
 The scan stays lossless and compressed on the GPU. Nothing is binned or cropped. `io.load` prints the size it takes.
 
+## Browse a scan and run direct ptychography
+
+`browse_direct_ptycho.ipynb`, beside `browse.ipynb`: set `SCAN`, then
+
+```python
+viewer = Show4DSTEM.live(SCAN, latest=1, semiangle_mrad=30)
+ptycho = ShowPtycho.live(viewer)
+```
+
+The viewer shows that scan alone; the panel below fits its aberrations through fifth order on the central
+256 x 256 scan region and shows the whole phase. Drag the dashed fit box to fit somewhere else.
+
 ## Live: the folder the detector writes into
 
 `live.ipynb`, beside `browse.ipynb`, holds these cells: open it with `jupyter lab src/quantem-widget/environments/live.ipynb`.
