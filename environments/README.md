@@ -42,7 +42,7 @@ The scan stays lossless and compressed on the GPU. Nothing is binned or cropped.
 
 ## Browse a scan and run direct ptychography
 
-`browse_direct_ptycho.ipynb`, beside `browse.ipynb`: set `SCAN`, then
+`microscope/browse_arina.ipynb` (double-click `microscope/BROWSE_ARINA.bat` to open it): set `SCAN`, then
 
 ```python
 viewer = Show4DSTEM.live(SCAN, latest=1, semiangle_mrad=30)
