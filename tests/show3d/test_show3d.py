@@ -482,9 +482,15 @@ def test_find_drift_result_adds_a_drift_corrected_panel_that_undoes_the_shift():
     for frame in range(4):   # measured (0, 1, 3) and fitted (2): every frame back on frame 0
         np.testing.assert_allclose(corrected[frame], base, atol=1e-4)
     # a second result picks from the frames on screen (frames 1 and 4): those original frames, again
+    assert widget.shown_frames == [0, 1, 3]
     widget.drift = {"frames": [0, 2], "shift_px": [[0, 0], list(shifts[3])], "velocity_px_per_frame": [0.4, -0.3],
-                    "fit_r2": [1, 1]}
+                    "fit_r2": [1, 1], "backend": "webgpu"}
     assert widget.n_panels == 2 and widget.n_slices == 2 and widget.labels == ["1", "4"]
+    assert widget.shown_frames == [0, 3]
+    # a result set from Python numbers the frames first shown: frame 2 is back although it was not on screen
+    widget.drift = {"frames": [1, 2], "shift_px": [[0, 0], [0.4, -0.3]],
+                    "velocity_px_per_frame": [0.4, -0.3], "fit_r2": [1, 1], "backend": "quantem.gpu"}
+    assert widget.labels == ["2", "3"] and widget.shown_frames == [1, 2]
 
 
 def test_frame_times_s_are_one_increasing_time_per_frame_and_time_the_corrected_frames():

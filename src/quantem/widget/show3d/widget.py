@@ -742,6 +742,14 @@ class Show3D(
             raise traitlets.TraitError("frame_times_s must be finite and increase frame by frame")
         return times
 
+    @property
+    def shown_frames(self) -> list[int]:
+        """The frames on screen, numbered as first shown (from 0): all of them, or after a Find drift result the
+        ones it measured."""
+        if self._drift_shown is not None:
+            return list(self._drift_shown)
+        return list(range(int(self.n_slices)))
+
     @traitlets.observe("drift")
     def _show_drift_corrected(self, change: dict) -> None:
         """Show the frames moved back by a Find drift result as a "drift corrected" panel on the right.
@@ -763,11 +771,13 @@ class Show3D(
             given = (self.panel_titles or [""])[0]
             # a single stack has only the placeholder "Panel 1"; call it what it is beside "drift corrected"
             title = given if given and not (self.n_panels == 1 and given == "Panel 1") else "frames"
-            self._drift_source = (np.ascontiguousarray(source, dtype=np.float32), title)
-        source, title = self._drift_source
-        # the frames on screen, as indices into the frames first shown (all of them until a result narrows it)
-        shown = self._drift_shown if self._drift_shown is not None else list(range(source.shape[0]))
-        measured = [shown[int(frame)] for frame in drift["frames"]]
+            self._drift_source = (np.ascontiguousarray(source, dtype=np.float32), title, list(self.frame_times_s))
+        source, title, times = self._drift_source
+        # Find drift in the page numbers the frames on screen; a result set from Python (spectra.haadf.drift) numbers
+        # the frames first shown, which stay addressable after a result narrows the view to the measured ones
+        page = drift.get("backend") in ("webgpu", "cpu")
+        measured = [self.shown_frames[int(frame)] if page else int(frame) for frame in drift["frames"]]
+        shown = list(range(source.shape[0]))
         # only the frames Find drift measured: 6 picked of 500 live frames take well under a second, all 500 minutes
         source = source[measured]
         corrected = drift_corrected(source, dict(drift, frames=list(range(len(measured)))), frame_times_s=None)
@@ -793,6 +803,8 @@ class Show3D(
                 display_bin=display_bin,
             )
             self.dim_sampling, self.dim_unit, self.slice_idx = kept[0], kept[1], kept[2]
+            if len(times) == source.shape[0]:
+                self.frame_times_s = [times[frame] for frame in measured]   # each measured frame keeps its own time
             self.panel_cmaps = []
             self.columns = 2
             self.link_contrast = True   # one quantity, before and after: the same contrast reads the correction
