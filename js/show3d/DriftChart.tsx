@@ -1,5 +1,6 @@
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
+import * as React from "react";
 
 /** The fields of a Find drift result the chart reads (see drift.ts DriftResult). */
 export type DriftReadout = {
@@ -30,6 +31,15 @@ function short(value: number): string {
   return value.toFixed(Math.min(4, digits));
 }
 
+/** The measured frame nearest in time to t: the one the pointer reads on the chart. */
+export function nearestFrame(times: number[], t: number): number {
+  let best = 0;
+  for (let i = 1; i < times.length; i++) {
+    if (Math.abs(times[i] - t) < Math.abs(times[best] - t)) best = i;
+  }
+  return best;
+}
+
 /**
  * Drift against time, rows and columns, with the fitted lines, and the velocity in words above it.
  * Against each frame's own time when the frames have times (frame_times_s or a time frame axis); in
@@ -42,6 +52,7 @@ export function DriftChart(props: {
   colors: { text: string; textMuted: string; border: string };
 }) {
   const { drift, status, width, colors } = props;
+  const [hovered, setHovered] = React.useState<number | null>(null);
   if (!drift) {
     return (
       <Box sx={{ flex: "0 0 auto", borderTop: `1px solid ${colors.border}`, px: "6px", py: "4px" }}>
@@ -71,16 +82,35 @@ export function DriftChart(props: {
     return `M${x(0)},${y(at(0))} L${x(tMax)},${y(at(tMax))}`;
   };
   const per = timed ? `${unit}/s` : "px/frame";
+  const shown = hovered !== null && hovered < values.length ? hovered : null;
+  function readPointer(event: React.MouseEvent<SVGSVGElement>) {
+    const left = event.currentTarget.getBoundingClientRect().left;
+    const t = ((event.clientX - left - PAD.left) / plotW) * tMax;
+    setHovered(nearestFrame(times, t));
+  }
+  function leavePointer() {
+    setHovered(null);
+  }
   return (
     <Box data-testid="show3d-drift-chart" sx={{ flex: "0 0 auto", borderTop: `1px solid ${colors.border}`, px: "1px", pt: "3px" }}>
       <Typography sx={{ fontSize: 11, fontWeight: 600, color: colors.text, px: "5px" }}>
         Drift {short(speed)} {per}
       </Typography>
       <Typography sx={{ fontSize: 10, color: colors.textMuted, px: "5px", lineHeight: 1.35 }}>
-        <span style={{ color: ROW }}>row {short(slope[0])}</span> · <span style={{ color: COL }}>col {short(slope[1])}</span> {per}
-        {" · "}R² {drift.fit_r2[0].toFixed(2)}/{drift.fit_r2[1].toFixed(2)} · {drift.frames.length} frames · {drift.backend === "webgpu" ? "WebGPU" : drift.backend === "cpu" ? "CPU" : drift.backend}
+        {shown === null ? (
+          <>
+            <span style={{ color: ROW }}>row {short(slope[0])}</span> · <span style={{ color: COL }}>col {short(slope[1])}</span> {per}
+            {" · "}R² {drift.fit_r2[0].toFixed(2)}/{drift.fit_r2[1].toFixed(2)} · {drift.frames.length} frames · {drift.backend === "webgpu" ? "WebGPU" : drift.backend === "cpu" ? "CPU" : drift.backend}
+          </>
+        ) : (
+          <span data-testid="show3d-drift-hover">
+            frame {drift.frames[shown] + 1} · {timed ? `${short(times[shown])} s` : `${short(times[shown])} frames`} ·{" "}
+            <span style={{ color: ROW }}>row {short(values[shown][0])}</span> · <span style={{ color: COL }}>col {short(values[shown][1])}</span> {unit}
+          </span>
+        )}
       </Typography>
-      <svg width={width} height={HEIGHT} role="img" aria-label={`Drift against time: ${short(speed)} ${per}`}>
+      <svg width={width} height={HEIGHT} role="img" aria-label={`Drift against time: ${short(speed)} ${per}`}
+        onMouseMove={readPointer} onMouseLeave={leavePointer} style={{ cursor: "crosshair" }}>
         <line x1={PAD.left} x2={width - PAD.right} y1={y(0)} y2={y(0)} stroke={colors.border} strokeWidth={1} />
         <text x={PAD.left - 3} y={PAD.top + 8} fontSize={9} fill={colors.textMuted} textAnchor="end">{short(high)}</text>
         <text x={PAD.left - 3} y={PAD.top + plotH} fontSize={9} fill={colors.textMuted} textAnchor="end">{short(low)}</text>
@@ -92,10 +122,13 @@ export function DriftChart(props: {
           <g key={axis}>
             <path d={fitted(axis)} stroke={axis === 0 ? ROW : COL} strokeWidth={1} strokeDasharray="3 2" fill="none" />
             {values.map((value, i) => (
-              <circle key={i} cx={x(times[i])} cy={y(value[axis])} r={2.2} fill={axis === 0 ? ROW : COL} />
+              <circle key={i} cx={x(times[i])} cy={y(value[axis])} r={i === shown ? 3.6 : 2.2} fill={axis === 0 ? ROW : COL} />
             ))}
           </g>
         ))}
+        {shown !== null && (
+          <line x1={x(times[shown])} x2={x(times[shown])} y1={PAD.top} y2={PAD.top + plotH} stroke={colors.textMuted} strokeWidth={1} strokeDasharray="2 2" />
+        )}
       </svg>
     </Box>
   );
