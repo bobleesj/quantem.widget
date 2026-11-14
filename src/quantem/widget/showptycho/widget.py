@@ -1735,7 +1735,7 @@ class ShowPtycho(anywidget.AnyWidget):
         """Direct ptychography of each scan a ``Show4DSTEM.live`` viewer shows, in a panel below it.
 
         Each new scan's aberrations through fifth order are fitted on a square scan region, the central 256 x 256
-        unless ``scan_region`` (row_start, row_stop, col_start, col_stop; 128, 256, 512 or 1024 per side) says
+        (128 x 128 on a CUDA GPU of under 6 GB) unless ``scan_region`` (row_start, row_stop, col_start, col_stop; 128, 256, 512 or 1024 per side) says
         otherwise, and the whole scan's phase is shown at them in a ShowPtycho. The panel appears where the cell
         runs; what is returned is its handle: ``handle.scan_region = (...)`` fits the shown scan there and every
         later scan, ``handle.ptycho`` is the ShowPtycho of the scan shown, ``handle.close()`` stops it. The dashed box

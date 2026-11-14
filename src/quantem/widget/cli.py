@@ -1208,13 +1208,15 @@ def _select_show4dstem_masters(masters: list[str], args: argparse.Namespace) -> 
 
 
 def _is_show4dstem_generated_master_link(path: pathlib.Path) -> bool:
-    """Return whether *path* is a symlink created by a CLI WebGPU export.
+    """Return whether *path* is a link created by a CLI WebGPU export.
 
     Rerunning ``widget show4dstem <source-folder> --save-dir <source-folder>``
     must select the original masters, not the anonymous ``dataset_XX``
-    links placed in its owned ``*_show4dstem_webgpu`` output folder.
+    links placed in its owned ``*_show4dstem_webgpu`` output folder (in its
+    ``data`` folder). A link there may be a hardlink or copy on Windows, so
+    the folder decides, not the kind of file.
     """
-    return path.is_symlink() and path.parent.name.endswith("_show4dstem_webgpu")
+    return any(parent.name.endswith("_show4dstem_webgpu") for parent in path.parents[:2])
 
 
 _TILT_COORDINATE_RE = re.compile(
@@ -1489,13 +1491,18 @@ def _link_show4dstem_h5_family(out_dir: pathlib.Path, master: pathlib.Path, labe
 
 
 def _replace_symlink(link: pathlib.Path, target: pathlib.Path) -> None:
-    """Replace only symlink artifacts; never overwrite a real data file."""
+    """Replace only link artifacts; never overwrite a real data file.
+
+    A symlink where the OS allows one; on Windows without the symlink
+    privilege a hardlink, else a copy.
+    """
+    from quantem.widget.io.links import place_link, replaceable
 
     if link.exists() or link.is_symlink():
-        if not link.is_symlink():
+        if not replaceable(link, target):
             raise ValueError(f"refusing to replace non-symlink artifact file: {link}")
         link.unlink()
-    link.symlink_to(target)
+    place_link(link, target)
 
 
 def _lossless_pack_dtype(counts, stem: str) -> str:

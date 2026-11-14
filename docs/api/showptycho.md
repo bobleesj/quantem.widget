@@ -309,7 +309,8 @@ Phase of mean; nothing is set by hand.
 
 
 The second cell shows a panel below the viewer. Each scan that arrives is fitted through fifth order on a square scan
-region, the central 256 x 256 unless you choose another, and its whole phase is shown in a ShowPtycho at the fitted
+region, the central 256 x 256 unless you choose another (128 x 128 on a CUDA GPU of under 6 GB: on a 4 GB RTX A400
+a 256 x 256 fit of a 512 x 512 scan took 12 to 14 s, a 128 x 128 one 7 to 8.5 s), and its whole phase is shown in a ShowPtycho at the fitted
 aberrations; a status line above it says which scan, which region and how long the fit took. When the next scan
 arrives, the panel and its session close before the viewer lets the old scan go, and the new scan is fitted.
 

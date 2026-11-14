@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from quantem import diffsim
+diffsim = pytest.importorskip("quantem.diffsim")  # an optional package; not on every PC
 
 bulk = pytest.importorskip("ase.build").bulk
 needs_bundle = pytest.mark.skipif(not diffsim.BUNDLE_PATH.is_file(), reason="run `npm run build:web` first")

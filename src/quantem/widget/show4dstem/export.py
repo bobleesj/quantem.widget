@@ -707,13 +707,16 @@ def write_qem_bundle(paths, out_dir, *, title: str | None = None, frame_labels=N
     root = pathlib.Path(out_dir).expanduser().resolve()
     data_dir = root / "qem"
     data_dir.mkdir(parents=True, exist_ok=True)
+    from quantem.widget.io.links import place_link, replaceable
+
     for path in paths:
         link = data_dir / path.name
-        if link.is_symlink():
+        if replaceable(link, path):
             link.unlink()
         if link.exists():
             raise ValueError(f"{link} is a real file; write the viewer into another folder.")
-        link.symlink_to(pathlib.Path(os.path.relpath(path, data_dir)))
+        # a relative symlink; on Windows without the symlink privilege a hardlink, else a copy
+        place_link(link, path, relative=True)
     from quantem.widget.show4dstem.widget import (
         Show4DSTEM,  # widget.py imports this module
     )

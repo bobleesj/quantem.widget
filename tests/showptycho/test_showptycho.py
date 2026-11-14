@@ -786,7 +786,10 @@ def test_qem_export_reuses_the_acquisition_and_preserves_the_live_phase(direct, 
         monkeypatch.setattr(viewer._direct, "export_bright_field", unnecessary_companion)
         review = tmp_path / "review"
         review.mkdir()
-        (review / "source").symlink_to(acquisition_dir, target_is_directory=True)
+        try:  # an external source/ link left by an earlier export, which the export must not write through
+            (review / "source").symlink_to(acquisition_dir, target_is_directory=True)
+        except OSError:
+            pass  # Windows without the symlink privilege: no such link can exist; the export still hardlinks
         out = viewer.export(review)
         assert not (out / "source").is_symlink()
         linked = out / "source" / "acquisition.qem"
@@ -834,6 +837,15 @@ def test_qem_export_reuses_the_acquisition_and_preserves_the_live_phase(direct, 
         session.close()
 
 
+def _symlink_or_skip(link, target, *, target_is_directory=False):
+    """A symlink, or a skip where the OS refuses one (Windows without the symlink privilege, WinError 1314):
+    the export then hardlinks or copies, and a symlinked source cannot arise."""
+    try:
+        link.symlink_to(target, target_is_directory=target_is_directory)
+    except OSError as error:
+        pytest.skip(f"this OS refuses symlinks here: {error}")
+
+
 def test_replacing_an_export_link_keeps_both_external_sources(tmp_path):
     """Replacing a stale link must unlink the link, not its external target."""
     old = tmp_path / "old.qem"
@@ -842,7 +854,7 @@ def test_replacing_an_export_link_keeps_both_external_sources(tmp_path):
     new.write_bytes(b"current exact source")
     target = tmp_path / "review" / "source" / "acquisition.qem"
     target.parent.mkdir(parents=True)
-    target.symlink_to(old)
+    _symlink_or_skip(target, old)
     assert showptycho_export._link_counts(new, target) == "hardlink"
     assert old.read_bytes() == b"older exact source"
     assert new.read_bytes() == target.read_bytes() == b"current exact source"

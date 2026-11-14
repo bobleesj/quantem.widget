@@ -613,10 +613,9 @@ def test_render_show4dstem_webgpu_h5_uses_anonymous_h5_urls(
     assert seen["kwargs"]["compare_dp_mode"] == dp_mode
     assert seen["bundle"]["h5_decode_dtype"] == "uint8"
     assert seen["bundle"]["out_dir"] == html.parent
-    assert (html.parent / "data" / "dataset_00_master.h5").is_symlink()
-    assert (html.parent / "data" / "dataset_00_master.h5").resolve() == pathlib.Path(masters[0])
-    assert (html.parent / "data" / "dataset_00_data_000001.h5").is_symlink()
-    assert (html.parent / "data" / "dataset_00_data_000001.h5").resolve() == tmp_path / "private_source_0_data_000001.h5"
+    # a symlink, or on Windows without the symlink privilege a hardlink: either reads the source file
+    assert (html.parent / "data" / "dataset_00_master.h5").samefile(masters[0])
+    assert (html.parent / "data" / "dataset_00_data_000001.h5").samefile(tmp_path / "private_source_0_data_000001.h5")
     assert not (html.parent / "data" / "dataset_00_lazy").exists()
 
 
@@ -624,13 +623,19 @@ def test_show4dstem_generated_master_links_are_not_input_candidates(tmp_path):
     """A rerun must ignore the anonymous links in its owned export folder."""
     source = tmp_path / "scan_master.h5"
     source.write_bytes(b"source")
+    from quantem.widget.io.links import place_link
+
     generated = tmp_path / "scan_show4dstem_webgpu"
-    generated.mkdir()
+    (generated / "data").mkdir(parents=True)
     link = generated / "dataset_00_master.h5"
-    link.symlink_to(source)
+    place_link(link, source)
+    # where the export puts them: <label>_show4dstem_webgpu/data/, a hardlink on Windows without the symlink privilege
+    in_data = generated / "data" / "dataset_00_master.h5"
+    place_link(in_data, source)
 
     assert not cli._is_show4dstem_generated_master_link(source)
     assert cli._is_show4dstem_generated_master_link(link)
+    assert cli._is_show4dstem_generated_master_link(in_data)
 
 
 def test_show4dstem_dataset_label_uses_coordinates_when_available():

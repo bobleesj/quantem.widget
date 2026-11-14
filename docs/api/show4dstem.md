@@ -216,7 +216,7 @@ itself stays a viewer:
 ptycho = ShowPtycho.live(viewer)
 ```
 
-Each scan's aberrations through fifth order are fitted on the central 256 x 256 scan region and the whole scan's
+Each scan's aberrations through fifth order are fitted on the central 256 x 256 scan region (128 x 128 on a CUDA GPU of under 6 GB) and the whole scan's
 phase is shown (see the ShowPtycho page, *Live*). `viewer.direct_phase()` still fits the shown scan from Python.
 
 On a device too small for the whole scan's spectra (a 4 GB card and a 512 x 512 x 192 x 192 scan) the fit still reads

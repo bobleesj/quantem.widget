@@ -1127,7 +1127,9 @@ def test_qem_bundle_links_acquisitions_for_a_streaming_viewer(tmp_path):
     assert launcher == viewer / "Show4DSTEM.command" and "8898" in launcher.read_text()
     for name in ("tilt_a.qem", "tilt_b.qem"):
         link = viewer / "qem" / name
-        assert link.is_symlink() and not Path(link.readlink()).is_absolute()
+        # relative where symlinks are allowed; on Windows without the symlink privilege a hardlink
+        assert not link.is_symlink() or not Path(link.readlink()).is_absolute()
+        assert link.samefile(data / name)
         assert link.read_bytes() == (data / name).read_bytes()
     page = (viewer / ".viewer" / "Show4DSTEM.html").read_text()
     assert '\\"../qem/tilt_a.qem\\", \\"../qem/tilt_b.qem\\"' in page

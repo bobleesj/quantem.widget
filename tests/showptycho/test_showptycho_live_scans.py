@@ -105,10 +105,18 @@ def test_each_new_scan_is_fitted_and_its_panel_closes_before_the_scan_goes(tmp_p
     assert events[-2:] == [("panel closed", "b_master.h5"), ("session closed", "b_master.h5")]
 
 
-def test_a_refit_without_room_beside_the_shown_session_closes_it_and_fits_again(tmp_path, accelerator, monkeypatch):
+@pytest.mark.parametrize("side, expected", [
+    # a larger device: the refit tries beside the shown session, lets it go when there is no room, and tries again
+    (256, ["fitted", "no room", "session closed", "fitted"]),
+    # a small device (under 6 GB): the shown session goes first, so no fit runs to its end only to fail
+    (128, ["fitted", "session closed", "fitted"]),
+])
+def test_a_refit_without_room_beside_the_shown_session_closes_it_and_fits_again(tmp_path, accelerator, monkeypatch,
+                                                                                side, expected):
     """A small device cannot hold the shown session and the new one together: the refit lets the shown one go
-    and tries once more, so moving the fit box works there."""
+    (first on a small device, else after the first try runs out), so moving the fit box works there."""
     monkeypatch.setattr(LiveFolder, "start", lambda self: None)
+    monkeypatch.setattr(live_module, "default_fit_side", lambda device: side)
     events, open_sessions = [], []
 
     class Session:
@@ -148,7 +156,7 @@ def test_a_refit_without_room_beside_the_shown_session_closes_it_and_fits_again(
         first = ptycho.ptycho
         ptycho.scan_region = None  # what dragging the fit box does: fit the shown scan again
         _wait_for(lambda: ptycho.ptycho is not None and ptycho.ptycho is not first)
-        assert events == ["fitted", "no room", "session closed", "fitted"]
+        assert events == expected
         assert "· a · fitted in" in ptycho.status.value and ptycho._path.name == "a_master.h5"
     finally:
         ptycho.close()
@@ -245,6 +253,20 @@ def _wait_for(condition, timeout_s: float = 20.0) -> None:
     while not condition():
         assert time.monotonic() - started < timeout_s, "timed out"
         time.sleep(0.05)
+
+
+def test_a_small_cuda_device_fits_the_central_128_by_default(monkeypatch):
+    """Under 6 GB (a 4 GB RTX A400: 256 x 256 in 12 to 14 s, 128 x 128 in 7 to 8.5 s) the default box is 128."""
+    import torch
+
+    sizes = {}
+    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda device: type("P", (), {"total_memory": sizes["now"]}))
+    sizes["now"] = 4 * 2**30
+    assert live_module.default_fit_side("cuda:0") == 128
+    assert central_region((512, 512), live_module.default_fit_side("cuda:0")) == (192, 320, 192, 320)
+    sizes["now"] = 24 * 2**30
+    assert live_module.default_fit_side("cuda:0") == 256
+    assert live_module.default_fit_side("mps") == 256 and live_module.default_fit_side("cpu") == 256
 
 
 def test_the_module_fit_side_is_256():

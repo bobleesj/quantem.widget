@@ -16,10 +16,25 @@ from quantem.widget.adapters import gpu as gpu_adapter
 # The side of the square scan region the aberrations are fitted on: the fit's sides are 128, 256, 512 or 1024.
 FIT_REGION_SIDE = 256
 FIT_REGION_SIDES = (128, 256, 512, 1024)
+# A CUDA device with less memory than this fits the central 128 x 128 by default. A 4 GB card (RTX A400, 1.7 TFLOPS,
+# 90 GB/s) fitted 256 x 256 of a 512 x 512 scan in 12 to 14 s and 128 x 128 in 7 to 8.5 s (ARINA PC, 11-14).
+SMALL_DEVICE_GIB = 6
+SMALL_DEVICE_FIT_REGION_SIDE = 128
 # The fits of one scan kept for the strip, newest last: each holds its whole phase (4 MB at 1024 x 1024).
 FITS_KEPT = 6
 # What a new panel of the same viewer keeps from the one before it: the reader's display choices.
 KEPT_DISPLAY = ("cmap", "initial_fft_on", "method", "phase_damp", "amplitude_damp")
+
+
+def default_fit_side(device) -> int:
+    """The side of the default fit region on ``device``: ``SMALL_DEVICE_FIT_REGION_SIDE`` on a CUDA device of less than
+    ``SMALL_DEVICE_GIB`` of memory, where a 256 x 256 fit takes twice as long, else ``FIT_REGION_SIDE``."""
+    import torch
+
+    device = torch.device(device)
+    if device.type == "cuda" and torch.cuda.get_device_properties(device).total_memory < SMALL_DEVICE_GIB * 2**30:
+        return SMALL_DEVICE_FIT_REGION_SIDE
+    return FIT_REGION_SIDE
 
 
 def central_region(scan_shape, side: int = FIT_REGION_SIDE) -> tuple[int, int, int, int] | None:
@@ -36,7 +51,7 @@ class LivePtycho:
     """Direct ptychography of the scans a ``Show4DSTEM.live`` viewer shows, one ShowPtycho per scan.
 
     Each scan that arrives is fitted through fifth order on a square scan region (``scan_region``, the central
-    256 x 256 unless set) and its whole phase is shown in a ShowPtycho below a one-line status. The fit holds the
+    256 x 256 unless set; 128 x 128 on a CUDA GPU of under 6 GB, where it fits in about half the time) and its whole phase is shown in a ShowPtycho below a one-line status. The fit holds the
     live folder, so no scan loads or leaves under it; when the next scan arrives the panel and its session close
     before the viewer lets the old scan go. ``scan_region = (row_start, row_stop, col_start, col_stop)`` fits the
     shown scan there, and every later scan; dragging the panel's fit box does the same. Each region fitted on the
@@ -69,7 +84,8 @@ class LivePtycho:
 
     @property
     def scan_region(self) -> tuple[int, int, int, int] | None:
-        """The scan region the aberrations are fitted on, or None for the central 256 x 256 of each scan."""
+        """The scan region the aberrations are fitted on, or None for the central 256 x 256 of each scan (128 x 128 on a
+        CUDA GPU of under 6 GB)."""
         return self._region
 
     @scan_region.setter
@@ -216,7 +232,7 @@ class LivePtycho:
                 if path not in self.folder.paths:
                     return  # it left before the folder let this fit start
                 dataset = self.folder.datasets[self.folder.paths.index(path)]
-            region = self._region or central_region(dataset.shape[:2])
+            region = self._region or central_region(dataset.shape[:2], default_fit_side(dataset.device))
             name = path.name.removesuffix("_master.h5").removesuffix(".qem")
             self.status.value = f"<b>Direct ptycho</b> · {name} · fitting…"
             # a refit of the scan shown keeps its scan rotation, so moving the box cannot land on the other 180°
@@ -226,6 +242,13 @@ class LivePtycho:
             try:
                 # the viewer adopts the scan now, so its calibration is this scan's
                 self.viewer.refresh_stream()
+                if self._direct is not None and default_fit_side(dataset.device) == SMALL_DEVICE_FIT_REGION_SIDE:
+                    # A small device has no room for the shown session beside a new fit: the fit would run to its
+                    # end and fail at the whole-scan phase, and the retry below run it again (a 4 GB card: 10.3 s
+                    # for a 128 x 128 refit, 6.7 s with the shown session gone first). It goes first here.
+                    self._release_shown(f"<b>Direct ptycho</b> · {name} · fitting…")
+                    gc.collect()
+                    gpu_adapter.gpu_release_cached_memory()
                 direct = None
                 try:
                     direct = self._fitted_session(dataset, region, rotation)
