@@ -1,3 +1,7 @@
+# NOT FOR A MICROSCOPE CONTROL PC. Do not install this on an ARINA PC that runs AutoScript: that PC keeps the
+# environment it already has (built on AutoScript's own Python and NumPy), and a second environment beside it is
+# not wanted. This file is for a detector or analysis PC without AutoScript.
+#
 # One environment for a Windows PC with an NVIDIA card (first used on a detector PC with an RTX A400, 4 GB).
 # It holds everything: Python, Git, Node.js, JupyterLab, PyTorch with CUDA, and quantem.gpu and quantem.widget as
 # source checkouts (branch microscope) cloned into src/ beside this file and installed editable.

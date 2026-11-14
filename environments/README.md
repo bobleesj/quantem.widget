@@ -1,5 +1,9 @@
 # Set up a Windows PC with an NVIDIA card
 
+> **Not for a microscope control PC.** Do not install `arina-pc.yml` on an ARINA PC that runs AutoScript. That PC
+> keeps the environment it already has, built on AutoScript's own Python and NumPy; open the notebooks here on its
+> existing kernel instead. This setup is for a detector or analysis PC without AutoScript.
+
 Browse 4D-STEM scans on the GPU with `Show4DSTEM`, from source checkouts of quantem.gpu and quantem.widget.
 First used on a detector PC with an RTX A400 (4 GB).
 
