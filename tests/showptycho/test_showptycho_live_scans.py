@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 import time
 
 import ipywidgets
@@ -73,7 +74,7 @@ def test_each_new_scan_is_fitted_and_its_panel_closes_before_the_scan_goes(tmp_p
             super().close()
 
     def fitted(self, dataset, region, rotation=None):
-        name = dataset.metadata.get("source_path", "?").rsplit("/", 1)[-1]
+        name = os.path.basename(dataset.metadata.get("source_path", "?"))
         events.append(("fitted", name, region))
         return Session(name)
 
@@ -128,6 +129,9 @@ def test_a_refit_without_room_beside_the_shown_session_closes_it_and_fits_again(
         if open_sessions:
             events.append("no room")
             raise MemoryError("Out of memory allocating 426,747,904 bytes")
+        # the retry runs after the except block: inside it, the caught error's traceback keeps the failed fit's
+        # GPU buffers alive and the second try ran out again (ARINA PC, 4 GB, 11-14)
+        assert sys.exc_info()[1] is None
         open_sessions.append(Session())
         events.append("fitted")
         return open_sessions[-1]

@@ -226,6 +226,7 @@ class LivePtycho:
             try:
                 # the viewer adopts the scan now, so its calibration is this scan's
                 self.viewer.refresh_stream()
+                direct = None
                 try:
                     direct = self._fitted_session(dataset, region, rotation)
                 except (MemoryError, RuntimeError) as error:
@@ -233,6 +234,9 @@ class LivePtycho:
                     if not isinstance(error, MemoryError) and not any(
                             word in str(error).lower() for word in ("out of memory", "alloc_failed")):
                         raise
+                # Retried after the except block: until it ends, the caught error's traceback keeps the failed
+                # fit's frames and their GPU buffers alive, and on a 4 GB card the second try fails again.
+                if direct is None:
                     # A small device ran out. Two causes, both gone on a second try: the shown session beside the
                     # new one (it goes first now), and the encoded scan still held for a moment by the viewer's own
                     # drawing when the fit wanted its room (about every second fit at 3400 MiB free).
