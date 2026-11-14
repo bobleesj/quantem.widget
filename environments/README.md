@@ -15,7 +15,7 @@ Nothing else: the environment brings Python, Git, Node.js, JupyterLab and PyTorc
 Open a **Miniforge Prompt**, go to an empty folder, and paste this one line:
 
 ```bash
-curl -LO https://raw.githubusercontent.com/bobleesj/quantem.widget/arina-pc/environments/arina-pc.yml && conda env create -f arina-pc.yml && call conda activate arina-pc && python -m ipykernel install --user --name arina-pc && widget build && jupyter lab src/quantem-widget/environments/browse.ipynb
+curl -LO https://raw.githubusercontent.com/bobleesj/quantem.widget/microscope/environments/arina-pc.yml && conda env create -f arina-pc.yml && call conda activate arina-pc && python -m ipykernel install --user --name arina-pc && widget build && jupyter lab src/quantem-widget/environments/browse.ipynb
 ```
 
 It takes several minutes. `arina-pc.yml` installs everything, including quantem.gpu and quantem.widget as source

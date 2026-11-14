@@ -1,12 +1,12 @@
 # One environment for a Windows PC with an NVIDIA card (first used on a detector PC with an RTX A400, 4 GB).
 # It holds everything: Python, Git, Node.js, JupyterLab, PyTorch with CUDA, and quantem.gpu and quantem.widget as
-# source checkouts (branch arina-pc) cloned into src/ beside this file and installed editable.
+# source checkouts (branch microscope) cloned into src/ beside this file and installed editable.
 #
 # Needs only Miniforge (https://conda-forge.org/download/) and an NVIDIA driver 580 or newer.
 #
 # Install, in a Miniforge Prompt inside an empty folder (one line):
 #
-#   curl -LO https://raw.githubusercontent.com/bobleesj/quantem.widget/arina-pc/environments/arina-pc.yml && conda env create -f arina-pc.yml && call conda activate arina-pc && python -m ipykernel install --user --name arina-pc && widget build && jupyter lab src/quantem-widget/environments/browse.ipynb
+#   curl -LO https://raw.githubusercontent.com/bobleesj/quantem.widget/microscope/environments/arina-pc.yml && conda env create -f arina-pc.yml && call conda activate arina-pc && python -m ipykernel install --user --name arina-pc && widget build && jupyter lab src/quantem-widget/environments/browse.ipynb
 #
 # Every later session:   conda activate arina-pc && jupyter lab
 # New features:          conda activate arina-pc && widget update
@@ -25,7 +25,7 @@ dependencies:
       # PyTorch index. quantem.gpu[cuda] accepts it (torch >= 2.11).
       - --extra-index-url https://download.pytorch.org/whl/cu130
       - torch==2.14.1+cu130
-      - -e git+https://github.com/bobleesj/quantem.gpu.git@arina-pc#egg=quantem.gpu
-      - -e git+https://github.com/bobleesj/quantem.widget.git@arina-pc#egg=quantem.widget
+      - -e git+https://github.com/bobleesj/quantem.gpu.git@microscope#egg=quantem.gpu
+      - -e git+https://github.com/bobleesj/quantem.widget.git@microscope#egg=quantem.widget
       # the extras of the checkouts above: CuPy for CUDA 13 with its libraries, and the fit dependencies
       - quantem.gpu[cuda]
