@@ -6,6 +6,40 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- `Show4DSTEM.live(folder, latest=2)` shows a folder a detector writes into, live: each scan is shown once its files are
+  complete, the newest `latest` stay loaded, and the oldest is released before the next one loads. When the device
+  cannot hold `latest` scans it keeps fewer and says so. The viewer appears where the cell runs and nothing is saved.
+  `widget live <folder>` writes the notebook.
+- `ShowPtycho.live`: each region fitted on the shown scan is kept (six at most) and drawn as a strip of thumbnails
+  under the controls, with the colormap and contrast of the phase. Hovering one shows its whole phase again, leaving
+  returns to the current one, a click fits there again; a star (top left) marks it and a cross (top right) drops it.
+  `ptycho.save()` writes the fit shown and every kept region to `<scan>.json` in the live folder (or `save_dir`).
+  `ptycho.load()` shows that saved fit of the scan shown again without fitting (0.4 s on a 512 x 512 scan).
+- `ShowPtycho.live`: the panel opens on the damped Phase reconstruction, with Complex as the other choice, an FFT
+  switch that draws the transform as a draggable inset on the phase, and plain slider names (Defocus C10,
+  Astigmatism C12, Scan rotation). The colormap, FFT and reconstruction chosen stay chosen when the region is fitted
+  again. On a small device a refit lets the shown session go first when both do not fit.
+  Phase and Complex are offered where the session holds the dense bright-field spectrum; a session that reads the
+  scan in batches (a GPU too small for that spectrum) shows Phase of mean, chosen without a setting.
+- `ShowPtycho.live` on a small GPU: a refit lets the shown session go before the new panel is built, an upsampled
+  phase with no room is shown at the scan's own sampling with a line saying so, and a failure to show is the status
+  line (the panel no longer stays on "fitting").
+- `ShowPtycho.live(viewer)` shows direct ptychography of each scan a `Show4DSTEM.live` viewer shows, in a panel below
+  it: the aberrations through fifth order are fitted on the central 256 x 256 scan region (or `scan_region=`, or a
+  region drawn in the panel) and the whole scan's phase is shown. The viewer itself stays a viewer.
+- `Show4DSTEM.direct_phase()` (the Direct ptycho control) runs on a device too small for the whole scan's spectra: the
+  fit reads the whole scan at the frequencies it scores while the encoded scan waits in host memory, and the whole
+  scan is reconstructed in batches. Only when even that does not fit does it read a central scan region, recorded as
+  `fit_scan_region` in `direct_calibration_json`.
+- The command is `widget` (was `quantem-widget`), with no alias: `widget show2d`, `widget show3d`, `widget show3dslices`,
+  `widget show4dstem`, `widget github`.
+- `widget build` builds the widgets' JavaScript in a source checkout installed with `pip install -e`, from any folder;
+  it installs the Node packages on the first run. `widget build --watch` rebuilds on every save.
+- `widget update` fast-forwards the quantem.gpu and quantem.widget source checkouts on their own branches and builds;
+  it changes nothing when a checkout has local commits or edits in the way.
+- `environments/arina-pc.yml`: one conda environment (Python, Git, Node.js, JupyterLab, PyTorch for CUDA 13) for a
+  Windows PC with an NVIDIA card that runs both source checkouts.
+
 ### Show3DSlices and Show3D hold less memory, every value exact
 
 - Show3DSlices keeps a uint8, int8, uint16, int16 or float32 volume in its own type in the kernel (no copy), in

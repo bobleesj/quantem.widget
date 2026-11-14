@@ -350,6 +350,9 @@ class DirectSession:
         fit = getattr(direct, "_aberration_search", None)
         return {
             "backend": direct.backend, "scan_shape": tuple(int(size) for size in direct.scan_shape), "source_path": direct.source_path,
+            # the damped reconstructions solve on the dense bright-field spectrum: a session that reads the scan
+            # in batches (a device too small to hold that spectrum) shows the phase of the mean wave only
+            "dense_spectrum": getattr(direct, "_streamed", None) is None,
             "input_scan_shape": direct.input_scan_shape,
             "voltage_kV": direct.voltage_kV, "semiangle_mrad": direct.semiangle_mrad, "scan_sampling_A": list(direct.scan_sampling_A),
             "detector_sampling_mrad": None if direct.detector_sampling_mrad is None else list(direct.detector_sampling_mrad),
@@ -364,6 +367,8 @@ class DirectSession:
             # the kept fit's model agreement (higher is better) and its gain over standard direct ptychography; None before a fit
             "sample_agreement": _finite_or_none(getattr(fit, "sample_agreement", None)),
             "tilt_fit_gain": _finite_or_none(getattr(fit, "tilt_fit_gain", None)),
+            # the fit's half-band check of its higher orders (trusted, half_band_rms_rad, max_half_band_rms_rad), or None
+            "higher_order_consistency": (getattr(fit, "optimizer", None) or {}).get("higher_order_consistency"),
         }
 
     def trials(self) -> list[dict]:
@@ -716,6 +721,7 @@ class DirectSession:
         ``scan_detector_rotation_deg`` (the physical angle in [0, 360)),
         ``loss``, ``elapsed_s``, ``refinement`` (the optimizer a fit used, None
         without one), ``objective`` (what a fit optimized, None without one),
+        ``fit_scan_region`` (the region a fit read on a small device, else None),
         and with a sample model ``sample_tilt_mrad``,
         ``depth_spread_nm`` and ``tilt_fit_gain``.
         """
@@ -726,6 +732,8 @@ class DirectSession:
             "elapsed_s": None if result.elapsed_s is None else float(result.elapsed_s),
             "refinement": getattr(result, "refinement", None),
             "objective": getattr(result, "objective", None),
+            # the scan region a fit read when the device could not hold the whole scan's spectra, else None
+            "fit_scan_region": getattr(result, "fit_scan_region", None),
         }
         if result.sample_tilt_mrad is not None:
             fitted.update(sample_tilt_mrad=[float(value) for value in result.sample_tilt_mrad],

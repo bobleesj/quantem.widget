@@ -112,6 +112,21 @@ def nonzero_higher_order(aberrations: dict) -> dict:
             if float(aberrations.get(magnitude(name), 0.0)) != 0.0}
 
 
+def higher_order_note(check: dict | None) -> str:
+    """One line on a fit's higher orders from its half-band check: measured, or only bounded.
+
+    The fit refines the higher orders on two halves of the frequency band; when the halves disagree by more than the
+    limit over the aperture, the +-2 rad fit is shown and C21 to C56 are bounds, not measurements.
+    """
+    if not check:
+        return ""
+    rms, limit = float(check["half_band_rms_rad"]), float(check["max_half_band_rms_rad"])
+    if check["trusted"]:
+        return f"measured on this scan (two halves of the data agree to {rms:.2f} rad; {limit:g} or less counts)"
+    return (f"not measured on this scan: the values are placeholders within ±2 rad (two halves of the data "
+            f"disagree by {rms:.1f} rad; {limit:g} or less counts)")
+
+
 class ShowPtycho(anywidget.AnyWidget):
     """Ptychographic reconstruction viewer, and direct ptychography aberration explorer over a ``quantem.gpu.DirectPtycho`` session.
 
@@ -197,6 +212,9 @@ class ShowPtycho(anywidget.AnyWidget):
     scan region and fits it afresh, and every saved calibration and star names the file.
     """
 
+    # the LivePtycho that made this widget (ShowPtycho.live): a drawn region refits the live scan there
+    _live = None
+
     compute_loss = traitlets.Bool(False).tag(sync=True)
 
     local_tilt_selection_json = traitlets.Unicode("").tag(sync=True)
@@ -237,6 +255,8 @@ class ShowPtycho(anywidget.AnyWidget):
     fitted_loss = traitlets.Float(None, allow_none=True).tag(sync=True)
     # The kept fit's model agreement (higher is better) and its gain over standard direct ptychography, None before a fit.
     fitted_sample_agreement = traitlets.Float(None, allow_none=True).tag(sync=True)
+    # one line on the fitted higher orders, for the header of their collapsed panel (higher_order_note)
+    higher_order_note = traitlets.Unicode("").tag(sync=True)
     fitted_tilt_fit_gain = traitlets.Float(None, allow_none=True).tag(sync=True)
     fitted_scan_detector_rotation_deg = traitlets.Float(0.0).tag(sync=True)
     fitted_sample_json = traitlets.Unicode("{}").tag(sync=True)
@@ -291,6 +311,18 @@ class ShowPtycho(anywidget.AnyWidget):
     crop_refit_available = traitlets.Bool(False).tag(sync=True)
     crop_refit_status = traitlets.Unicode("").tag(sync=True)
     crop_refit_request_json = traitlets.Unicode("").tag(sync=True)
+    # a live panel (ShowPtycho.live): the scan region the aberrations were fitted on, drawn as a box the user drags;
+    # letting the box go sends the region back
+    # a live panel opens at a fixed image size with its controls beside the image (0 and False: the usual layout)
+    panel_px = traitlets.Int(0).tag(sync=True)
+    controls_beside = traitlets.Bool(False).tag(sync=True)
+    fit_region = traitlets.List(traitlets.Int(), []).tag(sync=True)
+    # the regions already fitted on a live scan, drawn as a strip of thumbnails: a click fits there again
+    fits_json = traitlets.Unicode("[]").tag(sync=True)
+    fits_phase = traitlets.Bytes(b"").tag(sync=True)  # their whole phases, float32, one after another
+    fits_action_json = traitlets.Unicode("").tag(sync=True)  # a star or a delete clicked on one of them
+    fit_region_status = traitlets.Unicode("").tag(sync=True)
+    fit_region_request_json = traitlets.Unicode("").tag(sync=True)
     # thick-sample direct ptychography: {"sample_tilt_mrad": [row, col], "depth_spread_nm"}; depth spread 0 is standard direct ptychography
     sample_json = traitlets.Unicode("{}").tag(sync=True)
     # Preview only: keep the fitted tilt when comparing against zero-tilt direct ptychography.
@@ -822,7 +854,7 @@ class ShowPtycho(anywidget.AnyWidget):
             self.local_tilt_can_fit = True
             self.local_tilt_can_reconstruct = True
         state = self._direct.state()
-        self.regularization_available = state["backend"] == "cuda"
+        self.regularization_available = state["backend"] == "cuda" and state.get("dense_spectrum", True)
         self._check_method()
         self._source_path = state["source_path"]
         self._source_scan_shape = state["input_scan_shape"]
@@ -878,6 +910,8 @@ class ShowPtycho(anywidget.AnyWidget):
         self.observe(self._on_panel_change, names=[
             "method", "phase_damp", "amplitude_damp", "smoothness_inv_A", "detector_weighting"])
         self.observe(self._on_crop_refit_request, names=["crop_refit_request_json"])
+        self.observe(self._on_fit_region_request, names=["fit_region_request_json"])
+        self.observe(self._on_fits_action, names=["fits_action_json"])
         self.observe(self._on_sample_fit_request, names=["sample_fit_request"])
         self._adopt_session(initial=True)
         self._launch_calibration = data.calibration()
@@ -1080,6 +1114,7 @@ class ShowPtycho(anywidget.AnyWidget):
                 self.fitted_C10_nm, self.fitted_C12_nm, self.fitted_phi12_deg = fitted["C10_nm"], fitted["C12_nm"], fitted["phi12_deg"]
                 self.fitted_loss = state["loss"]
                 self.fitted_sample_agreement = state.get("sample_agreement")
+                self.higher_order_note = higher_order_note(state.get("higher_order_consistency"))
                 self.fitted_tilt_fit_gain = state.get("tilt_fit_gain")
                 self.higher_order_aberrations_json = json.dumps({
                     key: value for key, value in fitted.items()
@@ -1375,6 +1410,24 @@ class ShowPtycho(anywidget.AnyWidget):
             f"Fifth-order fit: tilt ({tilt_row:+.1f}, {tilt_col:+.1f}) mrad · "
             f"depth spread {result['depth_spread_nm']:.1f} nm."
         )
+
+    def _on_fit_region_request(self, change) -> None:
+        """The fit box let go on a live panel: the live scan is fitted on the dragged region, and the panel redrawn."""
+        if not change["new"] or self._live is None:
+            return
+        try:
+            self._live.scan_region = tuple(int(value) for value in json.loads(change["new"])["scan_region"])
+        except ValueError as error:
+            self.fit_region_status = str(error)
+            return
+        self.fit_region_status = "fitting…"
+
+    def _on_fits_action(self, change) -> None:
+        """A star or a delete clicked on a kept fit of a live panel: the live panel's list changes, and is drawn."""
+        if not change["new"] or self._live is None:
+            return
+        action = json.loads(change["new"])
+        self._live.change_fit(action["action"], tuple(int(value) for value in action["scan_region"]))
 
     def _on_crop_refit_request(self, change) -> None:
         """Fit direct ptychography on one scan crop and make it the widget's session.
@@ -1676,6 +1729,35 @@ class ShowPtycho(anywidget.AnyWidget):
         self.crop_refit_available = False
         self.session_note = "Saved direct ptychography phase. Open a new direct ptychography review to edit aberrations."
         return self
+
+    @classmethod
+    def live(cls, viewer, *, scan_region: tuple[int, int, int, int] | None = None, trials: int = 200):
+        """Direct ptychography of each scan a ``Show4DSTEM.live`` viewer shows, in a panel below it.
+
+        Each new scan's aberrations through fifth order are fitted on a square scan region, the central 256 x 256
+        unless ``scan_region`` (row_start, row_stop, col_start, col_stop; 128, 256, 512 or 1024 per side) says
+        otherwise, and the whole scan's phase is shown at them in a ShowPtycho. The panel appears where the cell
+        runs; what is returned is its handle: ``handle.scan_region = (...)`` fits the shown scan there and every
+        later scan, ``handle.ptycho`` is the ShowPtycho of the scan shown, ``handle.close()`` stops it. The dashed box
+        on the phase is the fit region: drag it to fit there (256 or 128 scan positions a side). The viewer stays a viewer:
+        nothing in it changes.
+
+        Examples
+        --------
+        >>> viewer = Show4DSTEM.live("scans", latest=1)  # doctest: +SKIP
+        >>> ptycho = ShowPtycho.live(viewer)  # doctest: +SKIP
+        >>> ptycho.scan_region = (0, 256, 0, 256)  # doctest: +SKIP
+        """
+        from IPython import get_ipython
+        from IPython.display import display
+
+        from quantem.widget.showptycho.live import LivePtycho
+
+        live = LivePtycho(viewer, scan_region=scan_region, trials=trials)
+        shell = get_ipython()
+        if shell is not None and getattr(shell, "kernel", None) is not None:
+            display(live.panel)
+        return live
 
     def export(self, path: str | pathlib.Path | None = None, *, title: str | None = None) -> pathlib.Path:
         """Write a browser folder that reviews this direct ptychography with no kernel: ``index.html``, exact bright-field

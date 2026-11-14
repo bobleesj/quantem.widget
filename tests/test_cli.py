@@ -405,22 +405,22 @@ def test_user_errors_print_one_line_and_bugs_keep_their_traceback(tmp_path, monk
     monkeypatch.setattr(reader, "ceiling", lambda device=None: 1000)
     assert cli.main(["show4dstem", str(tmp_path / "scan.npy"), "--html", "--no-open", "--save-dir", str(tmp_path / "out")]) == 1
     lines = capsys.readouterr().err.splitlines()
-    assert lines[0].startswith("quantem-widget: skipped scan: scan.npy: the dense (4, 4, 8, 8) array needs")
-    assert lines[1:] == ["quantem-widget: every master failed to export (see messages above)"]
+    assert lines[0].startswith("widget: skipped scan: scan.npy: the dense (4, 4, 8, 8) array needs")
+    assert lines[1:] == ["widget: every master failed to export (see messages above)"]
     assert cli.main(["show4dstem", str(tmp_path / "missing_master.h5"), "--no-open"]) == 1
-    assert capsys.readouterr().err.startswith("quantem-widget: ")
+    assert capsys.readouterr().err.startswith("widget: ")
 
     def raises(error):
         def command(args):
             raise error
         return command
 
-    monkeypatch.setattr(cli, "_prepare_github", raises(ImportError("quantem-widget github needs Playwright: pip install playwright")))
+    monkeypatch.setattr(cli, "_prepare_github", raises(ImportError("widget github needs Playwright: pip install playwright")))
     assert cli.main(["github", str(tmp_path / "x.ipynb")]) == 1
-    assert capsys.readouterr().err == "quantem-widget: quantem-widget github needs Playwright: pip install playwright\n"
+    assert capsys.readouterr().err == "widget: widget github needs Playwright: pip install playwright\n"
     monkeypatch.setattr(cli, "_prepare_github", raises(MemoryError()))
     assert cli.main(["github", str(tmp_path / "x.ipynb")]) == 1
-    assert capsys.readouterr().err == "quantem-widget: MemoryError\n"
+    assert capsys.readouterr().err == "widget: MemoryError\n"
     for bug in (TypeError("unsupported operand"), ImportError("cannot import name 'x'", name="quantem.widget.show2d")):
         monkeypatch.setattr(cli, "_prepare_github", raises(bug))
         with pytest.raises(type(bug)):
@@ -792,7 +792,7 @@ def test_show4dstem_html_serve_reports_every_file_and_the_url_before_blocking(tm
 def test_show4dstem_serve_without_html_is_refused_in_one_line(tmp_path, capsys):
     """--serve only applies to an --html export; a notebook run must not ignore it silently."""
     assert cli.main(["show4dstem", str(tmp_path), "--serve", "--no-open"]) == 1
-    assert capsys.readouterr().err == "quantem-widget: --serve opens an --html export over HTTP; add --html.\n"
+    assert capsys.readouterr().err == "widget: --serve opens an --html export over HTTP; add --html.\n"
 
 
 def test_show4dstem_cli_html_bin_announces_the_detector_binning(tmp_path, monkeypatch, capsys):
@@ -949,7 +949,7 @@ def test_page_commands_refuse_in_one_line_naming_the_flag(tmp_path, capsys, argv
     argv = [arg.replace("{in}", str(tmp_path / "in")) for arg in argv]
     assert cli.main([*argv, "--no-open", "--save-dir", str(tmp_path / "out")]) == 1
     error = capsys.readouterr().err
-    assert error.startswith("quantem-widget: ") and message in error and error.count("\n") == 1
+    assert error.startswith("widget: ") and message in error and error.count("\n") == 1
     assert not list((tmp_path / "out").glob("*.html")) if (tmp_path / "out").exists() else True
 
 
@@ -976,3 +976,84 @@ def test_show2d_writes_color_images_and_refuses_them_as_uint8(tmp_path, capsys):
     assert _viewer_state(out / "color_8x8_exact.html", "color")["is_rgb"] == [True]
     assert cli.main(["show2d", str(rgb), "--encoding", "uint8", "--no-open", "--save-dir", str(out)]) == 1
     assert "full encoding (true color)" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("watch, expected", [(False, ["npm", "run", "build"]),
+                                             (True, ["npm", "run", "build", "--", "--watch"])])
+def test_build_runs_npm_in_the_checkout_and_installs_packages_once(monkeypatch, tmp_path, watch, expected):
+    """build finds the checkout from the package, runs npm ci only without node_modules, then the build."""
+    checkout = pathlib.Path(cli.__file__).resolve().parents[3]
+    calls = []
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "npm")
+    monkeypatch.setattr(cli.subprocess, "run", lambda command, cwd, env=None: calls.append((command, cwd)) or SimpleNamespace(returncode=0))
+    monkeypatch.setattr(pathlib.Path, "is_dir", lambda self: self.name != "node_modules")
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["build", "--watch"] if watch else ["build"]) == 0
+    assert calls == [(["npm", "ci"], checkout), (expected, checkout)]
+    calls.clear()
+    monkeypatch.setattr(pathlib.Path, "is_dir", lambda self: True)
+    assert cli.main(["build"]) == 0
+    assert calls == [(["npm", "run", "build"], checkout)]
+
+
+def test_build_says_what_is_missing(monkeypatch, capsys):
+    """No npm, or a wheel install with nothing to build: one line and exit 1, no traceback."""
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+    assert cli.main(["build"]) == 1
+    assert "Install Node.js 20 or newer" in capsys.readouterr().err
+    monkeypatch.setattr(pathlib.Path, "is_file", lambda self: False)
+    assert cli.main(["build"]) == 1
+    assert "installed from a wheel" in capsys.readouterr().err
+
+
+def _git(checkout, *arguments):
+    import subprocess
+    return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *arguments], cwd=checkout,
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+def test_update_fast_forwards_the_checkout_then_builds_and_refuses_a_diverged_one(monkeypatch, tmp_path, capsys):
+    """update pulls the checkout the package lives in on its own branch, builds, and leaves a diverged one alone."""
+    origin, checkout = tmp_path / "origin", tmp_path / "checkout"
+    origin.mkdir()
+    _git(origin, "init", "-q", "-b", "work")
+    (origin / "pyproject.toml").write_text("one")
+    _git(origin, "add", "."); _git(origin, "commit", "-q", "-m", "one")
+    _git(tmp_path, "clone", "-q", str(origin), str(checkout))
+    (origin / "notes.txt").write_text("two")
+    _git(origin, "add", "."); _git(origin, "commit", "-q", "-m", "two")
+    package = checkout / "src" / "quantem" / "widget"
+    package.mkdir(parents=True)
+    monkeypatch.setattr(cli, "__file__", str(package / "cli.py"))
+    monkeypatch.setattr(cli.importlib.util, "find_spec", lambda name: None)
+    builds = []
+    monkeypatch.setattr(cli, "_build", lambda args: builds.append(args.watch) or 0)
+    old, new = _git(checkout, "rev-parse", "--short", "HEAD"), _git(origin, "rev-parse", "--short", "HEAD")
+    assert cli.main(["update"]) == 0
+    out = capsys.readouterr().out
+    assert f"quantem.widget: work {old} -> {new}" in out and "quantem.gpu: not a source checkout here" in out
+    assert builds == [False] and "Restart the Jupyter kernel" in out
+    assert cli.main(["update"]) == 0
+    assert f"quantem.widget: work {new}, already newest" in capsys.readouterr().out
+    # a local commit and a new one upstream: no fast-forward exists, so nothing moves and nothing is built
+    (checkout / "local.txt").write_text("mine")
+    _git(checkout, "add", "local.txt"); _git(checkout, "commit", "-q", "-m", "mine")
+    (origin / "notes.txt").write_text("three")
+    _git(origin, "add", "."); _git(origin, "commit", "-q", "-m", "three")
+    mine = _git(checkout, "rev-parse", "HEAD")
+    assert cli.main(["update"]) == 1
+    assert "could not be fast-forwarded" in capsys.readouterr().err
+    assert _git(checkout, "rev-parse", "HEAD") == mine and builds == [False, False]
+
+
+def test_live_writes_a_notebook_that_shows_the_folder_live(tmp_path, capsys):
+    scans = tmp_path / "today"
+    scans.mkdir()
+    assert cli.main(["live", str(scans), "--latest", "1", "--pattern", "*.qem", "--no-open",
+                     "--save-dir", str(tmp_path / "out")]) == 0
+    notebook = json.loads((tmp_path / "out" / "live_today.ipynb").read_text())
+    assert "".join(notebook["cells"][1]["source"]) == (
+        "from quantem.widget import Show4DSTEM\n\n"
+        f"viewer = Show4DSTEM.live({str(scans.resolve())!r}, latest=1, pattern='*.qem')\nviewer\n")
+    assert cli.main(["live", str(tmp_path / "missing"), "--no-open"]) == 1
+    assert "is not a folder to show live" in capsys.readouterr().err

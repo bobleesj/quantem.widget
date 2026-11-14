@@ -8068,11 +8068,11 @@ function Show4DSTEM() {
       </Box>
       {/* Row 2: Color + Scale + Colorbar */}
       <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-        <Typography component="span" title="Colormap" sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted }}>Color</Typography>
+        <Typography component="span" aria-label="Colormap" title="Colormap" sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted }}>Color</Typography>
         <Select value={dpColormap} onChange={(event) => setDpColormap(String(event.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
           {COLORMAP_OPTIONS}
         </Select>
-        <Typography component="span" role="img" aria-label="Display scale" title="Display scale: changes the display only, never the counts" sx={{ ...themedTypography.label, fontSize: 13, lineHeight: 1 }}>◐</Typography>
+        <Typography component="span" aria-label="Display scale" title="Display scale: changes the display only, never the counts" sx={{ ...themedTypography.label }}>Scale</Typography>
         <Select value={dpScaleMode} onChange={(event) => setDpScaleMode(event.target.value as "linear" | "log")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
           <MenuItem value="linear">Lin</MenuItem>
           <MenuItem value="log">Log</MenuItem>
@@ -8237,11 +8237,11 @@ function Show4DSTEM() {
       </Box>
       {/* Row 2: Color + Scale */}
       <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-        <Typography component="span" title="Colormap" sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted }}>Color</Typography>
+        <Typography component="span" aria-label="Colormap" title="Colormap" sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted }}>Color</Typography>
         <Select value={viColormap} onChange={(event) => setViColormap(String(event.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
           {COLORMAP_OPTIONS}
         </Select>
-        <Typography component="span" role="img" aria-label="Display scale" title="Display scale: changes the display only, never the counts" sx={{ ...themedTypography.label, fontSize: 13, lineHeight: 1 }}>◐</Typography>
+        <Typography component="span" aria-label="Display scale" title="Display scale: changes the display only, never the counts" sx={{ ...themedTypography.label }}>Scale</Typography>
         <Select value={viScaleMode} onChange={(event) => setViScaleMode(event.target.value as "linear" | "log")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
           <MenuItem value="linear">Lin</MenuItem>
           <MenuItem value="log">Log</MenuItem>
@@ -9093,7 +9093,7 @@ function Show4DSTEM() {
                     <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: "1 1 220px", minWidth: 0, justifyContent: "center" }}>
                       {/* Row 1: Scale + Clip */}
                       <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                        <Typography component="span" role="img" aria-label="Display scale" title="Display scale: changes the display only, never the counts" sx={{ ...themedTypography.label, fontSize: 13, lineHeight: 1 }}>◐</Typography>
+                        <Typography component="span" aria-label="Display scale" title="Display scale: changes the display only, never the counts" sx={{ ...themedTypography.label }}>Scale</Typography>
                         <Select value={fftScaleMode} onChange={(event) => setFftScaleMode(event.target.value as "linear" | "log")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
                           <MenuItem value="linear">Lin</MenuItem>
                           <MenuItem value="log">Log</MenuItem>
@@ -9110,7 +9110,7 @@ function Show4DSTEM() {
                       </Box>
                       {/* Row 2: Color */}
                       <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                        <Typography component="span" title="Colormap" sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted }}>Color</Typography>
+                        <Typography component="span" aria-label="Colormap" title="Colormap" sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted }}>Color</Typography>
                         <Select value={fftColormap} onChange={(event) => setFftColormap(String(event.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
                           {COLORMAP_OPTIONS}
                         </Select>

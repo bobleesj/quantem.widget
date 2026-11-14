@@ -7,7 +7,7 @@ Three artifacts leave the kernel:
   image and ROI pattern with no Python.
 * ``report``: PNG virtual-image pages plus one diffraction thumbnail, no raw
   counts, so a folder of many datasets can be reviewed from one small file.
-* WebGPU bundle (``quantem-widget show4dstem --backend webgpu --html``): the page sits
+* WebGPU bundle (``widget show4dstem --backend webgpu --html``): the page sits
   beside the linked ``*_master.h5`` family and range-reads the compressed
   detector chunks itself; a ``Show4DSTEM.command`` starts the local server.
   ``write_qem_bundle`` does the same over ``.qem`` acquisitions, which the page
@@ -42,7 +42,7 @@ from quantem.widget.show4dstem.reader import read_pixel_mask
 from quantem.widget.show4dstem.session import DetectorSessionSource
 
 VALID_BINS = (1, 2, 4, 8)
-# packed counts one interactive page can hold (as ``quantem-widget show4dstem --html``): the page embeds their
+# packed counts one interactive page can hold (as ``widget show4dstem --html``): the page embeds their
 # gzip as one base64 string and a browser string holds about 512 MiB; 0.6 GB of uint8 made a 0.3 GB page
 HTML_PAYLOAD_LIMIT = 2 << 30
 # a suggested binning must bring the counts under this, so the page loads with room to spare

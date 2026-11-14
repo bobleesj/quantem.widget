@@ -10,14 +10,14 @@ sending a prompt. Do not paste credentials or private data into the prompt.
 ## Turn images into a shareable HTML page
 
 The most common request: "make these images into a page I can send or embed."
-`quantem-widget show2d` (separate images, one panel each) and
-`quantem-widget show3d` (a stack or frames to scrub) do it in one command,
+`widget show2d` (separate images, one panel each) and
+`widget show3d` (a stack or frames to scrub) do it in one command,
 with no notebook. The page is one self-contained `.html` file that opens
 offline, on a phone, or inside an `<iframe>`.
 
 ```bash
-quantem-widget show2d before.dm4 after.dm4 --labels before after --title "Anneal 300C" --no-open --save-dir ./share
-quantem-widget show3d ./drift_frames/ --title "Drift series" --no-open --save-dir ./share
+widget show2d before.dm4 after.dm4 --labels before after --title "Anneal 300C" --no-open --save-dir ./share
+widget show3d ./drift_frames/ --title "Drift series" --no-open --save-dir ./share
 # wrote ./share/drift_series_40x512x512_exact.html (55.4 MB, full float32)
 ```
 
@@ -36,8 +36,8 @@ What they are and what the reader should compare:
 
 Embed it in a page? <no, or the host page / report it goes into>
 
-Read docs/cli.md first. Use `quantem-widget show2d` for separate images (one
-panel each) and `quantem-widget show3d` for a stack or frames to scrub. Run it
+Read docs/cli.md first. Use `widget show2d` for separate images (one
+panel each) and `widget show3d` for a stack or frames to scrub. Run it
 with --no-open and --save-dir <a folder outside any source checkout>, set --title
 (it names the file) and --labels when the file names are not meaningful. Pass
 --sampling and --units when the files carry no calibration (TIFF, PNG, NPY),
@@ -57,7 +57,7 @@ you verified and what you did not.
 ```
 
 For many pages from a script, loop over the command: each run exits 0 with
-one `wrote ...` line, or exits 1 with one `quantem-widget: ...` line naming the
+one `wrote ...` line, or exits 1 with one `widget: ...` line naming the
 flag that fixes the problem.
 
 ## Open an ARINA H5 file in Show4DSTEM

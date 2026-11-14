@@ -25,7 +25,7 @@ Show4DSTEM(loaded)
 ```
 
 See [Show4DSTEM](../api/show4dstem.md#encoded-acquisitions) for the live
-behavior. These views need a kernel; `quantem-widget show4dstem --backend webgpu
+behavior. These views need a kernel; `widget show4dstem --backend webgpu
 --html` is the offline path, reading the HDF5 family in the browser.
 
 ## Building the shared backend
