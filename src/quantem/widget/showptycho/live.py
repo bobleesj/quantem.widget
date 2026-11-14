@@ -1,5 +1,6 @@
 """Direct ptychography of the scans a live Show4DSTEM shows (``ShowPtycho.live``)."""
 
+import gc
 import json
 import pathlib
 import tempfile
@@ -227,21 +228,55 @@ class LivePtycho:
                 self.viewer.refresh_stream()
                 try:
                     direct = self._fitted_session(dataset, region, rotation)
-                except (RuntimeError, MemoryError):
-                    if self._direct is None:
+                except (MemoryError, RuntimeError) as error:
+                    # CUDA and cuBLAS report a full device as runtime errors; any other runtime error is not retried
+                    if not isinstance(error, MemoryError) and not any(
+                            word in str(error).lower() for word in ("out of memory", "alloc_failed")):
                         raise
-                    # a small device has no room for the shown session beside the new one: the shown one goes first
+                    # A small device ran out. Two causes, both gone on a second try: the shown session beside the
+                    # new one (it goes first now), and the encoded scan still held for a moment by the viewer's own
+                    # drawing when the fit wanted its room (about every second fit at 3400 MiB free).
                     self._release_shown(f"<b>Direct ptycho</b> · {name} · fitting…")
+                    self.viewer._let_go_of_the_scan()
+                    gc.collect()
+                    gpu_adapter.gpu_release_cached_memory()
                     direct = self._fitted_session(dataset, region, rotation)
             except (ValueError, RuntimeError, MemoryError, OSError) as error:
                 self.status.value = (f"<b>Direct ptycho</b> could not fit {name}: {' '.join(str(error).split())} "
                                      "The viewer still shows the scan.")
                 return
             seconds = time.perf_counter() - started
+            try:
+                ptycho, note = self._panel(ShowPtycho, direct, name)
+            except (ValueError, RuntimeError, MemoryError) as error:
+                direct.close()
+                self.status.value = (f"<b>Direct ptycho</b> fitted {name} but could not show it: "
+                                     f"{' '.join(str(error).split())}")
+                return
             if path != self._path:
                 self.fits = []  # a new scan starts its own strip
-            self._show(ShowPtycho(direct, restore=False), direct, path, region,
-                       f"<b>Direct ptycho</b> · {name} · fitted in {seconds:.1f} s", keep_display=True)
+            self._show(ptycho, direct, path, region,
+                       f"<b>Direct ptycho</b> · {name} · fitted in {seconds:.1f} s{note}", keep_display=True)
+
+    def _panel(self, ShowPtycho, direct, name: str):
+        """A ShowPtycho on the fitted session ``direct`` and a note for the status line ("" unless reduced).
+
+        On a small device the upsampled phase may not fit beside the session shown: that one goes first; if it
+        still does not fit, the phase is shown at the scan's own sampling and the note says so.
+        """
+        try:
+            return ShowPtycho(direct, restore=False), ""
+        except MemoryError:
+            self._release_shown(f"<b>Direct ptycho</b> · {name} · fitting…")
+            gc.collect()
+            gpu_adapter.gpu_release_cached_memory()
+        try:
+            return ShowPtycho(direct, restore=False), ""
+        except MemoryError:
+            gc.collect()
+            gpu_adapter.gpu_release_cached_memory()
+        return (ShowPtycho(direct, restore=False, upsample=1),
+                " · shown at the scan's own sampling: no room on this GPU for the upsampled phase")
 
     def _show(self, ptycho, direct, path, region, status: str, *, keep_display: bool) -> None:
         """Make ``ptycho`` (on session ``direct``, of scan ``path``, fitted on ``region``) the panel shown.

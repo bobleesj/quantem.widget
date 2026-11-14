@@ -21,6 +21,9 @@ new `rcN` heading when that rc is published to TestPyPI.
   again. On a small device a refit lets the shown session go first when both do not fit.
   Phase and Complex are offered where the session holds the dense bright-field spectrum; a session that reads the
   scan in batches (a GPU too small for that spectrum) shows Phase of mean, chosen without a setting.
+- `ShowPtycho.live` on a small GPU: a refit lets the shown session go before the new panel is built, an upsampled
+  phase with no room is shown at the scan's own sampling with a line saying so, and a failure to show is the status
+  line (the panel no longer stays on "fitting").
 - `ShowPtycho.live(viewer)` shows direct ptychography of each scan a `Show4DSTEM.live` viewer shows, in a panel below
   it: the aberrations through fifth order are fitted on the central 256 x 256 scan region (or `scan_region=`, or a
   region drawn in the panel) and the whole scan's phase is shown. The viewer itself stays a viewer.
