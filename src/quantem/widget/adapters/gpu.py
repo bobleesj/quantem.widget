@@ -2,8 +2,8 @@
 
 quantem.gpu is optional (``quantem.widget[cuda]`` or ``quantem.widget[mps]``). This is the only
 module that imports it: encoded acquisitions from ``quantem.gpu.io.load``, their
-detector sessions, master discovery and inspection, direct ptychography, centre of mass and the
-release of cached GPU memory.
+detector sessions, master discovery and inspection, direct ptychography, centre of mass, the
+drift correction's Fourier shift and the release of cached GPU memory.
 Without quantem.gpu every name below is None, ``available()`` is False and a
 function that needs it raises ``ImportError`` with the install command; the
 widgets then read files densely with ``show4dstem.reader`` and reduce with
@@ -32,10 +32,12 @@ if module_installed("quantem.gpu"):
     from quantem.gpu.device import release_cached_memory as gpu_release_cached_memory
     from quantem.gpu.device import runtime_notice as gpu_runtime_notice
     from quantem.gpu.dpc import run as gpu_dpc_run
+    from quantem.gpu.drift.series import moved as gpu_moved
     from quantem.gpu.io import Dataset4dstem
 else:
     DirectPtycho = gpu_io = prepare = gpu_disk_edge_radius = gpu_bright_field_disk = gpu_release_cached_memory = None
     gpu_runtime_notice = gpu_dpc_run = Dataset4dstem = BRIGHT_FIELD_DISK_KEY = BRIGHT_FIELD_DISK_SCHEMA = None
+    gpu_moved = None
 
 
 def available() -> bool:

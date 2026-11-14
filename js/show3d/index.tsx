@@ -1388,6 +1388,7 @@ function Show3D() {
   const [cmap, setCmap] = useModelState<string>("cmap");
   const [thumbnails, setThumbnails] = useModelState<boolean>("thumbnails");
   const [thumbnailColumns, setThumbnailColumns] = useModelState<number>("thumbnail_columns");
+  const [newestFirst] = useModelState<boolean>("newest_first");
   // The model-backed setter can emit its React update after another synced
   // trait in the same control event. Direct WebGPU repaint paths must use the
   // palette selected by this event, not the palette from the previous render.
@@ -10428,6 +10429,83 @@ function Show3D() {
       </Box>
     </Box>
   ) : null;
+  // the intensity histogram + clip sliders (gray only), beside the Scale and Color rows
+  const histogramPanel = isRgb ? null : (() => {
+      // Global stack range from Python (data_min/data_max trait), not per-frame.
+      // Log mode: log1p the range so bins line up with the log-scaled frame data.
+      const { min: histMin, max: histMax } = resolveDisplayBounds(dataMin, dataMax, traitVmin, traitVmax, logScale);
+      if (perPanelHistogramEnabled) {
+        const visibleCount = Math.max(1, visiblePanelCount || 1);
+        const cols = panelColsForCount(visibleCount);
+        // Match Show2D shell exactly (width=110, height=58, gap=15px)
+        // so the per-panel histogram strip is visually consistent
+        // across widgets.
+        const panelHistWidth = 110;
+        const panelHistGap = 15;
+        const panelHistMaxWidth = cols * panelHistWidth + Math.max(0, cols - 1) * panelHistGap;
+        return (
+          <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "flex-start", gap: 0.5, opacity: 1, pointerEvents: "auto", maxWidth: "100%" }}>
+            <Box sx={{ display: "grid", gridTemplateColumns: `repeat(auto-fit, minmax(min(100%, ${panelHistWidth}px), ${panelHistWidth}px))`, gap: `${panelHistGap}px`, width: "100%", maxWidth: panelHistMaxWidth, justifyContent: "start" }}>
+            {visiblePanelIndices.map((panel) => {
+              const state = panelStates[panel] || initialState;
+              // Per-panel histogram uses THIS panel's data range
+              // (not stack-wide histMin/histMax). Tight-range
+              // modalities (direct ptychography phase) get a sensible slider
+              // space instead of being squashed by DF counts.
+              const panelDataRange = panelDataRanges[panel];
+              const panelRange = (panelDataRange && panelDataRange.max > panelDataRange.min) ? panelDataRange : { min: histMin, max: histMax };
+              const shown = shownHistogramWindow(panelRange.min, panelRange.max, state.imageVminPct, state.imageVmaxPct, flipSign);
+              return (
+                <Histogram
+                  key={`panel-hist-${panel}`}
+                  bins={shownPanelHistogramBins[panel] ?? null}
+                  vminPct={shown.vminPct}
+                  vmaxPct={shown.vmaxPct}
+                  onRangeChange={(min, max) => changePanelHistogramRange(panel, ...storedClipPercent(min, max, flipSign), true)}
+                  onRangePreview={(min, max) => changePanelHistogramRange(panel, ...storedClipPercent(min, max, flipSign), false)}
+                  onRangeCommit={(min, max) => changePanelHistogramRange(panel, ...storedClipPercent(min, max, flipSign), true)}
+                  width={110}
+                  height={58}
+                  valueDecimals={2}
+                  labelFontFamily={UI_FONT}
+                  theme={themeInfo.theme === "dark" ? "dark" : "light"}
+                  dataMin={shown.dataMin}
+                  dataMax={shown.dataMax}
+                />
+              );
+            })}
+            </Box>
+          </Box>
+        );
+      }
+      const shown = shownHistogramWindow(histMin, histMax, imageVminPct, imageVmaxPct, flipSign);
+      return (
+      <Box sx={{
+        // Match Show2D histogram shell exactly so visual stays consistent
+        // across widgets. alignItems: flex-end (not stretch) prevents the
+        // inner Slider thumbs from overflowing onto the canvas, which was
+        // the source of the "2.8 tooltip overlaps bars" overlap bug.
+        display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "flex-start", gap: 0.5,
+      }}>
+        <Histogram
+          bins={shownImageHistogramBins}
+          vminPct={shown.vminPct}
+          vmaxPct={shown.vmaxPct}
+          onRangeChange={(min, max) => commitImageHistogramRange(...storedClipPercent(min, max, flipSign))}
+          onRangePreview={(min, max) => previewImageHistogramRange(...storedClipPercent(min, max, flipSign))}
+          onRangeCommit={(min, max) => commitImageHistogramRange(...storedClipPercent(min, max, flipSign))}
+          width={110}
+          height={58}
+          valueDecimals={2}
+          labelFontFamily={UI_FONT}
+          theme={themeInfo.theme === "dark" ? "dark" : "light"}
+          dataMin={shown.dataMin}
+          dataMax={shown.dataMax}
+        />
+      </Box>
+      );
+  })();
+
   return (
     <Box
       ref={rootRef}
@@ -11446,6 +11524,7 @@ function Show3D() {
               driftBusy={driftBusy}
               driftStatus={driftStatus}
               drift={drift && Array.isArray((drift as { shift_px?: unknown }).shift_px) ? (drift as unknown as DriftReadout) : null}
+              newestFirst={!!newestFirst}
             />
           )}
           <Box
@@ -12101,51 +12180,57 @@ function Show3D() {
                 {/* True-color figure stacks: hide colormap / intensity / Smooth;
                     paper figures are already final pixels. */}
                 {!isRgb && (<>
-                {/* Row 1: Scale + Auto + Colorbar */}
-                <Box sx={{ ...controlRow, ...mobileControlRowSx, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                  <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Scale</Typography>
-                  <Select value={logScale ? "log" : "linear"} onChange={(e) => changeLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={themedMenuProps} inputProps={{ "aria-label": "Intensity scale (linear or logarithmic)" }}>
-                    <MenuItem value="linear">Lin</MenuItem>
-                    <MenuItem value="log">Log</MenuItem>
-                  </Select>
-                  <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }} title={perPanelHistogramEnabled ? "Stack-wide auto contrast. Turn off for independent panel clips." : "Automatic percentile-based contrast."}>
-                    {perPanelHistogramEnabled ? "Auto stack" : "Auto"}
-                  </Typography>
-                  <Switch checked={autoContrast} onChange={(e) => handleAutoContrastChange(e.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": perPanelHistogramEnabled ? "Toggle stack-wide automatic contrast" : "Toggle automatic percentile-based contrast" } }} />
-                  <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Colorbar</Typography>
-                  <Switch checked={showColorbar} onChange={(e) => setShowColorbar(e.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Toggle colorbar overlay" } }} />
-                </Box>
-                {/* Row 2: Color + Smooth + Diff */}
-                <Box sx={{ ...controlRow, ...mobileControlRowSx, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                  <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Color</Typography>
-                  <Select
-                    size="small"
-                    value={panelCmapFor(colorTargetPanel)}
-                    onChange={(e) => setCmapForPanel(
-                      colorTargetPanel,
-                      e.target.value,
-                    )}
-                    MenuProps={themedFastMenuProps}
-                    sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }}
-                    inputProps={{ "aria-label": nPanels > 1 ? (colorShared ? "Shared colormap for all panels" : "Selected panel colormap") : "Image colormap" }}
-                  >
-                    {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name} dense>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
-                  </Select>
-                  <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Smooth</Typography>
-                  <Switch checked={smooth} onChange={(e) => setSmooth(e.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Toggle bilinear smoothing" } }} />
-                  {!showDenoise && displayFilterBanner && (
-                    /* House rule: an active reduction is never invisible,
-                       even with the denoise controls row hidden. */
-                    <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.accent }} title={displayFilterBanner}>
-                      {displayFilterBanner.split(" (")[0]}
-                    </Typography>
-                  )}
-                  <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Diff</Typography>
-                  <Select value={diffMode} onChange={(e) => setDiffMode(e.target.value)} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={themedMenuProps} inputProps={{ "aria-label": "Difference mode (off, previous frame, first frame)" }}>
-                    <MenuItem value="off">Off</MenuItem>
-                    <MenuItem value="previous">Prev</MenuItem>
-                    <MenuItem value="first">First</MenuItem>
-                  </Select>
+                {/* Scale and Color rows, the histogram beside them as tall as both: no gap under the image */}
+                <Box sx={{ display: "flex", alignItems: "stretch", gap: `${SPACING.SM}px`, flexWrap: isMobileViewport ? "wrap" : "nowrap" }}>
+                  <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, minWidth: 0 }}>
+                    {/* Row 1: Scale + Auto + Colorbar */}
+                    <Box sx={{ ...controlRow, ...mobileControlRowSx, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
+                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Scale</Typography>
+                      <Select value={logScale ? "log" : "linear"} onChange={(e) => changeLogScale(e.target.value === "log")} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={themedMenuProps} inputProps={{ "aria-label": "Intensity scale (linear or logarithmic)" }}>
+                        <MenuItem value="linear">Lin</MenuItem>
+                        <MenuItem value="log">Log</MenuItem>
+                      </Select>
+                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }} title={perPanelHistogramEnabled ? "Stack-wide auto contrast. Turn off for independent panel clips." : "Automatic percentile-based contrast."}>
+                        {perPanelHistogramEnabled ? "Auto stack" : "Auto"}
+                      </Typography>
+                      <Switch checked={autoContrast} onChange={(e) => handleAutoContrastChange(e.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": perPanelHistogramEnabled ? "Toggle stack-wide automatic contrast" : "Toggle automatic percentile-based contrast" } }} />
+                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Colorbar</Typography>
+                      <Switch checked={showColorbar} onChange={(e) => setShowColorbar(e.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Toggle colorbar overlay" } }} />
+                    </Box>
+                    {/* Row 2: Color + Smooth + Diff */}
+                    <Box sx={{ ...controlRow, ...mobileControlRowSx, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
+                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Color</Typography>
+                      <Select
+                        size="small"
+                        value={panelCmapFor(colorTargetPanel)}
+                        onChange={(e) => setCmapForPanel(
+                          colorTargetPanel,
+                          e.target.value,
+                        )}
+                        MenuProps={themedFastMenuProps}
+                        sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }}
+                        inputProps={{ "aria-label": nPanels > 1 ? (colorShared ? "Shared colormap for all panels" : "Selected panel colormap") : "Image colormap" }}
+                      >
+                        {COLORMAP_NAMES.map((name) => (<MenuItem key={name} value={name} dense>{name.charAt(0).toUpperCase() + name.slice(1)}</MenuItem>))}
+                      </Select>
+                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Smooth</Typography>
+                      <Switch checked={smooth} onChange={(e) => setSmooth(e.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Toggle bilinear smoothing" } }} />
+                      {!showDenoise && displayFilterBanner && (
+                        /* House rule: an active reduction is never invisible,
+                           even with the denoise controls row hidden. */
+                        <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.accent }} title={displayFilterBanner}>
+                          {displayFilterBanner.split(" (")[0]}
+                        </Typography>
+                      )}
+                      <Typography sx={{ ...typography.label, fontSize: 10, color: themeColors.textMuted }}>Diff</Typography>
+                      <Select value={diffMode} onChange={(e) => setDiffMode(e.target.value)} size="small" sx={{ ...themedSelect, minWidth: 45, fontSize: 10 }} MenuProps={themedMenuProps} inputProps={{ "aria-label": "Difference mode (off, previous frame, first frame)" }}>
+                        <MenuItem value="off">Off</MenuItem>
+                        <MenuItem value="previous">Prev</MenuItem>
+                        <MenuItem value="first">First</MenuItem>
+                      </Select>
+                    </Box>
+                  </Box>
+                  {histogramPanel}
                 </Box>
                 {/* Row 3 (toggle-gated): display-only denoise for sparse map stacks (EDS, low dose) */}
                 {showDenoise && (
@@ -12328,82 +12413,6 @@ function Show3D() {
                   </Box>
                 </Box>
               </Box>
-              {/* Intensity histogram + clip sliders are gray-only (colormap window). */}
-              {!isRgb && (() => {
-                // Global stack range from Python (data_min/data_max trait), not per-frame.
-                // Log mode: log1p the range so bins line up with the log-scaled frame data.
-                const { min: histMin, max: histMax } = resolveDisplayBounds(dataMin, dataMax, traitVmin, traitVmax, logScale);
-                if (perPanelHistogramEnabled) {
-                  const visibleCount = Math.max(1, visiblePanelCount || 1);
-                  const cols = panelColsForCount(visibleCount);
-                  // Match Show2D shell exactly (width=110, height=58, gap=15px)
-                  // so the per-panel histogram strip is visually consistent
-                  // across widgets.
-                  const panelHistWidth = 110;
-                  const panelHistGap = 15;
-                  const panelHistMaxWidth = cols * panelHistWidth + Math.max(0, cols - 1) * panelHistGap;
-                  return (
-                    <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "flex-start", gap: 0.5, opacity: 1, pointerEvents: "auto", maxWidth: "100%" }}>
-                      <Box sx={{ display: "grid", gridTemplateColumns: `repeat(auto-fit, minmax(min(100%, ${panelHistWidth}px), ${panelHistWidth}px))`, gap: `${panelHistGap}px`, width: "100%", maxWidth: panelHistMaxWidth, justifyContent: "start" }}>
-                      {visiblePanelIndices.map((panel) => {
-                        const state = panelStates[panel] || initialState;
-                        // Per-panel histogram uses THIS panel's data range
-                        // (not stack-wide histMin/histMax). Tight-range
-                        // modalities (direct ptychography phase) get a sensible slider
-                        // space instead of being squashed by DF counts.
-                        const panelDataRange = panelDataRanges[panel];
-                        const panelRange = (panelDataRange && panelDataRange.max > panelDataRange.min) ? panelDataRange : { min: histMin, max: histMax };
-                        const shown = shownHistogramWindow(panelRange.min, panelRange.max, state.imageVminPct, state.imageVmaxPct, flipSign);
-                        return (
-                          <Histogram
-                            key={`panel-hist-${panel}`}
-                            bins={shownPanelHistogramBins[panel] ?? null}
-                            vminPct={shown.vminPct}
-                            vmaxPct={shown.vmaxPct}
-                            onRangeChange={(min, max) => changePanelHistogramRange(panel, ...storedClipPercent(min, max, flipSign), true)}
-                            onRangePreview={(min, max) => changePanelHistogramRange(panel, ...storedClipPercent(min, max, flipSign), false)}
-                            onRangeCommit={(min, max) => changePanelHistogramRange(panel, ...storedClipPercent(min, max, flipSign), true)}
-                            width={110}
-                            height={58}
-                            valueDecimals={2}
-                            labelFontFamily={UI_FONT}
-                            theme={themeInfo.theme === "dark" ? "dark" : "light"}
-                            dataMin={shown.dataMin}
-                            dataMax={shown.dataMax}
-                          />
-                        );
-                      })}
-                      </Box>
-                    </Box>
-                  );
-                }
-                const shown = shownHistogramWindow(histMin, histMax, imageVminPct, imageVmaxPct, flipSign);
-                return (
-                <Box sx={{
-                  // Match Show2D histogram shell exactly so visual stays consistent
-                  // across widgets. alignItems: flex-end (not stretch) prevents the
-                  // inner Slider thumbs from overflowing onto the canvas, which was
-                  // the source of the "2.8 tooltip overlaps bars" overlap bug.
-                  display: "flex", flexDirection: "column", alignItems: "flex-end", justifyContent: "flex-start", gap: 0.5,
-                }}>
-                  <Histogram
-                    bins={shownImageHistogramBins}
-                    vminPct={shown.vminPct}
-                    vmaxPct={shown.vmaxPct}
-                    onRangeChange={(min, max) => commitImageHistogramRange(...storedClipPercent(min, max, flipSign))}
-                    onRangePreview={(min, max) => previewImageHistogramRange(...storedClipPercent(min, max, flipSign))}
-                    onRangeCommit={(min, max) => commitImageHistogramRange(...storedClipPercent(min, max, flipSign))}
-                    width={110}
-                    height={58}
-                    valueDecimals={2}
-                    labelFontFamily={UI_FONT}
-                    theme={themeInfo.theme === "dark" ? "dark" : "light"}
-                    dataMin={shown.dataMin}
-                    dataMax={shown.dataMax}
-                  />
-                </Box>
-                );
-              })()}
             </Box>
           )}
           {/* Lens settings row (when Lens is active) */}

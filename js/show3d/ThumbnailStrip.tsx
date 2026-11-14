@@ -60,6 +60,8 @@ export type ThumbnailStripProps = {
   driftBusy?: boolean;
   /** The last Find drift result, drawn as a chart under the thumbnails. */
   drift?: DriftReadout | null;
+  /** The newest frame first (at the top), as a live stream needs; frame numbers and picking are unchanged. */
+  newestFirst?: boolean;
 };
 
 /**
@@ -95,6 +97,16 @@ export function ThumbnailStrip(props: ThumbnailStripProps) {
   const drawnKeys = React.useRef(new Map<number, string>());
   const [visible, setVisible] = React.useState<Set<number>>(() => new Set());
   const pointerInside = React.useRef(false);
+  // While the strip scrolls, thumbnails pass under the pointer: previewing each would redraw the big image dozens of
+  // times a second. Previews wait until the scrolling stops and the pointer moves over a thumbnail.
+  const scrollingUntil = React.useRef(0);
+  const hovered = React.useRef<number | null>(null);
+  const scrolling = () => performance.now() < scrollingUntil.current;
+  const preview = (frame: number) => {
+    if (scrolling() || hovered.current === frame) return;
+    hovered.current = frame;
+    props.onHover(frame);
+  };
   const cols = Math.max(1, Math.min(3, Math.round(columns) || 2));
   const cell = Math.floor((INNER_WIDTH - GAP * (cols - 1)) / cols);
   const aspect = Number.isFinite(imageAspect) && imageAspect > 0 ? imageAspect : 1;
@@ -116,22 +128,30 @@ export function ThumbnailStrip(props: ThumbnailStripProps) {
       setVisible(new Set(Array.from({ length: Math.min(frames, 60) }, (_, i) => i)));
       return;
     }
+    // near: drawn (well ahead of view, so a fast scroll finds them ready)
     const observer = new IntersectionObserver((entries) => {
       setVisible(prev => {
-        const next = new Set(prev);
+        let next: Set<number> | null = null;
         for (const entry of entries) {
           const frame = Number((entry.target as HTMLElement).dataset.frame);
-          if (entry.isIntersecting) { next.add(frame); continue; }
-          next.delete(frame);
-          // far out of view: give its textures back to the GPU, draw it again when it returns
-          const canvas = canvasRefs.current.get(frame);
-          if (canvas && drawnKeys.current.has(frame)) { props.release(canvas); drawnKeys.current.delete(frame); }
+          if (entry.isIntersecting === prev.has(frame)) continue;
+          next = next ?? new Set(prev);
+          if (entry.isIntersecting) next.add(frame); else next.delete(frame);
         }
-        return next;
+        return next ?? prev;                 // nothing changed: no re-render
       });
-    }, { root, rootMargin: "240px 0px" });
-    root.querySelectorAll<HTMLElement>("[data-frame]").forEach(el => observer.observe(el));
-    return () => observer.disconnect();
+    }, { root, rootMargin: "1200px 0px" });
+    // far: only well out of view does a thumbnail give its textures back to the GPU (drawn again on return)
+    const far = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) continue;
+        const frame = Number((entry.target as HTMLElement).dataset.frame);
+        const canvas = canvasRefs.current.get(frame);
+        if (canvas && drawnKeys.current.has(frame)) { props.release(canvas); drawnKeys.current.delete(frame); }
+      }
+    }, { root, rootMargin: "4000px 0px" });
+    root.querySelectorAll<HTMLElement>("[data-frame]").forEach(el => { observer.observe(el); far.observe(el); });
+    return () => { observer.disconnect(); far.disconnect(); };
   }, [frames, cols, props.unavailableReason]);
 
   // Draw the visible thumbnails that are missing or stale.
@@ -170,7 +190,7 @@ export function ThumbnailStrip(props: ThumbnailStripProps) {
       data-testid="show3d-thumbnail-strip"
       sx={{ width: THUMBNAIL_STRIP_WIDTH, height: totalHeight, flex: "0 0 auto", display: "flex", flexDirection: "column", border: `1px solid ${colors.border}`, boxSizing: "border-box" }}
       onPointerEnter={() => { pointerInside.current = true; }}
-      onPointerLeave={() => { pointerInside.current = false; props.onHover(null); }}
+      onPointerLeave={() => { pointerInside.current = false; hovered.current = null; props.onHover(null); }}
     >
       <Box sx={{ height: HEADER_HEIGHT, flex: "0 0 auto", display: "flex", alignItems: "center", gap: 0.75, px: "6px", borderBottom: `1px solid ${colors.border}` }}>
         <Typography sx={{ fontSize: 11, fontWeight: 600, color: colors.text }}>Frames</Typography>
@@ -198,19 +218,21 @@ export function ThumbnailStrip(props: ThumbnailStripProps) {
       {props.unavailableReason ? (
         <Typography sx={{ fontSize: 11, color: colors.textMuted, p: 1.25, lineHeight: 1.4 }}>{props.unavailableReason}</Typography>
       ) : (
-        <Box ref={scrollRef} sx={{ flex: "1 1 auto", minHeight: 0, overflowY: "auto", overscrollBehavior: "contain", scrollbarWidth: "thin", position: "relative" }}>
+        <Box ref={scrollRef} onScroll={() => { scrollingUntil.current = performance.now() + 150; }}
+          sx={{ flex: "1 1 auto", minHeight: 0, overflowY: "auto", overscrollBehavior: "contain", scrollbarWidth: "thin", position: "relative" }}>
           <Box sx={{
             // columns share the strip's last pixels, so no white sliver is left at the right edge
             display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gridAutoRows: `${cell}px`, gap: `${GAP}px`,
             width: "100%",
           }}>
-          {Array.from({ length: frames }, (_, frame) => {
+          {Array.from({ length: frames }, (_, position) => (props.newestFirst ? frames - 1 - position : position)).map((frame) => {
             const selected = frame === currentFrame;
             // frames count from 1 as the slider does; a label that is only the 0-based index adds nothing
-            const custom = labels?.[frame] && labels[frame] !== String(frame) ? labels[frame] : "";
+            const custom = labels?.[frame] && labels[frame] !== String(frame) && labels[frame] !== String(frame + 1) ? labels[frame] : "";   // never the number again
             return (
               <Box key={frame} data-frame={frame} title={custom ? `Frame ${frame + 1}: ${custom}` : `Frame ${frame + 1}`}
-                onPointerEnter={() => props.onHover(frame)}
+                onPointerEnter={() => preview(frame)}
+                onPointerMove={() => preview(frame)}
                 onClick={(event) => handleClick(event, frame)}
                 sx={{
                   position: "relative", height: cell, cursor: "pointer", bgcolor: "#000",

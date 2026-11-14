@@ -117,24 +117,29 @@ def _validated_float32(stack: np.ndarray, panel_name: str) -> np.ndarray:
     return stack_f32
 
 
-def drift_corrected(stack: np.ndarray, drift: Mapping, *, frame_times_s: Sequence[float] | None = None) -> np.ndarray:
-    """``stack`` with every frame moved back onto the first frame Find drift picked.
+def drift_corrected(stack: np.ndarray, drift: Mapping, *, frame_times_s: Sequence[float] | None = None,
+                    device: str | None = "auto") -> np.ndarray:
+    """``stack`` with every frame moved back onto the first frame Find drift picked, computed on the GPU.
 
     The picked frames move back by their measured ``shift_px``; the others by the fitted velocity,
     at their own time when ``frame_times_s`` gives one per frame, else at their frame index.
-    A Fourier shift: sub-pixel, and the edges wrap around.
+    A Fourier shift: sub-pixel, and the edges wrap around: quantem.gpu's ``drift.series.moved`` (float64, as
+    ``Drift.corrected``), on ``device`` (``"auto"``: CUDA, then Metal; the CPU only when there is no GPU).
 
     Examples
     --------
     >>> corrected = drift_corrected(frames, viewer.drift, frame_times_s=viewer.frame_times_s)  # doctest: +SKIP
     """
+    from quantem.widget.adapters import gpu as gpu_adapter
+    from quantem.widget.device import resolve_device
+
+    gpu_adapter.require("Find drift's drift-corrected panel")
     frames = [int(frame) for frame in drift["frames"]]
     measured = {frame: shift for frame, shift in zip(frames, drift["shift_px"])}
     velocity = np.asarray(drift.get("velocity_px_per_frame", (0.0, 0.0)), dtype=np.float64)
     per_second = drift.get("velocity_px_per_s")
     timed = frame_times_s is not None and len(frame_times_s) == stack.shape[0] and per_second is not None
-    rows = np.fft.fftfreq(stack.shape[1])[:, None]
-    cols = np.fft.fftfreq(stack.shape[2])[None, :]
+    target = torch.device(resolve_device(device))
     out = np.empty(stack.shape, dtype=np.float32)
     for frame in range(stack.shape[0]):
         if frame in measured:
@@ -143,9 +148,9 @@ def drift_corrected(stack: np.ndarray, drift: Mapping, *, frame_times_s: Sequenc
             shift = np.asarray(per_second, dtype=np.float64) * (frame_times_s[frame] - frame_times_s[frames[0]])
         else:
             shift = velocity * (frame - frames[0])
-        # the specimen moved by shift; f(r + shift) <-> F(k) exp(+2 pi i k . shift)
-        phase = np.exp(2j * np.pi * (rows * shift[0] + cols * shift[1]))
-        out[frame] = np.fft.ifft2(np.fft.fft2(stack[frame]) * phase).real
+        # the specimen moved by shift; moved() gives image(r - d), so back by -shift
+        image = torch.as_tensor(np.ascontiguousarray(stack[frame], dtype=np.float32), device=target)
+        out[frame] = gpu_adapter.gpu_moved(image, -shift).cpu().numpy()
     return out
 
 
@@ -227,6 +232,10 @@ class Show3D(
         the viewer and the data keep native pixels.
     thumbnail_columns : {1, 2, 3}, default 2
         Thumbnails across the strip; the strip header switches it too.
+    newest_first : bool, optional
+        The newest frame at the top of the thumbnail strip, so frames that arrive live need no scrolling; on with
+        ``mode="stream"``, off otherwise unless given. Only the strip's order changes: frame numbers, the slider
+        and the frames picked for Find drift stay as they are.
     show_fft : bool
         Show the FFT of the current frame.
     fft_layout : {"bottom", "right", "overlay"}
@@ -440,6 +449,8 @@ class Show3D(
     # Frame thumbnails in a scrollable strip left of the viewer: hover shows a frame, click goes to it.
     thumbnails = traitlets.Bool(False).tag(sync=True)
     thumbnail_columns = traitlets.Int(2).tag(sync=True)
+    # the newest frame at the top of the strip, as a live stream needs (no scrolling down to what just arrived)
+    newest_first = traitlets.Bool(False).tag(sync=True)
 
     @traitlets.validate("thumbnail_columns")
     def _validate_thumbnail_columns(self, proposal: dict) -> int:
@@ -719,9 +730,16 @@ class Show3D(
 
     @traitlets.observe("drift")
     def _show_drift_corrected(self, change: dict) -> None:
-        """Show the frames moved back by a Find drift result as a "drift corrected" panel on the right."""
+        """Show the frames moved back by a Find drift result as a "drift corrected" panel on the right.
+
+        Not in a live stream (``Show3D.stream`` appending frames): the panel would replace its one stack, and the
+        next append would stop the stream. There the drift chart and velocity show; the corrected panel is for a
+        viewer of frames already taken.
+        """
         drift = change["new"] or {}
         if not drift.get("shift_px") or self.is_rgb or self._data is None:
+            return
+        if getattr(self, "_stream_worker", None) is not None:      # still streaming: keep appending (end_stream() ends it)
             return
         if self._drift_source is None:
             if self.n_panels > 1:
@@ -798,6 +816,7 @@ class Show3D(
         avg_window: int = 1,
         thumbnails: bool | None = None,
         thumbnail_columns: int = 2,
+        newest_first: bool | None = None,
         show_fft: bool = False,
         fft_layout: str = "bottom",
         fft_overlay_zoom: float = 1.0,
@@ -901,6 +920,7 @@ class Show3D(
             self.avg_window = int(avg_window)
             self.thumbnails = stream_mode if thumbnails is None else bool(thumbnails)
             self.thumbnail_columns = thumbnail_columns
+            self.newest_first = stream_mode if newest_first is None else bool(newest_first)
             self.show_fft = bool(show_fft)
             self.fft_layout = fft_layout
             self.fft_overlay_zoom = fft_overlay_zoom
@@ -1240,7 +1260,7 @@ class Show3D(
         "percentile_high", "percentile_low", "image_vmin_pct", "image_vmax_pct", "contrast_preset",
         "vmin", "vmax", "link_contrast", "link_panels", "view_state", "vmin_per_panel", "vmax_per_panel",
         "show_title", "show_stats", "show_controls", "controls_collapsed", "columns",
-        "panel_gap_px", "show_panel_titles", "show_zoom_indicator", "thumbnails", "thumbnail_columns", "show_fft", "fft_layout",
+        "panel_gap_px", "show_panel_titles", "show_zoom_indicator", "thumbnails", "thumbnail_columns", "newest_first", "show_fft", "fft_layout",
         "fft_overlay_position", "fft_overlay_size", "fft_overlay_zoom", "show_kymograph", "fft_window",
         "pixel_size", "pixel_unit", "smooth", "image_rotation", "rotation_scope", "frame_rotations",
         "flip_horizontal", "flip_vertical", "flip_sign", "frame_flip_signs", "show_scale_bar", "panel_width_px", "fps", "avg_window",

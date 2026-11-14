@@ -119,8 +119,9 @@ class Show3DStream:
             return bool(self._stream_pending)
 
     def _stream_wait_sent(self, timeout: float = 5.0) -> bool:
-        """Wait until every appended frame has left the worker (tests and scripts)."""
-        return self._stream_worker.wait_idle(self._stream_has_pending, timeout)
+        """Wait until every appended frame has left the worker (tests and scripts); an ended stream has."""
+        worker = self._stream_worker
+        return True if worker is None else worker.wait_idle(self._stream_has_pending, timeout)
 
     def _stream_flush(self) -> None:
         """Publish all pending frames as one transfer when a credit is free."""
@@ -250,6 +251,24 @@ class Show3DStream:
             self._stream_interaction_at = time.monotonic()
         with lock:
             super().set_state(sync_data)
+
+    def end_stream(self, timeout: float = 10.0) -> bool:
+        """The stream is complete: send what is still queued, then stop appending.
+
+        After this the viewer is one of frames already taken: Find drift adds its drift-corrected panel again
+        (while frames arrive it shows only the chart, since the panel would stop the stream). Returns False,
+        and keeps streaming, when queued frames did not leave within ``timeout`` seconds.
+
+        >>> viewer.end_stream()  # doctest: +SKIP
+        """
+        worker = self._stream_worker
+        if worker is None:
+            return True
+        if not worker.wait_idle(self._stream_has_pending, timeout):
+            return False
+        worker.stop()
+        self._stream_worker = None
+        return True
 
     def close(self) -> None:
         """Stop the stream worker, then close the widget comm."""
