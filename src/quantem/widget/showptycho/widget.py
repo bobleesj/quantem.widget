@@ -317,6 +317,10 @@ class ShowPtycho(anywidget.AnyWidget):
     panel_px = traitlets.Int(0).tag(sync=True)
     controls_beside = traitlets.Bool(False).tag(sync=True)
     fit_region = traitlets.List(traitlets.Int(), []).tag(sync=True)
+    # the regions already fitted on a live scan, drawn as a strip of thumbnails: a click fits there again
+    fits_json = traitlets.Unicode("[]").tag(sync=True)
+    fits_phase = traitlets.Bytes(b"").tag(sync=True)  # their whole phases, float32, one after another
+    fits_action_json = traitlets.Unicode("").tag(sync=True)  # a star or a delete clicked on one of them
     fit_region_status = traitlets.Unicode("").tag(sync=True)
     fit_region_request_json = traitlets.Unicode("").tag(sync=True)
     # thick-sample direct ptychography: {"sample_tilt_mrad": [row, col], "depth_spread_nm"}; depth spread 0 is standard direct ptychography
@@ -907,6 +911,7 @@ class ShowPtycho(anywidget.AnyWidget):
             "method", "phase_damp", "amplitude_damp", "smoothness_inv_A", "detector_weighting"])
         self.observe(self._on_crop_refit_request, names=["crop_refit_request_json"])
         self.observe(self._on_fit_region_request, names=["fit_region_request_json"])
+        self.observe(self._on_fits_action, names=["fits_action_json"])
         self.observe(self._on_sample_fit_request, names=["sample_fit_request"])
         self._adopt_session(initial=True)
         self._launch_calibration = data.calibration()
@@ -1416,6 +1421,13 @@ class ShowPtycho(anywidget.AnyWidget):
             self.fit_region_status = str(error)
             return
         self.fit_region_status = "fitting…"
+
+    def _on_fits_action(self, change) -> None:
+        """A star or a delete clicked on a kept fit of a live panel: the live panel's list changes, and is drawn."""
+        if not change["new"] or self._live is None:
+            return
+        action = json.loads(change["new"])
+        self._live.change_fit(action["action"], tuple(int(value) for value in action["scan_region"]))
 
     def _on_crop_refit_request(self, change) -> None:
         """Fit direct ptychography on one scan crop and make it the widget's session.

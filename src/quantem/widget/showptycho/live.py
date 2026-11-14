@@ -1,15 +1,22 @@
 """Direct ptychography of the scans a live Show4DSTEM shows (``ShowPtycho.live``)."""
 
+import json
+import pathlib
 import threading
 import time
 
 import ipywidgets
+import numpy as np
 
 from quantem.widget.adapters import gpu as gpu_adapter
 
 # The side of the square scan region the aberrations are fitted on: the fit's sides are 128, 256, 512 or 1024.
 FIT_REGION_SIDE = 256
 FIT_REGION_SIDES = (128, 256, 512, 1024)
+# The fits of one scan kept for the strip, newest last: each holds its whole phase (4 MB at 1024 x 1024).
+FITS_KEPT = 6
+# What a new panel of the same viewer keeps from the one before it: the reader's display choices.
+KEPT_DISPLAY = ("cmap", "initial_fft_on", "method", "phase_damp", "amplitude_damp")
 
 
 def central_region(scan_shape, side: int = FIT_REGION_SIDE) -> tuple[int, int, int, int] | None:
@@ -29,8 +36,11 @@ class LivePtycho:
     256 x 256 unless set) and its whole phase is shown in a ShowPtycho below a one-line status. The fit holds the
     live folder, so no scan loads or leaves under it; when the next scan arrives the panel and its session close
     before the viewer lets the old scan go. ``scan_region = (row_start, row_stop, col_start, col_stop)`` fits the
-    shown scan there, and every later scan; dragging the panel's fit box does the same. ShowPtycho.live returns
-    it, already shown where the cell ran; it is not drawn again.
+    shown scan there, and every later scan; dragging the panel's fit box does the same. Each region fitted on the
+    shown scan is kept in ``fits`` with its defocus, astigmatism and a thumbnail of its phase, drawn as a strip
+    under the controls once there are two: hovering one shows its phase, a click fits there again, its star marks
+    it and its cross drops it. ``save()`` writes the shown fit and the kept regions to ``<scan>.json``. ShowPtycho.live returns it, already shown
+    where the cell ran; it is not drawn again.
     """
 
     def __init__(self, viewer, *, scan_region=None, trials: int = 200):
@@ -44,6 +54,7 @@ class LivePtycho:
         self._path = None  # the scan it shows
         self._rotation = None  # its fitted scan rotation, kept by refits of the same scan
         self._lock = threading.Lock()  # one fit at a time
+        self.fits: list[dict] = []  # the regions fitted on the scan shown, oldest first
         self.status = ipywidgets.HTML("<b>Direct ptycho</b> · waiting for the first scan")
         self.panel = ipywidgets.VBox([self.status])
         folder.listeners.append(self)
@@ -72,6 +83,46 @@ class LivePtycho:
         if path == self._path:
             self._close_panel("<b>Direct ptycho</b> · waiting for the next scan")
 
+    def save(self, save_dir=None) -> pathlib.Path:
+        """Write the calibration shown to ``<scan>.json``: the scan's own name, in ``save_dir`` (the live folder
+        unless given).
+
+        The file is the record ``ShowPtycho.calibration()`` returns for the panel as it stands (aberrations
+        through fifth order, sample tilt, scan rotation, acquisition), with ``scan`` (the scan's file name),
+        ``scan_region`` (where the aberrations were fitted) and ``fits``: every region kept in the strip with its
+        defocus, astigmatism and star. Saving again replaces the file.
+
+        Examples
+        --------
+        >>> ptycho.save()
+        """
+        with self._lock:
+            if self.ptycho is None:
+                raise ValueError("save() writes the fit shown; no scan is fitted yet.")
+            name = self._path.name.removesuffix("_master.h5").removesuffix(".qem")
+            path = pathlib.Path(self.folder.folder if save_dir is None else save_dir) / f"{name}.json"
+            shown = tuple(self.ptycho.fit_region) or None
+            payload = {**self.ptycho.calibration(), "scan": self._path.name, "scan_region": shown,
+                       "fits": [{key: value for key, value in kept.items() if key != "phase"}
+                                for kept in self.fits]}
+            path.write_text(json.dumps(payload, indent=2))
+        self.status.value = f"{self.status.value.split(' · saved')[0]} · saved {path.name}"
+        return path
+
+    def change_fit(self, action: str, scan_region) -> None:
+        """Star (``"star"``, a toggle) or drop (``"delete"``) the kept fit of ``scan_region``; the shown fit stays."""
+        scan_region = tuple(int(value) for value in scan_region)
+        with self._lock:
+            if self.ptycho is None:
+                return
+            if action == "star":
+                for kept in self.fits:
+                    if kept["scan_region"] == scan_region:
+                        kept["starred"] = not kept["starred"]
+            elif scan_region != tuple(self.ptycho.fit_region):
+                self.fits = [kept for kept in self.fits if kept["scan_region"] != scan_region]
+            self._send_fits(self.ptycho)
+
     def close(self) -> None:
         """Stop following the viewer and close the panel's session."""
         if self in self.folder.listeners:
@@ -96,8 +147,6 @@ class LivePtycho:
                 if path not in self.folder.paths:
                     return  # it left before the folder let this fit start
                 dataset = self.folder.datasets[self.folder.paths.index(path)]
-            # the viewer adopts the scan now, so its calibration is this scan's
-            self.viewer.refresh_stream()
             region = self._region or central_region(dataset.shape[:2])
             name = path.name.removesuffix("_master.h5").removesuffix(".qem")
             self.status.value = f"<b>Direct ptycho</b> · {name} · fitting…"
@@ -106,7 +155,16 @@ class LivePtycho:
             rotation = self._rotation if path == self._path else None
             started = time.perf_counter()
             try:
-                direct = self._fitted_session(dataset, region, rotation)
+                # the viewer adopts the scan now, so its calibration is this scan's
+                self.viewer.refresh_stream()
+                try:
+                    direct = self._fitted_session(dataset, region, rotation)
+                except (RuntimeError, MemoryError):
+                    if self._direct is None:
+                        raise
+                    # a small device has no room for the shown session beside the new one: the shown one goes first
+                    self._release_shown(f"<b>Direct ptycho</b> · {name} · fitting…")
+                    direct = self._fitted_session(dataset, region, rotation)
             except (ValueError, RuntimeError, MemoryError, OSError) as error:
                 self.status.value = (f"<b>Direct ptycho</b> could not fit {name}: {' '.join(str(error).split())} "
                                      "The viewer still shows the scan.")
@@ -119,9 +177,18 @@ class LivePtycho:
             # the box drawn on the phase: where the aberrations were fitted, dragged to fit elsewhere
             ptycho.fit_region = list(region or ())  # a scan fitted whole has no box to move
             previous = self.ptycho, self._direct
+            if previous[0] is not None:
+                # the colormap, FFT inset and reconstruction method chosen on the panel before stay chosen
+                for choice in KEPT_DISPLAY:
+                    setattr(ptycho, choice, getattr(previous[0], choice))
+            elif ptycho.regularization_available:
+                ptycho.method = "phase"  # a live panel opens on the damped phase; Complex is its other choice
+            if path != self._path:
+                self.fits = []  # a new scan starts its own strip
             self.ptycho, self._direct, self._path = ptycho, direct, path
             self._rotation = float(direct.scan_detector_rotation_deg)
             self.status.value = f"<b>Direct ptycho</b> · {name} · fitted in {seconds:.1f} s"
+            self._record(ptycho, region)
             self.panel.children = (self.status, ptycho)
             self._close(*previous)
 
@@ -142,11 +209,44 @@ class LivePtycho:
 
     def _close_panel(self, status: str) -> None:
         with self._lock:
-            previous = self.ptycho, self._direct
-            self.ptycho = self._direct = self._path = None
-            self.status.value = status
-            self.panel.children = (self.status,)
-            self._close(*previous)
+            self._release_shown(status)
+            self._path = None
+            self.fits = []
+
+    def _record(self, ptycho, region) -> None:
+        """Keep this fit of the shown scan and hand the panel every fit kept: ``fits_json`` and ``fits_phase``.
+
+        A scan fitted whole has no region to go back to and keeps none. A region fitted again replaces its earlier
+        entry, so ``fits`` holds each region once, in the order first fitted; beyond ``FITS_KEPT`` the oldest goes.
+        Each entry keeps the whole phase at its own pixels, so the panel can show it again without fitting.
+        """
+        if region is None:
+            return
+        region = tuple(int(value) for value in region)
+        fit = {"scan_region": region, "C10_nm": float(ptycho.fitted_C10_nm), "C12_nm": float(ptycho.fitted_C12_nm),
+               "phi12_deg": float(ptycho.fitted_phi12_deg), "starred": False,
+               "phase": np.array(ptycho._last_phase, dtype=np.float32)}  # a copy: the panel goes on drawing its own
+        earlier = [index for index, kept in enumerate(self.fits) if kept["scan_region"] == region]
+        if earlier:
+            self.fits[earlier[0]] = {**fit, "starred": self.fits[earlier[0]]["starred"]}
+        else:
+            self.fits = [*self.fits, fit][-FITS_KEPT:]
+        self._send_fits(ptycho)
+
+    def _send_fits(self, ptycho) -> None:
+        """Hand ``ptycho`` the kept fits: their records as ``fits_json``, their phases as ``fits_phase``."""
+        with ptycho.hold_sync():
+            ptycho.fits_phase = b"".join(kept["phase"].tobytes() for kept in self.fits)
+            ptycho.fits_json = json.dumps([{**{name: value for name, value in kept.items() if name != "phase"},
+                                            "shape": list(kept["phase"].shape)} for kept in self.fits])
+
+    def _release_shown(self, status: str) -> None:
+        """Close the panel shown and its session, leaving the status line; the scan stays the one fitted."""
+        previous = self.ptycho, self._direct
+        self.ptycho = self._direct = None
+        self.status.value = status
+        self.panel.children = (self.status,)
+        self._close(*previous)
 
     @staticmethod
     def _close(ptycho, direct) -> None:
@@ -173,3 +273,4 @@ class LivePtycho:
                                            and 0 <= col_start and col_stop <= scan_shape[1]):
             raise ValueError(f"scan_region={tuple(region)} must lie inside the {scan_shape[0]} x {scan_shape[1]} scan.")
         return (row_start, row_stop, col_start, col_stop)
+

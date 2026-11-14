@@ -251,6 +251,9 @@ type FFTPlacement = "panel" | "inset";
 type FFTInsetBox = { x: number; y: number };
 type GPUColormapSlot = 0 | 1 | 2;
 
+// The side of a fit's thumbnail, in phase pixels: drawn at half that on screen, sharp on a 2x display.
+const FIT_THUMBNAIL_PX = 168;
+
 interface PinnedEntry {
   id: number;
   C10_nm: number;
@@ -1779,7 +1782,7 @@ function Explore() {
   const [calibrationSavedAt] = useModelState<string>("calibration_saved_at");
   const [calibrationStatus] = useModelState<string>("calibration_status");
   const [trialsJson] = useModelState<string>("trials_json");
-  const [initialFftOn] = useModelState<boolean>("initial_fft_on");
+  const [initialFftOn, setInitialFftOn] = useModelState<boolean>("initial_fft_on");
   const [higherOrderJsonModel, setHigherOrderJson] = useModelState<string>("higher_order_aberrations_json");
   const [webgpuPreviewEnabled] = useModelState<boolean>("webgpu_preview_enabled");
   const [webgpuCalJson] = useModelState<string>("webgpu_cal_json");
@@ -1793,6 +1796,28 @@ function Explore() {
   const [, setCropRefitRequestJson] = useModelState<string>("crop_refit_request_json");
   // a live panel (ShowPtycho.live): the scan region the aberrations were fitted on, and the request to fit another
   const [fitRegion] = useModelState<number[]>("fit_region");
+  // the regions already fitted on this live scan, [{scan_region, C10_nm, C12_nm, shape}], and their whole phases,
+  // float32, one after another: a thumbnail is the middle of its fit region, hovering one shows its whole phase
+  const [fitsJson] = useModelState<string>("fits_json");
+  const [fitsPhase] = useModelState<DataView>("fits_phase");
+  const [, setFitsActionJson] = useModelState<string>("fits_action_json");
+  const fits = React.useMemo(() => {
+    let kept: { scan_region: number[]; C10_nm: number; C12_nm: number; starred: boolean; shape: number[] }[] = [];
+    try { kept = JSON.parse(fitsJson || "[]"); } catch { return []; }
+    const all = fitsPhase ? extractFloat32(fitsPhase) : null;
+    if (!all || all.length !== kept.reduce((sum, fit) => sum + fit.shape[0] * fit.shape[1], 0)) return [];
+    let offset = 0;
+    return kept.map(fit => {
+      const [h, w] = fit.shape, data = all.subarray(offset, offset + h * w);
+      offset += h * w;
+      const side = Math.min(FIT_THUMBNAIL_PX, h, w), scale = h / (scanRows || h);
+      const row = Math.max(0, Math.min(h - side, Math.round((fit.scan_region[0] + fit.scan_region[1]) / 2 * scale - side / 2)));
+      const col = Math.max(0, Math.min(w - side, Math.round((fit.scan_region[2] + fit.scan_region[3]) / 2 * scale - side / 2)));
+      const middle = new Float32Array(side * side);
+      for (let line = 0; line < side; line++) middle.set(data.subarray((row + line) * w + col, (row + line) * w + col + side), line * side);
+      return { ...fit, data, w, h, middle, side };
+    });
+  }, [fitsJson, fitsPhase, scanRows]);
   const [fitRegionStatus] = useModelState<string>("fit_region_status");
   const [, setFitRegionRequestJson] = useModelState<string>("fit_region_request_json");
   const [fitRegionDraft, setFitRegionDraft] = React.useState<number[] | null>(null);
@@ -2071,6 +2096,11 @@ function Explore() {
   const [fftAutoContrast, setFftAutoContrast] = React.useState(true);
   const [thumbSize, setThumbSize] = React.useState<ThumbSize>("M");
   const cmapRef = React.useRef(cmap); cmapRef.current = cmap;
+  // each kept fit drawn with the colormap and contrast window chosen for the phase, so the strip follows both
+  const fitThumbnails = React.useMemo(() => fits.map(fit => {
+    const lut = COLORMAPS[cmap as keyof typeof COLORMAPS] || COLORMAPS.inferno;
+    return renderPhaseOffscreen(fit.middle, fit.side, fit.side, lut, contrastRange[0], contrastRange[1]).canvas?.toDataURL() ?? "";
+  }), [fits, cmap, contrastRange]);
   const fftCmapRef = React.useRef(fftCmap); fftCmapRef.current = fftCmap;
   const contrastRef = React.useRef(contrastRange); contrastRef.current = contrastRange;
   const fftContrastRef = React.useRef(fftContrastRange); fftContrastRef.current = fftContrastRange;
@@ -2091,6 +2121,7 @@ function Explore() {
   // above it and this panel fit one screen; the controls drop below the image when the window is narrow
   const [panelPx] = useModelState<number>("panel_px");
   const [controlsBeside] = useModelState<boolean>("controls_beside");
+  React.useEffect(() => { if (controlsBeside) setFFTPlacement("inset"); }, [controlsBeside]);
   React.useEffect(() => { if (panelPx > 0) setPanel(panelPx); }, [panelPx]);
   const shownPanelRef = React.useRef(DEFAULT_PANEL);
   // content width of the widget root (its parent's width less the root padding)
@@ -3814,6 +3845,19 @@ function Explore() {
     renderAll(entry.phaseData, entry.w, entry.h);
   }, [renderAll]);
 
+  // Hovering a kept fit shows its whole phase in the panel; leaving shows the current one again. A look, not a
+  // choice: nothing is fitted or changed until the thumbnail is clicked.
+  const beforeFitPreview = React.useRef<{ data: Float32Array; w: number; h: number } | null>(null);
+  const previewFit = React.useCallback((fit: { data: Float32Array; w: number; h: number }) => {
+    if (!beforeFitPreview.current) beforeFitPreview.current = rawPhaseRef.current;
+    renderAll(fit.data, fit.w, fit.h);
+  }, [renderAll]);
+  const endFitPreview = React.useCallback(() => {
+    const before = beforeFitPreview.current;
+    beforeFitPreview.current = null;
+    if (before) renderAll(before.data, before.w, before.h);
+  }, [renderAll]);
+
   /* --- Keyboard: shortcuts act only while this widget has focus --- */
   // Scoped to the root (as in Show2D/Show3D) so typing in notebook cells, CodeMirror
   // editors and other widgets is never intercepted.
@@ -4351,18 +4395,16 @@ function Explore() {
         </Typography>}
 
         {tuning && <Box sx={controlBand(tc)}>
-          {/* a live panel shows the phase of the mean wave only: no method to choose */}
-          {!controlsBeside && <>
           <Typography sx={typography.label}>Reconstruction</Typography>
           <Select size="small" value={reconstructionControls.method}
             inputProps={{ "aria-label": "Reconstruction method" }}
             onChange={event => changeReconstruction({ method: event.target.value }, true)}
             sx={{ ...typography.label, height: 28 }}>
-            <MenuItem value="phase_of_mean">Phase of mean</MenuItem>
+            {/* a live panel offers the two damped reconstructions; Phase of mean only where they cannot run */}
+            {!(controlsBeside && regularizationAvailable) && <MenuItem value="phase_of_mean">Phase of mean</MenuItem>}
             <MenuItem value="phase" disabled={!regularizationAvailable || webgpuStandalone || !!localTiltJson}>Phase</MenuItem>
-            <MenuItem value="complex" disabled={!regularizationAvailable || webgpuStandalone || !!localTiltJson}>Amplitude + phase</MenuItem>
+            <MenuItem value="complex" disabled={!regularizationAvailable || webgpuStandalone || !!localTiltJson}>{controlsBeside ? "Complex" : "Amplitude + phase"}</MenuItem>
           </Select>
-          </>}
               <Typography sx={{ ...typography.label, fontSize: 10 }}>Color</Typography>
               <Select
                 value={cmap} onChange={(e) => setCmap(e.target.value)}
@@ -4373,18 +4415,28 @@ function Explore() {
                   <MenuItem key={n} value={n}>{n.charAt(0).toUpperCase() + n.slice(1)}</MenuItem>
                 ))}
               </Select>
+              <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, whiteSpace: "nowrap" }}>
               <Typography sx={{ ...typography.label, fontSize: 10 }} title="Auto-contrast: snap histogram clip to 1–99 percentile on every new reconstruction. Dragging the histogram slider flips this OFF.">Auto</Typography>
               <Switch
                 checked={autoContrast}
                 onChange={(e) => { const on = e.target.checked; setAutoContrast(on); if (on) setContrastRange([1, 99]); }}
                 size="small" sx={switchStyles.small}
               />
+              </Box>
+              <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, whiteSpace: "nowrap" }}>
               <Typography sx={{ ...typography.label, fontSize: 10 }} title="CSS bilinear interpolation on the phase canvas. Same data, browser softens pixel grid. Useful when upscaling small phase images on a large canvas.">Smooth</Typography>
               <Switch
                 checked={smooth}
                 onChange={(_, checked) => setSmooth(checked)}
                 size="small" sx={switchStyles.small}
               />
+              </Box>
+              {/* a live panel has no room for a second image: its FFT is an inset on the phase, dragged where wanted */}
+              {controlsBeside && <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, whiteSpace: "nowrap" }}>
+                <Typography sx={{ ...typography.label, fontSize: 10 }} title="Fourier transform of the phase, drawn as an inset on it; drag the inset to move it.">FFT</Typography>
+                <Switch checked={showFFT} onChange={(_, checked) => { setShowFFT(checked); setInitialFftOn(checked); }}
+                  slotProps={{ input: { "aria-label": "FFT inset" } }} size="small" sx={switchStyles.small} />
+              </Box>}
           {reconstructionControls.method !== "phase_of_mean" && <>
             {(["phase_damp", ...(reconstructionControls.method === "complex" ? ["amplitude_damp"] : [])] as const).map(key => {
               const name = key as "phase_damp" | "amplitude_damp";
@@ -4393,7 +4445,7 @@ function Explore() {
                 onDrag={next => changeReconstruction({ [name]: next }, false, false)}
                 onCommit={next => changeReconstruction({ [name]: next }, true)} />;
             })}
-            <Typography sx={typography.labelSmall}>Live CUDA reconstruction · phase image</Typography>
+            {!controlsBeside && <Typography sx={typography.labelSmall}>Live CUDA reconstruction · phase image</Typography>}
           </>}
           {previewError && <Typography role="alert" sx={{ ...typography.label, color: "#ef4444" }}>{previewError}</Typography>}
         </Box>}
@@ -4606,28 +4658,28 @@ function Explore() {
         }}>
           {([
             {
-              key: "c10" as AberKey, label: "C10", unit: "nm", value: c10, displayPrec: 1,
+              key: "c10" as AberKey, label: controlsBeside ? "Defocus C10" : "C10", unit: "nm", value: c10, displayPrec: 1,
               tipFull: "C10: defocus.  Positive = overfocus, negative = underfocus.  The dominant aberration.",
               min: c10UiMin, max: c10UiMax, step: 0.1,
               setValue: (value: number) => { holdSliderValue("c10", value); sendDrag(value, sliderVals.current.c12, sliderVals.current.phi12); },
               commitValue: (value: number) => { commitSliderValue("c10", value); if (shouldCommitOnReleaseRef.current) sendCommit(value, sliderVals.current.c12, sliderVals.current.phi12); },
             },
             {
-              key: "c12" as AberKey, label: "C12", unit: "nm", value: c12, displayPrec: 1,
+              key: "c12" as AberKey, label: controlsBeside ? "Astigmatism C12" : "C12", unit: "nm", value: c12, displayPrec: 1,
               tipFull: "C12: 2-fold astigmatism magnitude.  Paired with φ₁₂.",
               min: c12UiMin, max: c12UiMax, step: 0.1,
               setValue: (value: number) => { holdSliderValue("c12", value); sendDrag(sliderVals.current.c10, value, sliderVals.current.phi12); },
               commitValue: (value: number) => { commitSliderValue("c12", value); if (shouldCommitOnReleaseRef.current) sendCommit(sliderVals.current.c10, value, sliderVals.current.phi12); },
             },
             {
-              key: "phi12" as AberKey, label: "φ₁₂", unit: "°", value: phi12, displayPrec: 0,
+              key: "phi12" as AberKey, label: controlsBeside ? "Angle φ₁₂" : "φ₁₂", unit: "°", value: phi12, displayPrec: 0,
               tipFull: "φ₁₂: angle of 2-fold astigmatism.  Meaningful when C12 ≠ 0.",
               min: phi12UiMin, max: phi12UiMax, step: 1,
               setValue: (value: number) => { holdSliderValue("phi12", value); sendDrag(sliderVals.current.c10, sliderVals.current.c12, value); },
               commitValue: (value: number) => { commitSliderValue("phi12", value); if (shouldCommitOnReleaseRef.current) sendCommit(sliderVals.current.c10, sliderVals.current.c12, value); },
             },
             {
-              key: "rot" as AberKey, label: "scan-det rot", unit: "°", value: rotationDeg ?? 0, displayPrec: 1,
+              key: "rot" as AberKey, label: controlsBeside ? "Scan rotation" : "scan-det rot", unit: "°", value: rotationDeg ?? 0, displayPrec: 1,
               tipFull: "Scan-detector rotation: angle between scan axes and detector axes.  Sweep to find the sharpest reconstruction.",
               min: rotationUiMin, max: rotationUiMax, step: 0.1,
               setValue: (value: number) => {
@@ -4661,7 +4713,7 @@ function Explore() {
           })}
           <Tooltip title="Negate the displayed phase.  The direct ptychography phase is defined only up to ± (sign-ambiguous).  Use this to match the expected contrast of your sample.  Display only: it does not re-run reconstruction or change any fitted number (display_negate_phase)." placement="top" arrow>
             <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, cursor: "help" }}>
-              <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>Negate phase (display)</Typography>
+              <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>{controlsBeside ? "Invert phase" : "Negate phase (display)"}</Typography>
               <Switch disabled={regionalMode} checked={!!displayNegatePhase} onChange={(_, checked) => setDisplayNegatePhase(checked)} size="small" />
             </Box>
           </Tooltip>
@@ -4719,7 +4771,7 @@ function Explore() {
         {/* Single compact action row: PLAY + PIN + SAVE CALIBRATION.
             Dropdowns live inline.  Wraps to a second line only
             on narrow widgets (below ~520 px panel size). */}
-        <Box sx={controlBand(tc)}>
+        <Box sx={{ ...controlBand(tc), ...(controlsBeside ? { display: "none" } : {}) }}>
           <Tooltip title={playing ? "Pause sweep (Space)" : "Play: sweep the selected aberration (Space)"} placement="top" arrow>
             <IconButton
               size="small"
@@ -4859,6 +4911,51 @@ function Explore() {
                 <Button size="small" onClick={() => void deleteFolderSave(record)} sx={{ ...compactButton(tc), minWidth: 30, color: STATUS_BAD }}>✕</Button>
               </Box>
             ))}
+          </Box>
+        )}
+
+        {/* a live scan's earlier fits: thumbnails touching, the shown one outlined; a click fits there again */}
+        {controlsBeside && fits.length > 1 && (
+          <Box data-showptycho-fits sx={{ display: "flex", flexWrap: "wrap", alignItems: "flex-start", gap: 0 }}>
+            {fits.map((fit, fitIndex) => {
+              const [rowStart, rowStop, colStart] = fit.scan_region;
+              const shown = !!fitRegion && fit.scan_region.every((value, index) => value === fitRegion[index]);
+              const where = `${rowStop - rowStart} × ${rowStop - rowStart} at row ${rowStart}, col ${colStart}`;
+              const corner = { position: "absolute", top: 0, width: 20, height: 20, p: 0, border: 0, cursor: "pointer",
+                font: "13px/20px sans-serif", color: "#fff", background: "rgba(0,0,0,.62)" } as const;
+              const act = (action: string) => (event: React.MouseEvent) => {
+                event.stopPropagation();
+                if (action === "delete") endFitPreview();
+                setFitsActionJson(JSON.stringify({ id: Date.now(), action, scan_region: fit.scan_region }));
+              };
+              return (
+                <Box key={fit.scan_region.join(",")} role="button" tabIndex={0} aria-label={`Fit region ${where}`} aria-disabled={shown}
+                  title={`${where} · C10 ${fit.C10_nm.toFixed(1)} nm · C12 ${fit.C12_nm.toFixed(1)} nm${shown ? " · shown" : " · hover to look, click to fit here again"}`}
+                  onClick={() => { if (!shown) requestFitRegion(fit.scan_region); }}
+                  onKeyDown={(event: React.KeyboardEvent) => { if (event.key === "Enter" && !shown) requestFitRegion(fit.scan_region); }}
+                  onMouseEnter={() => previewFit(fit)} onMouseLeave={endFitPreview}
+                  onFocus={() => previewFit(fit)} onBlur={endFitPreview}
+                  sx={{ position: "relative", width: 84, height: 84,
+                    cursor: shown ? "default" : "pointer", outline: shown ? `2px solid ${tc.accent}` : "none",
+                    outlineOffset: "-2px", zIndex: shown ? 1 : 0,
+                    "& [data-fit-corner]": { opacity: 0 }, "&:hover [data-fit-corner], & [data-fit-on]": { opacity: 1 } }}>
+                  <Box component="img" src={fitThumbnails[fitIndex]} alt="" draggable={false}
+                    sx={{ width: "100%", height: "100%", display: "block" }} />
+                  <Box component="button" type="button" data-fit-corner {...(fit.starred ? { "data-fit-on": true } : {})}
+                    aria-label={fit.starred ? "Remove star" : "Star this fit"} aria-pressed={fit.starred}
+                    title={fit.starred ? "Starred: marked in the saved file. Click to remove the star." : "Star this fit: marked in the saved file"}
+                    onClick={act("star")} sx={{ ...corner, left: 0, color: fit.starred ? "#ffd54a" : "#fff" }}>
+                    {fit.starred ? "★" : "☆"}
+                  </Box>
+                  {!shown && <Box component="button" type="button" data-fit-corner aria-label="Delete this fit"
+                    title="Delete this fit from the strip" onClick={act("delete")} sx={{ ...corner, right: 0 }}>×</Box>}
+                  <Box component="span" sx={{ position: "absolute", left: 0, right: 0, bottom: 0, px: "3px", textAlign: "left",
+                    font: "10px/14px ui-monospace, monospace", color: "#fff", background: "rgba(0,0,0,.62)", whiteSpace: "nowrap" }}>
+                    C10 {fit.C10_nm.toFixed(1)} nm
+                  </Box>
+                </Box>
+              );
+            })}
           </Box>
         )}
 

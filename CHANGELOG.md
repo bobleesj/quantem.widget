@@ -10,6 +10,14 @@ new `rcN` heading when that rc is published to TestPyPI.
   complete, the newest `latest` stay loaded, and the oldest is released before the next one loads. When the device
   cannot hold `latest` scans it keeps fewer and says so. The viewer appears where the cell runs and nothing is saved.
   `widget live <folder>` writes the notebook.
+- `ShowPtycho.live`: each region fitted on the shown scan is kept (six at most) and drawn as a strip of thumbnails
+  under the controls, with the colormap and contrast of the phase. Hovering one shows its whole phase again, leaving
+  returns to the current one, a click fits there again; a star (top left) marks it and a cross (top right) drops it.
+  `ptycho.save()` writes the fit shown and every kept region to `<scan>.json` in the live folder (or `save_dir`).
+- `ShowPtycho.live`: the panel opens on the damped Phase reconstruction, with Complex as the other choice, an FFT
+  switch that draws the transform as a draggable inset on the phase, and plain slider names (Defocus C10,
+  Astigmatism C12, Scan rotation). The colormap, FFT and reconstruction chosen stay chosen when the region is fitted
+  again. On a small device a refit lets the shown session go first when both do not fit.
 - `ShowPtycho.live(viewer)` shows direct ptychography of each scan a `Show4DSTEM.live` viewer shows, in a panel below
   it: the aberrations through fifth order are fitted on the central 256 x 256 scan region (or `scan_region=`, or a
   region drawn in the panel) and the whole scan's phase is shown. The viewer itself stays a viewer.

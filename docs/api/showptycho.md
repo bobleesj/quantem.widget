@@ -294,6 +294,15 @@ viewer = Show4DSTEM.live(folder, latest=1, semiangle_mrad=30)
 ptycho = ShowPtycho.live(viewer)
 ```
 
+Each region fitted on the shown scan is kept as a thumbnail under the controls: hover one to look at its phase
+again, click it to fit there again, star it or drop it with the corner buttons. When the fit looks right, a third
+cell saves it under the scan's own name:
+
+```python
+ptycho.save()  # <scan>.json in the live folder: the fit shown and every region kept
+```
+
+
 The second cell shows a panel below the viewer. Each scan that arrives is fitted through fifth order on a square scan
 region, the central 256 x 256 unless you choose another, and its whole phase is shown in a ShowPtycho at the fitted
 aberrations; a status line above it says which scan, which region and how long the fit took. When the next scan
