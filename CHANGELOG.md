@@ -13,8 +13,12 @@ new `rcN` heading when that rc is published to TestPyPI.
   stack (100 MB) the kernel holds 3 MB instead of 908 MB for the widget, the page 130 MB of arrays instead of
   432 MB and the GPU 202 MB instead of 504 MB, with identical pixels. New synced trait `volume_dtype`;
   `volume_bytes` is a view of the volume.
-- Show3D syncs its stack as a view of its array instead of a second copy: 507 MB instead of 907 MB in the kernel
-  on the same stack.
+- Show3D keeps a uint8, int8, uint16 or int16 stack in its own type in the kernel (no copy), in the page and
+  on the GPU, and converts only the frames it draws (exact): on the same stack 129 MB instead of 907 MB in the
+  kernel, 295 MB of page arrays instead of 446 MB and 117 MB on the GPU instead of 403 MB, with identical
+  pixels. A float32 stack is synced as a view instead of a second copy. An unbinned HTML export keeps the
+  integer type as well. Appending to an integer stack with
+  `Show3D.stream` continues in float32.
 - Volume uploads no longer pad rows to 256 bytes and go to the GPU a few slices at a time; a volume deeper than
   256 slices or wider than 2048 voxels stays in a texture.
 - Numbers and method: `docs/2026-11-13-show3d-memory.md`.
@@ -30,6 +34,23 @@ new `rcN` heading when that rc is published to TestPyPI.
   draws drafts while it moves and one full frame when it rests; past 700 ms per frame it keeps the draft's
   pixel density with half the ray steps and says so once in the console.
 
+### Fixed
+
+- A standalone Show3DSlices page (from `export_html`) had no Export button: it showed only with a Python
+  kernel attached. It now shows Export as a Show3D page does, with "HTML exact float32" (the dtype of the
+  volume), which saves the page itself with its embedded volume, byte for byte, and the current view (slice,
+  colormap, contrast, cut). A page exported with `encoding="uint8"` offers "HTML encoded uint8".
+- Show3DSlices stopped playback when the oblique cut was grabbed (its line, an end, the Angle or Position
+  slider). Playback now keeps running through the drag; when it plays the cut itself (Side or All), the cut
+  stays where the hand holds it and moves on after release. Playing All also left the top slice frozen
+  (each step of the cut reset it); both now move together. Show3D's Profile line already kept playing while
+  dragged; a browser test now covers both viewers.
+- Show3DSlices dropped Smooth while the slice moved on a zoomed-in panel: dragging or stepping the slice
+  slider, or playing, painted each slice with the nearest source pixel, and the panel stayed blocky after
+  the first step. With Smooth on it now paints as the panel at rest does (the native slice, scaled with
+  bilinear smoothing); with Smooth off it stays sharp. Show3D keeps Smooth at rest, zoomed, stepping and
+  playing.
+
 ## rc44 - 2026-11-11
 
 Needs quantem.gpu rc18 (`[cuda]` and `[mps]` extras).
@@ -43,6 +64,17 @@ Needs quantem.gpu rc18 (`[cuda]` and `[mps]` extras).
   `orthographic` are keywords.
 - `quantem-widget show3dslices volume.npy --sampling SLICE_A ROW_A COL_A --units A` writes the offline page, with
   `--view`, `--volume-opacity`, `--slice-plane-opacity`, `--orthographic`, `--slice-stretch`, `--encoding`.
+
+### Touch, pen and lighter playback
+
+- Show3D plays with a third of the main-thread work: stats, histogram and star state commit once a second
+  while playing, and the slider, counters and frame labels are written every frame. Under a 4x CPU throttle
+  one frame costs 4.1 ms for one 512 px panel and 5.3 ms for three (was 12 ms and 18.7 ms).
+- Resize grips follow a finger and a pen in Show3D, Show2D, Show3DSlices (volume and axis panels), ShowPtycho
+  and Show4DSTEM, and Show3D's profile height and Show4DSTEM's profile bars too: they listened to mouse events
+  only. On touch screens the 16 px grip takes a 44 px hit area.
+- Show3D by finger: a one-finger touch draws a Profile, places and moves the ROI and moves the Lens; the fps
+  slider is wider and slider thumbs are larger on touch screens. The ROI hint says drag.
 
 ### Renamed: SSB is direct ptychography (no aliases)
 

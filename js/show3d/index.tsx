@@ -44,12 +44,15 @@ import { drawScaleBarHiDPI, drawFFTScaleBarHiDPI, drawScaleBarInRegion, drawZoom
 import { angstromsPerUnit, unitSymbol } from "../units";
 import {
   applyStandaloneWidgetViewState,
+  asFloat32,
   downloadBlob,
   extractFloat32,
+  extractVolumeArray,
   formatNumber,
   preserveRestoredWidgetModelsOnSave,
   standaloneHtmlWithCurrentWidgetState,
   standaloneWidgetStaticHtmlFromDocument,
+  type VolumeArray,
 } from "../format";
 import { useHideStaticFallback } from "../staticFallback";
 import { findDataRange, applyLogScale, applyLogScaleInPlace, percentileClip, signedLog1p, sliderRange, computeStats } from "../display/stats";
@@ -115,6 +118,7 @@ import { type PanelAnnotationSpec, type PanelOverlaySpec, type OverlaySelection,
 import { Histogram } from "../shared/Histogram";
 import { applyDisplayFilterBrowser, browserFilterSupported, filterKnobsActive } from "../display/filter";
 import { COLORMAPS, COLORMAP_NAMES, applyColormap, displayNormalize, renderToOffscreen, renderToOffscreenReuse, createGPUColormapEngine, GPUColormapEngine } from "../display/colormaps";
+import type { IntegerFrame } from "../display/colormapEngine";
 import { histogramBins } from "../display/cpuColormap";
 import { getGPUInfo, getHardwareGPUDevice, onGPULost, webGPULostReason } from "../display/device";
 import { findDrift, DRIFT_LIVE_FRAMES } from "./drift";
@@ -308,6 +312,26 @@ type CursorInfo = {
   value: number;
   panelIdx: number;
 };
+
+// Bytes of one value of the stack: the kernel sends float32, or the stack's own integer type.
+const STACK_VALUE_BYTES: Record<string, number> = { float32: 4, uint8: 1, int8: 1, uint16: 2, int16: 2 };
+
+// Frames of an integer stack converted to float32 and kept, in bytes. The stack itself stays in its own
+// type (one or two bytes per pixel); a float32 stack needs no such cache, its frames are views.
+const NATIVE_FRAME_CACHE_BYTES = 128 * 1024 * 1024;
+
+/**
+ * Frame `frameIdx` of a packed (frames, values) stack of `dtype`, in its own type and without a copy
+ * (a copy only when the bytes are misaligned for the type); null when the frame runs past the buffer.
+ * Index it directly, or pass it to `asFloat32` for float32 values (integers convert exactly).
+ */
+function stackFrameView(stack: DataView, dtype: string, frameIdx: number, valueCount: number): VolumeArray | null {
+  const valueBytes = STACK_VALUE_BYTES[dtype] ?? 4;
+  const byteStart = frameIdx * valueCount * valueBytes;
+  const byteLength = valueCount * valueBytes;
+  if (byteStart < 0 || byteStart + byteLength > stack.byteLength) return null;
+  return extractVolumeArray(new Uint8Array(stack.buffer as ArrayBuffer, stack.byteOffset + byteStart, byteLength), dtype, valueCount);
+}
 
 /**
  * Float32 view of frame `frameIdx` in a packed (frames, pixels) float32 stack,
@@ -592,6 +616,10 @@ function Show3D() {
   // Show3D.stream appends arrive as frame messages; the trait stays as Python last sent it.
   const streamedFloatStack = useStreamFrames(model);
   const offlineFloatStack = streamedFloatStack ?? modelFloatStack;
+  // Sample type of that stack: streamed frames are float32; the trait says what the kernel packed.
+  const [modelStackDtype] = useModelState<string>("_stack_dtype");
+  const stackDtype = streamedFloatStack || !(modelStackDtype in STACK_VALUE_BYTES) ? "float32" : modelStackDtype;
+  const stackValueBytes = STACK_VALUE_BYTES[stackDtype];
   const [offlineMin] = useModelState<number>("_offline_min");
   const [offlineMax] = useModelState<number>("_offline_max");
   const [offlineMins] = useModelState<number[]>("_offline_mins");
@@ -631,20 +659,22 @@ function Show3D() {
     const frameCount = Math.max(1, Math.round(nSlices || 1));
     const pixelCount = Math.max(1, Math.round(width || 0) * Math.round(height || 0));
     if (pixelCount <= 0) return 0;
-    if (offlineFloatStack && offlineFloatStack.byteLength > 0) return frameCount;
+    const exactStack = !!offlineFloatStack && offlineFloatStack.byteLength > 0;
+    if (exactStack && stackDtype === "float32") return frameCount;
     const bytesPerFrame = Math.max(1, pixelCount * (isRgb ? 3 : 1) * 4);
-    const budgetFrames = Math.max(1, Math.floor(OFFLINE_FRAME_CACHE_BYTES / bytesPerFrame));
+    const budgetFrames = Math.max(1, Math.floor((exactStack ? NATIVE_FRAME_CACHE_BYTES : OFFLINE_FRAME_CACHE_BYTES) / bytesPerFrame));
     const minFrames = bytesPerFrame <= OFFLINE_FRAME_CACHE_BYTES / OFFLINE_FRAME_CACHE_MIN_FRAMES
       ? OFFLINE_FRAME_CACHE_MIN_FRAMES
       : 1;
     return Math.max(1, Math.min(frameCount, Math.max(minFrames, budgetFrames)));
-  }, [offlineFloatStack, width, height, nSlices, isRgb]);
+  }, [offlineFloatStack, stackDtype, width, height, nSlices, isRgb]);
   React.useEffect(() => {
     offlineFrameCacheRef.current.clear();
     offlineFramePrewarmSerialRef.current++;
   }, [
     offlineStack,
     offlineFloatStack,
+    stackDtype,
     offlineMin,
     offlineMax,
     offlineMins,
@@ -674,8 +704,22 @@ function Show3D() {
     const floatsPerFrame = channels * width * height;
     const pixelCount = width * height;
     if (offlineFloatStack && offlineFloatStack.byteLength > 0 && floatsPerFrame > 0) {
-      const f32 = float32FrameFromDataView(offlineFloatStack, liveSliceIdx, floatsPerFrame, false);
-      if (f32) return new DataView(f32.buffer, f32.byteOffset, f32.byteLength);
+      if (stackDtype === "float32") {
+        const f32 = float32FrameFromDataView(offlineFloatStack, liveSliceIdx, floatsPerFrame, false);
+        if (f32) return new DataView(f32.buffer, f32.byteOffset, f32.byteLength);
+      } else {
+        // An integer stack: the current frame as float32 (exact), in the one-frame scratch buffer.
+        const native = stackFrameView(offlineFloatStack, stackDtype, liveSliceIdx, floatsPerFrame);
+        if (native) {
+          const key = ((isRgb ? 1 : 0) << 30) | (width << 15) | height;
+          if (offlineScratchKey.current !== key || offlineScratch.current === null) {
+            offlineScratch.current = new Float32Array(floatsPerFrame);
+            offlineScratchKey.current = key;
+          }
+          offlineScratch.current.set(native);
+          return new DataView(offlineScratch.current.buffer);
+        }
+      }
     }
     // Dequantize the explicitly requested uint8 standalone export.
     const dequantU8Frame = (u8: Uint8Array): DataView | null => {
@@ -723,7 +767,15 @@ function Show3D() {
       }
     }
     return EMPTY_FRAME;
-  }, [offlineStack, offlineFloatStack, offlineMin, offlineMax, offlineMins, offlineMaxs, liveSliceIdx, width, height, nPanels, numPanelCols, isRgb]);
+  }, [offlineStack, offlineFloatStack, stackDtype, offlineMin, offlineMax, offlineMins, offlineMaxs, liveSliceIdx, width, height, nPanels, numPanelCols, isRgb]);
+  // Frame `idx` of an integer stack in its own type, for the GPU (which keeps it in that type); null for float32 or RGB stacks.
+  const getIntegerFrame = React.useCallback((idx: number): IntegerFrame | null => {
+    if (isRgb || stackDtype === "float32" || !offlineFloatStack || offlineFloatStack.byteLength === 0) return null;
+    const frameCount = Math.max(1, nSlices || 1);
+    const normalized = ((Math.round(idx) % frameCount) + frameCount) % frameCount;
+    const native = stackFrameView(offlineFloatStack, stackDtype, normalized, width * height);
+    return native && !(native instanceof Float32Array) ? native : null;
+  }, [offlineFloatStack, stackDtype, isRgb, nSlices, width, height]);
   const getOfflineFrame = React.useCallback((idx: number): Float32Array | null => {
     // Cache per-frame Float32Array objects by frame index. The previous single
     // scratch buffer was unsafe because pointer-equality upload guards could skip
@@ -742,7 +794,8 @@ function Show3D() {
     const floatsPerFrame = channels * width * height;
     const pixelCount = width * height;
     if (offlineFloatStack && offlineFloatStack.byteLength > 0) {
-      const frame = float32FrameFromDataView(offlineFloatStack, normalized, floatsPerFrame, false);
+      const native = stackFrameView(offlineFloatStack, stackDtype, normalized, floatsPerFrame);
+      const frame = native ? asFloat32(native) : null;
       if (frame) putOfflineFrameCache(normalized, frame);
       return frame;
     }
@@ -784,6 +837,7 @@ function Show3D() {
     height,
     nSlices,
     offlineFloatStack,
+    stackDtype,
     offlineStack,
     offlineMins,
     offlineMaxs,
@@ -2930,7 +2984,7 @@ function Show3D() {
     width > 0 &&
     height > 0 &&
     nSlices > 1 &&
-    ((!!offlineFloatStack && offlineFloatStack.byteLength >= nSlices * width * height * 4) ||
+    ((!!offlineFloatStack && offlineFloatStack.byteLength >= nSlices * width * height * stackValueBytes) ||
       (!!offlineStack && offlineStack.byteLength >= nSlices * width * height));
 
   /** Find drift over the picked frames (all when fewer than two), on the first panel, on WebGPU when there is one. */
@@ -3056,6 +3110,7 @@ function Show3D() {
     liveSliceIdx,
     nPanels,
     nSlices,
+    stackDtype,
     offlineFloatStack,
     offlineStack,
     subpixelAlignEnabled,
@@ -4619,7 +4674,9 @@ function Show3D() {
         renderLogScale = upload.logScale ? false : settings.logScale;
       } else if (rawCurrentFrame && rawCurrentFrame.length >= settings.width * settings.height) {
         const rgbaCapacity = Math.max(1, Math.round(settings.canvasW * settings.canvasH));
-        engine.uploadData(normalized, rawCurrentFrame, settings.width, settings.height, rgbaCapacity);
+        const integerFrame = getIntegerFrame(normalized);
+        if (integerFrame) engine.uploadIntegerData(normalized, integerFrame, settings.width, settings.height, rgbaCapacity);
+        else engine.uploadData(normalized, rawCurrentFrame, settings.width, settings.height, rgbaCapacity);
         gpuFrameCacheUploadedRef.current.add(normalized);
         slotIdx = normalized;
       }
@@ -4920,7 +4977,7 @@ function Show3D() {
     const frameCount = Math.max(1, nSlices || 1);
     const frameSize = Math.max(1, width * height * (isRgb ? 3 : 1));
     const hasEmbeddedDisplayStack = Boolean(
-      (offlineFloatStack && offlineFloatStack.byteLength >= frameCount * frameSize * 4)
+      (offlineFloatStack && offlineFloatStack.byteLength >= frameCount * frameSize * stackValueBytes)
       || (offlineStack && offlineStack.byteLength >= frameCount * frameSize)
     );
 
@@ -4959,12 +5016,15 @@ function Show3D() {
         for (let position = 0; position < order.length; position++) {
           if (cancelled) return;
           const idx = order[position];
-          const frame = getOfflineFrame(idx);
+          // an integer stack stays in its own type on the GPU, without a float32 copy in the page
+          const integerFrame = getIntegerFrame(idx);
+          const frame = integerFrame ?? getOfflineFrame(idx);
           if (!frame || frame.length < frameSize) {
             throw new Error(`display frame ${idx + 1} is unavailable`);
           }
-          if (isRgb) engine.uploadRgbData(idx, frame.length === frameSize ? frame : frame.subarray(0, frameSize), width, height);
-          else engine.uploadData(idx, frame, width, height, 1, true);
+          if (integerFrame) engine.uploadIntegerData(idx, integerFrame, width, height, 1, true);
+          else if (isRgb) engine.uploadRgbData(idx, frame.length === frameSize ? frame as Float32Array : (frame as Float32Array).subarray(0, frameSize), width, height);
+          else engine.uploadData(idx, frame as Float32Array, width, height, 1, true);
           uploaded.add(idx);
           setGpuResidency({ stage: "uploading", ready: uploaded.size, error: "" });
           if (position === 0) renderGpuCachedSliceDirect(current, false);
@@ -4997,7 +5057,7 @@ function Show3D() {
     };
   // The embedded stack identity and geometry define GPU residency. Display
   // controls repaint resident slots and must never trigger another upload.
-  }, [offlineFloatStack, offlineStack, width, height, nSlices, isRgb, displayBin, gpuCmapChecked, gpuCmapReady]);
+  }, [offlineFloatStack, stackDtype, offlineStack, width, height, nSlices, isRgb, displayBin, gpuCmapChecked, gpuCmapReady, getIntegerFrame]);
 
 
   // Slider gestures temporarily own the displayed frame without changing Play.
@@ -7782,7 +7842,8 @@ function Show3D() {
 
     if (kymoExactStackReady && offlineFloatStack) {
       const sampleFrame = (frameIdx: number): Promise<Float32Array> => {
-        const frame = float32FrameFromDataView(offlineFloatStack, frameIdx, pixelCount, false);
+        const native = stackFrameView(offlineFloatStack, stackDtype, frameIdx, pixelCount);
+        const frame = native ? asFloat32(native) : null;
         return frame
           ? sampleLineProfileBrowser(frame, width, height, row0, col0, row1, col1, profileWidth)
           : Promise.resolve(new Float32Array(0));
@@ -7835,7 +7896,7 @@ function Show3D() {
 
     kymoDataRef.current = null;
     return undefined;
-  }, [kymoReady, kymoExactStackReady, kymoQuantizedStackReady, offlineStack, offlineFloatStack, offlineMin, offlineMax, width, height, nSlices,
+  }, [kymoReady, kymoExactStackReady, kymoQuantizedStackReady, offlineStack, offlineFloatStack, stackDtype, offlineMin, offlineMax, width, height, nSlices,
       profileWidth, profilePoints[0]?.row, profilePoints[0]?.col,
       profilePoints[1]?.row, profilePoints[1]?.col, profilePanelIdx, activePageStart,
       singlePanelPageProfile, totalPanelCount]);

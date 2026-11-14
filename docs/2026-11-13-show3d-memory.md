@@ -25,7 +25,7 @@ and how much of it can go without changing any value or pixel?
 | Show3DSlices before | 908 MB | 432 MB | 504 MB | 2983 MB | 790 MB |
 | Show3DSlices after | 3 MB | 130 MB | 202 MB | 1657 MB | 391 MB |
 | Show3D before | 907 MB | 446 MB | 403 MB | 2746 MB | 581 MB |
-| Show3D after | 507 MB | 446 MB | 403 MB | 2494 MB | 308 MB |
+| Show3D after | 129 MB | 295 MB | 117 MB | 1585 MB | 292 MB |
 
 A page with no widget holds 8 MB of arrays; its renderer process sits at about 765 MB and its GPU process
 at about 140 MB. All 7 Show3DSlices canvases and all 3 Show3D canvases hash the same before and after.
@@ -40,7 +40,20 @@ at about 140 MB. All 7 Show3DSlices canvases and all 3 Show3D canvases hash the 
 - Both volume uploads padded each row to 256 bytes through a second full copy. `queue.writeTexture` has no
   such rule (it is a rule of buffer-to-texture copies), so the volume's own memory is uploaded, a few slices
   per call.
-- Show3D copied its float32 stack into the synced bytes with `tobytes()`. It now syncs a view of the stack.
+- Show3D widened every stack to float32 in the kernel and copied it into the synced bytes with `tobytes()`.
+  It now keeps uint8, int8, uint16 and int16 stacks in their own type and syncs a view of the array. The page
+  holds those bytes and converts one frame at a time to float32 (exact), keeping at most 128 MB of converted
+  frames; a float32 stack needs no such cache, its frames are views. Differences, ranges and percentiles in
+  the kernel are taken one frame at a time in float32, so nothing wraps and no second stack is built. In a
+  bare kernel the widget adds 32 MB (46 MB at its peak); the 129 MB above includes the notebook's display.
+- Show3D also held every resident frame on the GPU as a float32 storage buffer (16 MB per 2048 x 2048
+  frame). An integer frame now sits on the GPU packed in its own type (4 MB for uint8). Its colormap, range,
+  histogram and thumbnail passes read it through a float32 view that one compute pass fills when the frame
+  is drawn (exact, as every 8- and 16-bit value is a float32); only the frame on screen and the one before
+  keep that view, and frames drawn together (panels) keep theirs while they are drawn. A moving average
+  converts its window straight into its scratch buffer, and the thumbnail strip converts each frame into
+  one reused buffer, so neither keeps a view per frame. On this stack: 24 packed frames (96 MB) and one
+  view (16 MB).
 - The device asks for the adapter's `maxTextureArrayLayers` and `maxTextureDimension3D`, so a volume deeper
   than 256 slices or wider than 2048 voxels stays in a texture.
 
@@ -69,7 +82,7 @@ ticks, 160 slider steps in about 22 s.
 | | GPU device lost | Frames per second | Longest gap between frames | GPU bytes growth | Page arrays after |
 |---|---|---|---|---|---|
 | Show3DSlices | no | 59.4 | 83 ms | 17 MB | 130 MB |
-| Show3D | no | 59.9 | 33 ms | 0 MB | 446 MB |
+| Show3D | no | 59.7 to 59.8 (3 runs) | 33 to 83 ms | 17 MB (the previous frame's float32 view) | 295 MB |
 
 Not shown: a run on a Windows integrated GPU itself. The driver watchdog, the shared-memory limit and
 Chrome's D3D backend are only on that machine; the tests above cover what the viewers do when those fail.
@@ -77,6 +90,7 @@ Chrome's D3D backend are only on that machine; the tests above cover what the vi
 ## Conclusion
 
 Show3DSlices holds about a quarter of the page and GPU memory for 8-bit data and no kernel copy; its
-renderer peak fell by 1.3 GB. Show3D still widens the stack to float32 in the kernel, the page and the GPU
-(about 4 bytes per voxel in each): keeping its stack in its own type through playback, filters and the
-frame cache is the next step, and would bring it to the Show3DSlices numbers.
+renderer peak fell by 1.3 GB. Show3D holds no kernel copy, a third less in the page and a little over a
+quarter on the GPU (117 MB instead of 403 MB); its renderer peak fell by 1.2 GB. An HTML export without binning now ships an integer stack in its own type
+too (it shipped float32 before). The saving is for integer data: a float32 stack keeps 4 bytes per value everywhere and
+only loses the kernel copies.

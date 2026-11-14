@@ -547,3 +547,74 @@ def test_drift_correction_runs_on_the_gpu_and_matches_the_fourier_shift():
         assert got.dtype == np.float32 and np.allclose(got, expected, atol=1e-4), device
     if len(devices) == 1:
         pytest.skip("no GPU here: checked the CPU fallback only")
+
+
+# --- integer stacks stay in their own type ---------------------------------------
+
+
+@pytest.mark.parametrize("dtype", ["uint8", "int8", "uint16", "int16"])
+def test_integer_stack_stays_in_its_own_type_without_a_kernel_copy(dtype):
+    info = np.iinfo(dtype)
+    stack = np.random.default_rng(0).integers(info.min, info.max, size=(5, 12, 10), endpoint=True).astype(dtype)
+    widget = Show3D(stack, verbose=False)
+    assert widget._stack_dtype == dtype
+    sent = np.frombuffer(widget._offline_float_stack, dtype=dtype).reshape(stack.shape)
+    np.testing.assert_array_equal(sent, stack)
+    # the stored stack and the synced bytes are the caller's memory
+    assert np.shares_memory(widget._data, stack) and np.shares_memory(sent, stack)
+
+
+@pytest.mark.parametrize("dtype", ["uint8", "uint16", "int16"])
+def test_integer_stack_has_the_ranges_and_frames_of_its_float32_copy(dtype):
+    info = np.iinfo(dtype)
+    stack = np.random.default_rng(1).integers(info.min, info.max, size=(6, 16, 16), endpoint=True).astype(dtype)
+    native, floats = Show3D(stack, verbose=False), Show3D(stack.astype(np.float32), verbose=False)
+    assert floats._stack_dtype == "float32"
+    for mode in ("off", "previous", "first"):
+        native.diff_mode = floats.diff_mode = mode
+        # an unsigned difference must not wrap around: the range and every frame match the float32 stack
+        assert (native.data_min, native.data_max) == (floats.data_min, floats.data_max), mode
+        assert native.auto_vmins == floats.auto_vmins and native.auto_vmaxs == floats.auto_vmaxs, mode
+        for index in range(stack.shape[0]):
+            np.testing.assert_array_equal(native._get_display_frame(index), floats._get_display_frame(index))
+            assert native._get_display_frame(index).dtype == np.float32
+
+
+def test_integer_stack_bins_and_joins_panels_like_float32():
+    stack = np.random.default_rng(2).integers(0, 255, size=(4, 16, 16)).astype(np.uint8)
+    binned = Show3D(stack, display_bin=4, verbose=False)
+    assert binned._stack_dtype == "float32"
+    np.testing.assert_array_equal(np.frombuffer(binned._offline_float_stack, dtype=np.float32).reshape(4, 4, 4),
+                                  stack.astype(np.float32).reshape(4, 4, 4, 4, 4).mean(axis=(2, 4)))
+    pair = Show3D([stack, stack[::-1].copy()], verbose=False)
+    assert pair._stack_dtype == "uint8"
+    np.testing.assert_array_equal(np.frombuffer(pair._offline_float_stack, dtype=np.uint8).reshape(4, 16, 32),
+                                  np.concatenate([stack, stack[::-1]], axis=2))
+    mixed = Show3D([stack, stack.astype(np.float32) * 0.5], verbose=False)
+    assert mixed._stack_dtype == "float32"
+
+
+def test_set_image_follows_the_new_stacks_type():
+    widget = Show3D(np.zeros((3, 8, 8), dtype=np.float32), verbose=False)
+    replacement = np.arange(3 * 8 * 8, dtype=np.uint16).reshape(3, 8, 8)
+    widget.set_image(replacement)
+    assert widget._stack_dtype == "uint16"
+    np.testing.assert_array_equal(np.frombuffer(widget._offline_float_stack, dtype=np.uint16).reshape(3, 8, 8), replacement)
+    widget.set_image(replacement.astype(np.float64))
+    assert widget._stack_dtype == "float32"
+
+
+def test_html_export_keeps_an_integer_stack_in_its_own_type():
+    stack = np.arange(4 * 6 * 8, dtype=np.int16).reshape(4, 6, 8) - 50
+    widget = Show3D(stack, verbose=False)
+    clone = widget._clone_for_html_export(quantized=False)
+    try:
+        assert clone._stack_dtype == "int16"
+        assert bytes(clone._offline_float_stack) == stack.tobytes()
+        binned = widget._clone_for_html_export(quantized=False, image_bin=2)
+        try:
+            assert binned._stack_dtype == "float32"  # a mean of 2 x 2 pixels is not an integer
+        finally:
+            widget._release_export_clone(binned)
+    finally:
+        widget._release_export_clone(clone)

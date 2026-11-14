@@ -26,7 +26,17 @@ def _quantize_u8(values: np.ndarray, low: float, high: float) -> np.ndarray:
     return np.clip((values - low) * (255.0 / (high - low if high > low else 1.0)), 0, 255).astype(np.uint8)
 
 
-def stack_percentiles(frames: list[np.ndarray], low_pct: float, high_pct: float,
+class _EachFrame:
+    """Frames made one at a time on every pass, so a stack of float32 frames is never held at once."""
+
+    def __init__(self, frame, count: int) -> None:
+        self._frame, self._count = frame, count
+
+    def __iter__(self):
+        return (np.asarray(self._frame(index)) for index in range(self._count))
+
+
+def stack_percentiles(frames, low_pct: float, high_pct: float,
                       bins: int = 1024) -> tuple[float, float] | None:
     """``(low, high)`` at the percentile sliders from one histogram over every frame; None when non-finite.
 
@@ -78,13 +88,22 @@ class Show3DPlayback:
             return np.ascontiguousarray(self._rgb_data, dtype=np.float32)
         return np.ascontiguousarray(self._display_data, dtype=np.float32)
 
+    def _exact_stack(self) -> np.ndarray:
+        """The stack the browser indexes per frame, exact: its own integer type, else float32."""
+        from quantem.widget.show3d.widget import exact_in_browser
+
+        if self._display_data is not None and not (self.is_rgb and self._rgb_data is not None) and exact_in_browser(self._display_data):
+            return np.ascontiguousarray(self._display_data)
+        return self._offline_stack_source()
+
     def _pack_exact_offline_stack(self) -> None:
-        """Embed the display stack as exact float32 bytes.
+        """Embed the display stack as exact bytes: float32, or the stack's own integer type.
 
         This is the one transport: every path that replaces the stack must
         repack it, or frame indices past the old end render blank.
         """
-        arr = self._offline_stack_source()
+        arr = self._exact_stack()
+        self._stack_dtype = arr.dtype.name
         self._offline_min = float(arr.min()) if arr.size else 0.0
         self._offline_max = float(arr.max()) if arr.size else 1.0
         self._offline_mins = []
@@ -133,11 +152,12 @@ class Show3DPlayback:
         """The display-resolution frame the browser shows, with diff mode applied."""
         idx = self.slice_idx if idx is None else idx
         data = self._display_data
-        frame = data[idx]
+        # float32 one frame at a time: an integer stack stays in its own type, and unsigned differences do not wrap
+        frame = np.asarray(data[idx], dtype=np.float32)
         if self.diff_mode == "previous":
-            return np.zeros_like(frame) if idx == 0 else frame - data[idx - 1]
+            return np.zeros_like(frame) if idx == 0 else frame - np.asarray(data[idx - 1], dtype=np.float32)
         if self.diff_mode == "first":
-            return frame - data[0]
+            return frame - np.asarray(data[0], dtype=np.float32)
         return frame
 
     def _get_display_panel_frame(self, panel: int, idx: int) -> np.ndarray:
@@ -149,8 +169,8 @@ class Show3DPlayback:
     def _get_source_panel_frame(self, panel: int, idx: int) -> np.ndarray:
         """One native-resolution panel frame for GIF rendering."""
         if self._source_panels:
-            return np.asarray(self._source_panels[panel][idx])
-        frame = np.asarray(self._data[idx])
+            return np.asarray(self._source_panels[panel][idx], dtype=np.float32)
+        frame = np.asarray(self._data[idx], dtype=np.float32)
         if self.shared_panel_source or int(self.n_panels) <= 1:
             return frame
         panel_width = frame.shape[1] // int(self.n_panels)
@@ -167,7 +187,7 @@ class Show3DPlayback:
         stack_range = None
         if self.n_slices > 0 and self.auto_contrast:
             stack_range = stack_percentiles(
-                [np.asarray(self._get_display_frame(i)) for i in range(int(self.n_slices))],
+                _EachFrame(self._get_display_frame, int(self.n_slices)),
                 self.percentile_low, self.percentile_high,
             )
         if stack_range is None:
@@ -181,7 +201,7 @@ class Show3DPlayback:
         if int(self.n_panels) > 1 and not self.shared_panel_source:
             for panel in range(int(self.n_panels)):
                 panel_range = stack_percentiles(
-                    [np.asarray(self._get_display_panel_frame(panel, i)) for i in range(int(self.n_slices))],
+                    _EachFrame(lambda index, panel=panel: self._get_display_panel_frame(panel, index), int(self.n_slices)),
                     self.percentile_low, self.percentile_high,
                 )
                 if panel_range is not None:
@@ -205,9 +225,14 @@ class Show3DPlayback:
             self.data_min = 0.0
             self.data_max = 0.0
         else:
-            diffs = data[1:] - data[:-1] if self.diff_mode == "previous" else data[1:] - data[0:1]
-            self.data_min = min(0.0, float(diffs.min()))
-            self.data_max = max(0.0, float(diffs.max()))
+            # one frame pair at a time, in float32: no second stack in memory, no unsigned wrap-around
+            low = high = 0.0
+            for index in range(1, int(data.shape[0])):
+                reference = data[index - 1] if self.diff_mode == "previous" else data[0]
+                diff = np.asarray(data[index], dtype=np.float32) - np.asarray(reference, dtype=np.float32)
+                low, high = min(low, float(diff.min())), max(high, float(diff.max()))
+            self.data_min = low
+            self.data_max = high
         self._refresh_auto_contrast_ranges()
 
     def _on_roi_change(self, change: dict | None = None) -> None:
@@ -252,7 +277,7 @@ class Show3DPlayback:
         if not mask.any():
             self.roi_plot_data = b""
             return
-        data_t = torch.from_numpy(np.ascontiguousarray(self._display_data))
+        data_t = torch.from_numpy(np.ascontiguousarray(self._display_data, dtype=np.float32))
         if self.diff_mode == "previous":
             data_t = torch.cat([torch.zeros_like(data_t[:1]), data_t[1:] - data_t[:-1]])
         elif self.diff_mode == "first":

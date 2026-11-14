@@ -141,6 +141,13 @@ class Show3DStream:
         rows, cols = batch[0][0].shape
         if old_n and tuple(self._data.shape[1:]) != (rows, cols):
             raise ValueError(f"Frame shape {(rows, cols)} does not match the stack's {tuple(self._data.shape[1:])}.")
+        if old_n and self._data.dtype != np.float32:
+            # Appended frames are float32: a stack held in its own integer type is sent once more as float32.
+            with self.hold_sync():
+                self._data = self._data.astype(np.float32)
+                self._display_data = self._data
+                self._pack_exact_offline_stack()
+                self.frame_seq += 1
         new_n = old_n + len(batch)
         current = self._data if old_n else np.empty((0, rows, cols), dtype=np.float32)
         buffer = self._stream_buffer
@@ -171,6 +178,7 @@ class Show3DStream:
         with self.hold_sync():
             self._data = buffer[:new_n]
             self._display_data = self._data
+            self._stack_dtype = "float32"  # streamed frames are float32, whatever type the first stack had
             if not old_n:
                 self._panel_width = cols
                 self.height, self.width = rows, cols
