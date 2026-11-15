@@ -1768,17 +1768,19 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         if changed is None or self.vi_source == changed:
             self._refresh_compare_virtual_images()
 
-    def attach(self, label: str, image, *, frame: int | str = 0) -> None:
+    def attach(self, label: str, image, *, frame=0) -> None:
         """Show an image made from one scan, such as its direct ptychography phase, as that scan's ``label`` image
         beside the detector images (``"Direct"``, ``"DPC_row"`` or ``"DPC_col"``; choose it as the image source).
 
-        ``frame`` is the scan's index or label. In a streaming viewer the image stays with its scan as scans arrive
-        and leave; a scan without one shows that source blank (NaN). The image is the scan's size, rows by columns.
+        ``frame`` is the scan's index, its label, or the scan (dataset) itself, which names it when labels repeat.
+        In a streaming viewer the image stays with its scan as scans arrive and leave; a scan without one shows that
+        source blank (NaN). The image is the scan's size, rows by columns. A scan not in the viewer (not shown yet, or
+        gone) raises ``LookupError``.
 
         Examples
         --------
         >>> viewer = Show4DSTEM.stream(recording)  # doctest: +SKIP
-        >>> viewer.attach("Direct", series.latest.direct_phase, frame="scan_0003")  # doctest: +SKIP
+        >>> viewer.attach("Direct", series.latest.direct_phase, frame=scan)  # doctest: +SKIP
         """
         if label not in PRODUCT_LABELS:
             raise ValueError(f"Unsupported image {label!r}. Use one of {PRODUCT_LABELS}.")
@@ -1791,14 +1793,29 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             raise ValueError(f"{label} must be one real image of the scan's {self.shape_rows} x {self.shape_cols} "
                              f"positions; got {image.dtype} {image.shape}.")
         with self._attached_lock:
-            if isinstance(frame, str):
-                if frame not in self.frame_labels:
-                    raise ValueError(f"No scan {frame!r} in this viewer (it shows {list(self.frame_labels)}).")
-                frame = list(self.frame_labels).index(frame)
-            if not 0 <= int(frame) < self.n_frames:
-                raise ValueError(f"frame {frame} is outside this viewer's {self.n_frames} scans.")
-            self._attached.setdefault(label, {})[self._frame_identity(int(frame))] = image.astype(np.float32)
+            index = self._frame_index(frame)
+            self._attached.setdefault(label, {})[self._frame_identity(index)] = image.astype(np.float32)
             self._restack_attached(label)
+
+    def _frame_index(self, frame) -> int:
+        """The viewer's index of ``frame``: an index, a label that names one scan, or the scan itself."""
+        if isinstance(frame, str):
+            labels = list(self.frame_labels)
+            if labels.count(frame) != 1:
+                raise LookupError(f"{labels.count(frame)} scans in this viewer are labelled {frame!r}; "
+                                  "pass the scan itself or its index.")
+            return labels.index(frame)
+        if isinstance(frame, (int, np.integer)) and not isinstance(frame, bool):
+            if not 0 <= int(frame) < self.n_frames:
+                raise LookupError(f"frame {frame} is outside this viewer's {self.n_frames} scans.")
+            return int(frame)
+        follower = getattr(self, "_stream_follower", None)
+        sources = (list(follower.shown_sources) if follower is not None else
+                   [getattr(shown, "source", shown) for shown in getattr(self._data, "frames", ())])
+        for index, source in enumerate(sources):
+            if source is frame:
+                return index
+        raise LookupError("This scan is not in the viewer: not shown yet, or no longer kept.")
 
     def _frame_identity(self, index: int) -> str:
         """The frame's identity for attach(): its stream identity (an image leaves with its scan), else its index."""
