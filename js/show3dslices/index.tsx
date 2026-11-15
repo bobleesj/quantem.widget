@@ -1104,6 +1104,16 @@ function Show3DSlices() {
   const [exportMenuAnchor, setExportMenuAnchor] = React.useState<HTMLElement | null>(null);
   const [exportBusy, setExportBusy] = React.useState(false);
   const [localExportStatus, setLocalExportStatus] = React.useState("");
+  const [maskMode, setMaskMode] = React.useState<"off" | "draw" | "view">("off");
+  const maskBounds = React.useRef<{ start: ImagePoint; stop: ImagePoint } | null>(null);
+  const maskPointer = React.useRef<number | null>(null);
+  const maskFrame = React.useRef<number | null>(null);
+  React.useEffect(() => {
+    maskBounds.current = null;
+    maskPointer.current = null;
+    setMaskMode("off");
+    return () => { if (maskFrame.current !== null) cancelAnimationFrame(maskFrame.current); maskFrame.current = null; };
+  }, [safeActivePanel, volumeBytes]);
   const [advancedControlsOpen, setAdvancedControlsOpen] = React.useState(false);
   const [localAlignmentStatus, setLocalAlignmentStatus] = React.useState("");
   const [liveRowShift, setLiveRowShift] = React.useState(rowShiftPxPerSlice || 0);
@@ -2467,7 +2477,22 @@ function Show3DSlices() {
   // Redraw slices with zoom/pan (cheap: just drawImage from cached offscreen)
   // useLayoutEffect prevents black flash when canvas dimensions change (resize)
   // -------------------------------------------------------------------------
+  const paintMask = () => {
+    const bounds = maskBounds.current;
+    let clip = "";
+    if (maskMode !== "off" && bounds) {
+      const a = dataPointToCanvas(0, bounds.start.col, bounds.start.row);
+      const b = dataPointToCanvas(0, bounds.stop.col, bounds.stop.row);
+      const { w, displayH } = canvasSizes[0];
+      clip = `inset(${Math.min(a.y, b.y)}px ${w - Math.max(a.x, b.x)}px ${displayH - Math.max(a.y, b.y)}px ${Math.min(a.x, b.x)}px)`;
+    }
+    for (const layer of [canvasRefs.current[0], overlayRefs.current[0]]) {
+      if (layer) layer.style.clipPath = clip;
+    }
+  };
+  React.useLayoutEffect(paintMask, [maskMode, zooms, canvasSizes]);
   const drawSliceDirect = (axis: number) => {
+    if (axis === 0) paintMask();
     // Playback and scrubbing advance the XY frame without replacing the committed offscreen.
     if (contrastPreviewRef.current || (axis === 0 && liveSliderRef.current[0] !== sliceIndex)) {
       const index = liveSliderRef.current[0];
@@ -3056,6 +3081,20 @@ function Show3DSlices() {
     const row = ((canvasY - centerY - view.panY) / view.zoom + centerY) / scaleY;
     return { row, col };
   };
+  const maskPoint = (event: React.PointerEvent) => {
+    const p = imagePointFromEvent(event, 0);
+    return p && { col: clampNumber(p.col, 0, numCols), row: clampNumber(p.row, 0, numRows) };
+  };
+  const moveMask = (event: React.PointerEvent) => {
+    if (maskPointer.current !== event.pointerId || !maskBounds.current) return;
+    const point = maskPoint(event);
+    if (!point) return;
+    maskBounds.current.stop = point;
+    if (maskFrame.current === null) maskFrame.current = requestAnimationFrame(() => {
+      maskFrame.current = null;
+      paintMask();
+    });
+  };
   const updateObliqueCenter = (
     centerCol: number,
     centerRow: number,
@@ -3273,7 +3312,15 @@ function Show3DSlices() {
     // the current (row, col) center, rotated about the slice axis.
     let value: number;
     if (axis === 0) {
-      value = panelFloats[sliceIndex * numRows * numCols + pixelRow * numCols + pixelCol];
+      const bounds = maskMode === "view" && maskBounds.current;
+      if (bounds && (point.col < Math.min(bounds.start.col, bounds.stop.col) ||
+          point.col >= Math.max(bounds.start.col, bounds.stop.col) ||
+          point.row < Math.min(bounds.start.row, bounds.stop.row) ||
+          point.row >= Math.max(bounds.start.row, bounds.stop.row))) {
+        setCursorInfoThrottled(null);
+        return;
+      }
+      value = panelFloats[liveSliderRef.current[0] * numRows * numCols + pixelRow * numCols + pixelCol];
     } else {
       const denom = Math.max(1, sliceW - 1);
       const t = pixelCol / denom;
@@ -4438,10 +4485,39 @@ function Show3DSlices() {
                 {cursorInfo && cursorInfo.view === panelName && (
                   <Box sx={{ position: "absolute", top: 3, right: 3, bgcolor: "rgba(0,0,0,0.35)", px: 0.5, py: 0.15, pointerEvents: "none", minWidth: 100, textAlign: "right" }}>
                     <Typography sx={{ fontSize: 9, fontFamily: "monospace", color: "rgba(255,255,255,0.7)", whiteSpace: "nowrap", lineHeight: 1.2 }}>
-                      ({cursorInfo.row}, {cursorInfo.col}) {formatNumber(cursorInfo.value)}
+                      ({cursorInfo.row}, {cursorInfo.col}) {formatNumber(axis === 0 && panelFloats
+                        ? panelFloats[liveSlider[0] * numRows * numCols + cursorInfo.row * numCols + cursorInfo.col]
+                        : cursorInfo.value)}
                     </Typography>
                   </Box>
                 )}
+                {axis === 0 && maskMode === "draw" && <div
+                  aria-label="Draw XY mask"
+                  title="Drag a rectangle to keep that part of the XY slice visible"
+                  style={{ position: "absolute", inset: 0, cursor: "crosshair", touchAction: "none" }}
+                  onMouseDown={e => e.stopPropagation()}
+                  onMouseUp={e => e.stopPropagation()}
+                  onDoubleClick={e => e.stopPropagation()}
+                  onPointerDown={e => {
+                    if (e.button !== 0 || maskPointer.current !== null) return;
+                    const point = maskPoint(e);
+                    if (!point) return;
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                    maskPointer.current = e.pointerId;
+                    maskBounds.current = { start: point, stop: point };
+                  }}
+                  onPointerMove={moveMask}
+                  onPointerUp={e => {
+                    if (maskPointer.current !== e.pointerId) return;
+                    moveMask(e);
+                    maskPointer.current = null;
+                    const bounds = maskBounds.current;
+                    if (bounds && Math.abs(bounds.start.col - bounds.stop.col) >= 1 &&
+                        Math.abs(bounds.start.row - bounds.stop.row) >= 1) setMaskMode("view");
+                    else maskBounds.current = null;
+                  }}
+                  onPointerCancel={() => { maskPointer.current = null; maskBounds.current = null; paintMask(); }}
+                />}
                 {/* Over-clip warning: image is mostly black because histogram thumbs sit outside data range */}
                 {isOverClipped && axis === 0 && (
                   <Box sx={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", bgcolor: "rgba(255, 180, 0, 0.85)", color: "#000", px: 1, py: 0.5, fontSize: 11, fontWeight: "bold", borderRadius: 0.5, textAlign: "center", lineHeight: 1.3, pointerEvents: "none", maxWidth: canvasW - 20 }}>
@@ -4690,6 +4766,17 @@ function Show3DSlices() {
               </Button>
             </Box>
             {advancedControlsOpen && <Box id="show3dslices-advanced-controls" sx={contentControlRow}>
+              <Typography sx={controlLabel}>Mask</Typography>
+              <Switch checked={maskMode !== "off"} size="small" sx={switchStyles.small}
+                slotProps={switchInputSlot("Mask XY slice")}
+                onChange={e => {
+                  maskBounds.current = null;
+                  maskPointer.current = null;
+                  setMaskMode(e.target.checked ? "draw" : "off");
+                }} />
+              {maskMode === "draw" && <Typography sx={controlLabel}>Drag a rectangle on XY</Typography>}
+              {maskMode === "view" && <Button size="small" sx={compactButton}
+                onClick={() => { maskBounds.current = null; setMaskMode("draw"); }}>Redraw mask</Button>}
               <Typography sx={{ ...controlLabel }} title="Display-only global post-alignment through depth. Raw volume data is unchanged.">Align</Typography>
               <Switch
                 checked={alignmentActive}
