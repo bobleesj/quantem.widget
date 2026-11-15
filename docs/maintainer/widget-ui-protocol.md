@@ -243,3 +243,18 @@ After changing controls, rebuild and drive the widget in a browser. At minimum:
 
 For interaction-sensitive changes, drive the live widget or exported HTML in a
 browser before claiming it is ready.
+
+### Playback, zoom, and histogram checklist
+
+- [ ] Start playback on distinguishable frames. While it runs, zoom off-center and pan. Check that a feature stays under the zoom pointer and that both the frame index and **image pixels** keep advancing.
+- [ ] In the zoomed view, drag each histogram handle, hold it still through several frames, then release. Also drag the whole range if supported. The displayed contrast should follow the handle, hold steady, and match the released value. A fixed-intensity patch shared by the frames makes a contrast jump easy to detect.
+- [ ] Pause, resume, and reset zoom. Check that the same frame at the same settings reproduces the same pixels and that resetting zoom preserves contrast. For panel-local controls, check a neighboring panel too.
+- [ ] Exercise each supported rendering path and the affected notebook or HTML export. Record the widget, mode, backend, and observed result. For widgets without playback, run the zoom and contrast checks on a still image.
+
+Use the playback control for the data on screen: snapshots in Show1D, pages or panel stacks in Show2D, frames in Show3D, depth in Show3DSlices, a frame series in Show4DSTEM, or a reconstruction parameter sweep in ShowPtycho.
+
+Run the combined interaction checks on a machine with Chrome and a hardware WebGPU adapter after building the frontend.
+
+```bash
+QUANTEM_WIDGET_BROWSER=1 python -m pytest -q tests/browser/test_playback_zoom_histogram.py tests/browser/test_show3dslices_contrast_drag.py tests/browser/test_volume_playback_zoom.py
+```
