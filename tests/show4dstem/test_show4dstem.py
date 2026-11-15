@@ -178,6 +178,43 @@ def test_stream_opens_on_the_first_acquisition_and_appends_the_rest_as_they_comp
             acquisition.close()
 
 
+def test_an_attached_phase_stays_with_its_scan_as_a_stream_grows(tmp_path, accelerator):
+    """attach("Direct", ...) puts a scan's phase beside its detector images; scans that arrive later show none (NaN)
+    until theirs is attached, and each keeps its own."""
+    import threading
+    from types import SimpleNamespace
+
+    loaded = [gpu_adapter.load_acquisition(_write_master(tmp_path, f"scan{index}", _counts(index))) for index in range(3)]
+    recording = SimpleNamespace(datasets=[loaded[0]], error=None, receiving=True)
+    widget = Show4DSTEM.stream(recording, refresh_s=0.02, labels=["a", "b", "c"], verbose=False)
+    try:
+        first = np.arange(np.prod(SCAN), dtype=np.float32).reshape(SCAN)
+        widget.attach("Direct", first, frame="a")
+        for acquisition in loaded[1:]:
+            recording.datasets.append(acquisition)
+        deadline = time.monotonic() + 5
+        while widget.n_frames != 3:
+            assert time.monotonic() < deadline and widget.stream_error is None
+            time.sleep(0.01)
+        widget.attach("Direct", -first, frame="c")
+        recording.receiving = False
+        widget._stream_thread.join(timeout=5)
+        stack = np.frombuffer(widget.vi_product_maps_bytes, np.float32).reshape(3, *SCAN)
+        np.testing.assert_array_equal(stack[0], first)
+        assert np.isnan(stack[1]).all()
+        np.testing.assert_array_equal(stack[2], -first)
+        widget.vi_source, widget.frame_idx = "Direct", 2
+        np.testing.assert_array_equal(widget.virtual_image(), -first)
+        with pytest.raises(ValueError, match="No scan 'z'"):
+            widget.attach("Direct", first, frame="z")
+        with pytest.raises(ValueError, match="one real image"):
+            widget.attach("Direct", first[:2], frame="a")
+    finally:
+        widget.close()
+        for acquisition in loaded:
+            acquisition.close()
+
+
 def _live(tmp_path, monkeypatch, **options):
     """A viewer live on ``tmp_path`` whose looks at the folder the test makes itself, one at a time."""
     monkeypatch.setattr(LiveFolder, "start", lambda self: None)

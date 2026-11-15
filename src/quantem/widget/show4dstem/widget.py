@@ -448,6 +448,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._compare_session_indices: tuple[int, ...] = ()
         self._stream_completed_sources: dict[int, object] = {}
         self._vi_product_maps: dict[str, np.ndarray] = {}
+        self._attached: dict[str, dict[str, np.ndarray]] = {}  # attach(): label -> {frame identity: image}
+        self._attached_lock = threading.RLock()
         self._preset_images: dict[str, bytes | memoryview] = {}
         self._suppress_roi_recompute = False
         self._roi_seen: tuple | None = None  # the detector ROI at the last ROI notification
@@ -1082,6 +1084,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                     self.compare_page_idx = 0
                 elif custom_order:
                     self.compare_panel_order = [*old_order, *added]
+            self._restack_attached()
 
     def append(self, acquisitions, labels=None) -> list[int]:
         """Add resident acquisitions (quantem.gpu datasets of the same scan and detector) to the comparison.
@@ -1360,6 +1363,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                     self.compare_diffraction_bytes = b""
                     self._clear_compare_virtual_images("No retained scans. Waiting for another acquisition.")
                     self.title = "No retained scans"
+                self._restack_attached()
                 return
             if not isinstance(self._data, SessionSeries):
                 self._close_sessions()
@@ -1401,6 +1405,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 self.compare_hidden_panels = [i for i, source in enumerate(sources) if source in hidden]
                 self.compare_starred_panels = [i for i, source in enumerate(sources) if source in starred]
                 self.compare_page_idx = 0
+            self._restack_attached()
 
     def _release_owned_acquisitions(self) -> None:
         """Close the acquisition this widget loaded itself from a path; acquisitions the caller passed stay open."""
@@ -1750,14 +1755,75 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             )
         maps = dict(self._vi_product_maps)
         maps[label] = np.ascontiguousarray(product, dtype=np.float32)
-        frame_count = max(stored.shape[0] for stored in maps.values())
+        self._publish_product_maps(maps, label)
+
+    def _publish_product_maps(self, maps: dict[str, np.ndarray], changed: str | None = None) -> None:
+        """Send the product maps as one stack, and redraw when the one in view changed."""
+        frame_count = max((stored.shape[0] for stored in maps.values()), default=0)
         stacked = [np.broadcast_to(stored, (frame_count, self.shape_rows, self.shape_cols)) for stored in maps.values()]
         self._vi_product_maps = maps
         self.vi_product_labels = list(maps)
         self.vi_product_map_frames = int(frame_count)
-        self.vi_product_maps_bytes = np.stack(stacked).tobytes()
-        if self.vi_source == label:
+        self.vi_product_maps_bytes = np.stack(stacked).tobytes() if stacked else b""
+        if changed is None or self.vi_source == changed:
             self._refresh_compare_virtual_images()
+
+    def attach(self, label: str, image, *, frame: int | str = 0) -> None:
+        """Show an image made from one scan, such as its direct ptychography phase, as that scan's ``label`` image
+        beside the detector images (``"Direct"``, ``"DPC_row"`` or ``"DPC_col"``; choose it as the image source).
+
+        ``frame`` is the scan's index or label. In a streaming viewer the image stays with its scan as scans arrive
+        and leave; a scan without one shows that source blank (NaN). The image is the scan's size, rows by columns.
+
+        Examples
+        --------
+        >>> viewer = Show4DSTEM.stream(recording)  # doctest: +SKIP
+        >>> viewer.attach("Direct", series.latest.direct_phase, frame="scan_0003")  # doctest: +SKIP
+        """
+        if label not in PRODUCT_LABELS:
+            raise ValueError(f"Unsupported image {label!r}. Use one of {PRODUCT_LABELS}.")
+        if hasattr(image, "detach"):            # torch
+            image = image.detach().cpu().numpy()
+        elif hasattr(image, "get"):             # CuPy
+            image = image.get()
+        image = np.asarray(image)
+        if np.iscomplexobj(image) or image.shape != (self.shape_rows, self.shape_cols):
+            raise ValueError(f"{label} must be one real image of the scan's {self.shape_rows} x {self.shape_cols} "
+                             f"positions; got {image.dtype} {image.shape}.")
+        with self._attached_lock:
+            if isinstance(frame, str):
+                if frame not in self.frame_labels:
+                    raise ValueError(f"No scan {frame!r} in this viewer (it shows {list(self.frame_labels)}).")
+                frame = list(self.frame_labels).index(frame)
+            if not 0 <= int(frame) < self.n_frames:
+                raise ValueError(f"frame {frame} is outside this viewer's {self.n_frames} scans.")
+            self._attached.setdefault(label, {})[self._frame_identity(int(frame))] = image.astype(np.float32)
+            self._restack_attached(label)
+
+    def _frame_identity(self, index: int) -> str:
+        """The frame's identity for attach(): its stream identity (an image leaves with its scan), else its index."""
+        identities = getattr(self, "_stream_source_ids", None)
+        return identities[index] if hasattr(self, "_stream_stop") and identities else str(index)
+
+    def _restack_attached(self, changed: str | None = None) -> None:
+        """Lay attach()'s images out scan by scan again, after scans arrive or leave: NaN where a scan has none."""
+        with self._attached_lock:
+            if not self._attached:
+                return
+            identities = [self._frame_identity(index) for index in range(self.n_frames)]
+            maps = {label: stored for label, stored in self._vi_product_maps.items()
+                    if label not in self._attached and stored.shape[0] in (1, self.n_frames)}
+            for label, images in self._attached.items():
+                for identity in [identity for identity in images if identity not in identities]:
+                    del images[identity]                # its scan left the viewer
+                if not identities:
+                    continue
+                stack = np.full((len(identities), self.shape_rows, self.shape_cols), np.nan, np.float32)
+                for slot, identity in enumerate(identities):
+                    if identity in images and images[identity].shape == stack.shape[1:]:
+                        stack[slot] = images[identity]
+                maps[label] = stack
+            self._publish_product_maps(maps, changed)
 
     def _on_vi_source_change(self, change=None) -> None:
         """React to an image-source switch: fall back to the ROI image when that product map does not exist, then repaint."""
