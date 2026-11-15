@@ -6,7 +6,7 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
-- Show3D and Show3DSlices keep the current frame visible when you zoom or pan during playback.
+- Show3D and Show3DSlices keep the current frame visible when you zoom or pan during playback. Show3DSlices also keeps the selected histogram contrast while you drag during playback.
 
 ### Show3DSlices and Show3D hold less memory, every value exact
 

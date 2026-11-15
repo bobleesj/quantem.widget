@@ -1876,6 +1876,7 @@ function Show3DSlices() {
     const subMax = (subMaxData - imageDataRange.min) / span;
     return { vmin: subMin, vmax: subMax };
   };
+  const contrastPreviewRef = React.useRef<[number, number] | null>(null);
   const volTexRange = volumeTextureRangeForPercent(imageVminPct, imageVmaxPct);
   // Keep live slice positions separate from committed model traits. Slider drag
   // updates these refs every frame; model traits sync only on release.
@@ -1906,7 +1907,9 @@ function Show3DSlices() {
     vmin: volTexRange.vmin, vmax: volTexRange.vmax,
   };
   const volumeRenderParamsRef = React.useRef(volumeRenderParams);
-  volumeRenderParamsRef.current = volumeRenderParams;
+  volumeRenderParamsRef.current = contrastPreviewRef.current
+    ? { ...volumeRenderParams, ...volumeTextureRangeForPercent(...contrastPreviewRef.current) }
+    : volumeRenderParams;
   const bgColorRef = React.useRef<[number, number, number]>([0, 0, 0]);
   React.useEffect(() => {
     const r = parseInt(themeColors.bg.slice(1, 3), 16) / 255;
@@ -2371,7 +2374,10 @@ function Show3DSlices() {
   // slider handler (which fires faster than React commits) reads current values.
   React.useEffect(() => {
     paintParamsRef.current = {
-      cmap, logScale, flip, imageVminPct, imageVmaxPct, imageDataRange: displayDataRange,
+      cmap, logScale, flip,
+      imageVminPct: contrastPreviewRef.current?.[0] ?? imageVminPct,
+      imageVmaxPct: contrastPreviewRef.current?.[1] ?? imageVmaxPct,
+      imageDataRange: displayDataRange,
       traitVmin, traitVmax, canvasSizes, smooth, alignment: gpuSliceParams,
     };
   });
@@ -2463,9 +2469,9 @@ function Show3DSlices() {
   // -------------------------------------------------------------------------
   const drawSliceDirect = (axis: number) => {
     // Playback and scrubbing advance the XY frame without replacing the committed offscreen.
-    if (axis === 0 && liveSliderRef.current[0] !== sliceIndex) {
+    if (contrastPreviewRef.current || (axis === 0 && liveSliderRef.current[0] !== sliceIndex)) {
       const index = liveSliderRef.current[0];
-      if (!directPaintPlane(0, index)) previewTopPlane(index);
+      if (!directPaintPlane(axis, index)) previewCpuPlane(axis, index);
       return;
     }
     const view = liveZoomsRef.current[axis];
@@ -3662,7 +3668,6 @@ function Show3DSlices() {
   const liveSliderRef = React.useRef<number[]>([sliceIndex, rowIndex, colIndex]);
   const pendingPaintRef = React.useRef<Map<number, number>>(new Map());
   const sliderPaintRafRef = React.useRef<number | null>(null);
-  const pendingContrastRangeRef = React.useRef<[number, number] | null>(null);
   const contrastPaintRafRef = React.useRef<number | null>(null);
   // Take only the indices whose trait changed: playback of All moves the cut, which commits the row and
   // column, while the top slice it plays lives in liveSliderRef; resetting all three froze the top slice.
@@ -3685,25 +3690,27 @@ function Show3DSlices() {
   // steps of the committed paint (extract, log, flip, colormap, zoomed blit), so
   // the slice follows the thumb instead of appearing on release. Its own
   // offscreen keeps the committed one a cache of the committed slice.
-  const previewOffscreenRef = React.useRef<{ canvas: HTMLCanvasElement; image: ImageData } | null>(null);
-  const previewTopPlane = (topSliceIndex: number) => {
-    const canvas = canvasRefs.current[0];
+  const previewOffscreenRef = React.useRef<({ canvas: HTMLCanvasElement; image: ImageData } | undefined)[]>([]);
+  const previewCpuPlane = (axis: number, topSliceIndex: number) => {
+    const canvas = canvasRefs.current[axis];
     const ctx = canvas?.getContext("2d");
     const paint = paintParamsRef.current;
     if (!ctx || !paint || !panelFloats) return;
-    const [sliceH, sliceW] = sliceDims[0];
-    let preview = previewOffscreenRef.current;
+    const [sliceH, sliceW] = sliceDims[axis];
+    let preview = previewOffscreenRef.current[axis];
     if (!preview || preview.canvas.width !== sliceW || preview.canvas.height !== sliceH) {
       const offscreen = document.createElement("canvas");
       offscreen.width = sliceW; offscreen.height = sliceH;
       preview = { canvas: offscreen, image: new ImageData(sliceW, sliceH) };
-      previewOffscreenRef.current = preview;
+      previewOffscreenRef.current[axis] = preview;
     }
-    const slice = extractTopSlice(panelFloats, numCols, numRows, numSlices, topSliceIndex);
+    const slice = axis === 0
+      ? extractTopSlice(panelFloats, numCols, numRows, numSlices, topSliceIndex)
+      : extractOblique(panelFloats, numCols, numRows, numSlices, obliqueSegment.start, obliqueSegment.stop);
     const { vmin, vmax } = volumeDisplayWindow(paint.imageDataRange, paint.imageVminPct, paint.imageVmaxPct, paint.flip);
     renderToOffscreenReuse(maybeFlip(paint.logScale ? applyLogScale(slice) : slice, paint.flip), COLORMAPS[paint.cmap] || COLORMAPS.inferno, vmin, vmax, preview.canvas, preview.image);
-    const { w: canvasW, h: canvasH } = paint.canvasSizes[0];
-    drawZoomedOffscreen(ctx, preview.canvas, canvasW, canvasH, liveZoomsRef.current[0], paint.smooth);
+    const { w: canvasW, h: canvasH } = paint.canvasSizes[axis];
+    drawZoomedOffscreen(ctx, preview.canvas, canvasW, canvasH, liveZoomsRef.current[axis], paint.smooth);
   };
   // DURING DRAG: only direct-paint (GPU, off React) - do NOT set the model trait,
   // which would re-render the whole component per drag-frame (the 39->stuck cap).
@@ -3732,27 +3739,18 @@ function Show3DSlices() {
       const pending = pendingPaintRef.current;
       pendingPaintRef.current = new Map();
       for (const [pendingAxis, pendingValue] of pending) {
-        if (!directPaintPlane(pendingAxis, pendingValue) && pendingAxis === 0) previewTopPlane(pendingValue);
+        if (!directPaintPlane(pendingAxis, pendingValue) && pendingAxis === 0) previewCpuPlane(0, pendingValue);
       }
       renderVolumePlanesLive();
       setLiveSlider(liveSliderRef.current);
     });
   };
   const paintContrastRange = (min: number, max: number) => {
-    pendingContrastRangeRef.current = [min, max];
-    const paint = paintParamsRef.current;
-    if (paint) paintParamsRef.current = { ...paint, imageVminPct: min, imageVmaxPct: max };
-    const nextVolRange = volumeTextureRangeForPercent(min, max);
-    volumeRenderParamsRef.current = {
-      ...volumeRenderParamsRef.current,
-      vmin: nextVolRange.vmin,
-      vmax: nextVolRange.vmax,
-    };
+    contrastPreviewRef.current = [min, max];
     if (contrastPaintRafRef.current != null) return;
     contrastPaintRafRef.current = requestAnimationFrame(() => {
       contrastPaintRafRef.current = null;
-      const pending = pendingContrastRangeRef.current;
-      pendingContrastRangeRef.current = null;
+      const pending = contrastPreviewRef.current;
       if (!pending) return;
       const [pendingMin, pendingMax] = pending;
       const current = paintParamsRef.current;
@@ -3764,7 +3762,9 @@ function Show3DSlices() {
         vmax: pendingVolRange.vmax,
       };
       const slices = liveSliderRef.current;
-      for (let axis = 0; axis < sliceDims.length; axis++) directPaintPlane(axis, slices[axis]);
+      for (let axis = 0; axis < sliceDims.length; axis++) {
+        if (!directPaintPlane(axis, slices[axis])) previewCpuPlane(axis, slices[0]);
+      }
       renderVolumePlanesLive();
     });
   };
@@ -4788,6 +4788,7 @@ function Show3DSlices() {
                 }}
                 onRangeCommit={(min, max) => {
                   // User drag overrides Auto. Commit once on release so dragging stays local.
+                  contrastPreviewRef.current = null;
                   if (autoContrast) {
                     manualImageRangeBeforeAutoRef.current = null;
                     setAutoContrast(false);
