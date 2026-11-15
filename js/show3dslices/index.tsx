@@ -952,7 +952,7 @@ function Show3DSlices() {
     cmap: string; logScale: boolean; flip: boolean;
     imageVminPct: number; imageVmaxPct: number; imageDataRange: { min: number; max: number };
     traitVmin: number | null; traitVmax: number | null;
-    zooms: { zoom: number; panX: number; panY: number }[]; canvasSizes: { w: number; h: number }[]; smooth: boolean;
+    canvasSizes: { w: number; h: number }[]; smooth: boolean;
     alignment?: { rowShift: number; colShift: number; segment: { start: ImagePoint; stop: ImagePoint } };
   } | null>(null);
   const fftComputeGenerationRef = React.useRef(0);
@@ -2372,7 +2372,7 @@ function Show3DSlices() {
   React.useEffect(() => {
     paintParamsRef.current = {
       cmap, logScale, flip, imageVminPct, imageVmaxPct, imageDataRange: displayDataRange,
-      traitVmin, traitVmax, zooms, canvasSizes, smooth, alignment: gpuSliceParams,
+      traitVmin, traitVmax, canvasSizes, smooth, alignment: gpuSliceParams,
     };
   });
 
@@ -2391,7 +2391,7 @@ function Show3DSlices() {
     if (!engine || !gpuVolReadyRef.current || !paint) return false;
     const canvas = canvasRefs.current[axis];
     if (!canvas) return false;
-    const canvasSize = paint.canvasSizes[axis]; const view = paint.zooms[axis];
+    const canvasSize = paint.canvasSizes[axis]; const view = liveZoomsRef.current[axis];
     if (!canvasSize) return false;
     const { vmin, vmax } = volumeDisplayWindow(paint.imageDataRange, paint.imageVminPct, paint.imageVmaxPct, paint.flip);
     engine.uploadLUT(paint.cmap, COLORMAPS[paint.cmap] || COLORMAPS.inferno);
@@ -2461,16 +2461,25 @@ function Show3DSlices() {
   // Redraw slices with zoom/pan (cheap: just drawImage from cached offscreen)
   // useLayoutEffect prevents black flash when canvas dimensions change (resize)
   // -------------------------------------------------------------------------
-  React.useLayoutEffect(() => {
-    for (let axis = 0; axis < sliceDims.length; axis++) {
-      const canvas = canvasRefs.current[axis];
-      const offscreen = sliceOffscreenRefs.current[axis];
-      if (!canvas || !offscreen) continue;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) continue;
-      const { w: canvasW, h: canvasH } = canvasSizes[axis];
-      drawZoomedOffscreen(ctx, offscreen, canvasW, canvasH, zooms[axis], smooth);
+  const drawSliceDirect = (axis: number) => {
+    // Playback and scrubbing advance the XY frame without replacing the committed offscreen.
+    if (axis === 0 && liveSliderRef.current[0] !== sliceIndex) {
+      const index = liveSliderRef.current[0];
+      if (!directPaintPlane(0, index)) previewTopPlane(index);
+      return;
     }
+    const view = liveZoomsRef.current[axis];
+    const { w: canvasW, h: canvasH } = canvasSizes[axis];
+    const canvas = canvasRefs.current[axis];
+    const offscreen = sliceOffscreenRefs.current[axis];
+    if (!canvas || !offscreen) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    drawZoomedOffscreen(ctx, offscreen, canvasW, canvasH, view, smooth);
+  };
+
+  React.useLayoutEffect(() => {
+    for (let axis = 0; axis < sliceDims.length; axis++) drawSliceDirect(axis);
     // gpuSliceParams belongs here: toggling Align re-renders the offscreens with
     // new depth shifts, but without this dependency the blit never re-runs and
     // the visible canvases keep the previous alignment.
@@ -2927,17 +2936,6 @@ function Show3DSlices() {
   // -------------------------------------------------------------------------
   // Direct canvas draw (bypasses React state for 60fps pan during drag)
   // -------------------------------------------------------------------------
-  const drawSliceDirect = (axis: number) => {
-    const view = liveZoomsRef.current[axis];
-    const { w: canvasW, h: canvasH } = canvasSizes[axis];
-    const canvas = canvasRefs.current[axis];
-    const offscreen = sliceOffscreenRefs.current[axis];
-    if (!canvas || !offscreen) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    drawZoomedOffscreen(ctx, offscreen, canvasW, canvasH, view, smooth);
-  };
-
   const drawFftDirect = (axis: number) => {
     const view = liveFftZoomsRef.current[axis];
     const { w: canvasW, h: canvasH } = canvasSizes[axis];
@@ -3705,7 +3703,7 @@ function Show3DSlices() {
     const { vmin, vmax } = volumeDisplayWindow(paint.imageDataRange, paint.imageVminPct, paint.imageVmaxPct, paint.flip);
     renderToOffscreenReuse(maybeFlip(paint.logScale ? applyLogScale(slice) : slice, paint.flip), COLORMAPS[paint.cmap] || COLORMAPS.inferno, vmin, vmax, preview.canvas, preview.image);
     const { w: canvasW, h: canvasH } = paint.canvasSizes[0];
-    drawZoomedOffscreen(ctx, preview.canvas, canvasW, canvasH, paint.zooms[0], paint.smooth);
+    drawZoomedOffscreen(ctx, preview.canvas, canvasW, canvasH, liveZoomsRef.current[0], paint.smooth);
   };
   // DURING DRAG: only direct-paint (GPU, off React) - do NOT set the model trait,
   // which would re-render the whole component per drag-frame (the 39->stuck cap).

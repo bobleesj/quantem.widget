@@ -4573,7 +4573,10 @@ function Show3D() {
       return false;
     }
     const panelSourceCount = Math.max(1, nPanels || 1);
-    if (panelSourceCount <= 1 || width <= 0 || height <= 0 || canvasW <= 0 || canvasH <= 0) return false;
+    // While a single panel plays, its retained 2D canvas can hold an older frame.
+    // Repaint zoom/pan from the current resident slot, as for a multi-panel view.
+    if (panelSourceCount === 1 && !(playing && viewportTransformActive())) return false;
+    if (width <= 0 || height <= 0 || canvasW <= 0 || canvasH <= 0) return false;
     const normalized = ((Math.round(idx) % Math.max(1, nSlices)) + Math.max(1, nSlices)) % Math.max(1, nSlices);
     const engine = gpuCmapRef.current;
     if (!engine || !gpuCmapReadyRef.current) return false;
@@ -4764,7 +4767,6 @@ function Show3D() {
     const renderSlotIdx = residentSlotIdx ?? normalized;
     if (isRgb) return renderGpuRgbSliceDirect(normalized, updateDisplayState, renderSlotIdx);
     if (
-      Math.max(1, nPanels || 1) > 1 &&
       renderGpuPackedPanelTransformSlice(normalized, updateDisplayState, residentSlotIdx)
     ) {
       return true;
