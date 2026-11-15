@@ -6,6 +6,8 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- Show3D and Show3DSlices keep the current frame visible when you zoom or pan during playback.
+
 ### Show3DSlices and Show3D hold less memory, every value exact
 
 - Show3DSlices keeps a uint8, int8, uint16, int16 or float32 volume in its own type in the kernel (no copy), in
