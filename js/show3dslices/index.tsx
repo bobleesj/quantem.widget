@@ -2479,15 +2479,17 @@ function Show3DSlices() {
   // -------------------------------------------------------------------------
   const paintMask = () => {
     const bounds = maskBounds.current;
-    let clip = "";
+    let mask = "";
     if (maskMode !== "off" && bounds) {
       const a = dataPointToCanvas(0, bounds.start.col, bounds.start.row);
       const b = dataPointToCanvas(0, bounds.stop.col, bounds.stop.row);
-      const { w, displayH } = canvasSizes[0];
-      clip = `inset(${Math.min(a.y, b.y)}px ${w - Math.max(a.x, b.x)}px ${displayH - Math.max(a.y, b.y)}px ${Math.min(a.x, b.x)}px)`;
+      const position = `${Math.min(a.x, b.x)}px ${Math.min(a.y, b.y)}px`;
+      const size = `${Math.abs(b.x - a.x)}px ${Math.abs(b.y - a.y)}px`;
+      // Show the selection at full brightness over a dim, still-visible XY image.
+      mask = `linear-gradient(black, black) ${position} / ${size} no-repeat, linear-gradient(rgb(0 0 0 / 40%), rgb(0 0 0 / 40%))`;
     }
     for (const layer of [canvasRefs.current[0], overlayRefs.current[0]]) {
-      if (layer) layer.style.clipPath = clip;
+      if (layer) layer.style.mask = mask;
     }
   };
   React.useLayoutEffect(paintMask, [maskMode, zooms, canvasSizes]);
