@@ -6,7 +6,7 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
-- Show3DSlices adds an interactive XY mask under Advanced. Drag a rectangle to keep that region at full brightness during playback while the surrounding image stays dimly visible.
+- Show3DSlices adds an interactive XY mask under Advanced. Move or resize the rectangle to keep that region at full brightness during playback while the surrounding image stays dimly visible.
 
 - Show3D and Show3DSlices keep the current frame visible when you zoom or pan during playback. Show3DSlices also keeps the selected histogram contrast while you drag during playback.
 

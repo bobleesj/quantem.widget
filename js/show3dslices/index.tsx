@@ -1104,14 +1104,17 @@ function Show3DSlices() {
   const [exportMenuAnchor, setExportMenuAnchor] = React.useState<HTMLElement | null>(null);
   const [exportBusy, setExportBusy] = React.useState(false);
   const [localExportStatus, setLocalExportStatus] = React.useState("");
-  const [maskMode, setMaskMode] = React.useState<"off" | "draw" | "view">("off");
+  const [maskEnabled, setMaskEnabled] = React.useState(false);
   const maskBounds = React.useRef<{ start: ImagePoint; stop: ImagePoint } | null>(null);
-  const maskPointer = React.useRef<number | null>(null);
+  const maskBox = React.useRef<HTMLDivElement>(null);
+  const maskDrag = React.useRef<{
+    pointerId: number; grip: string; origin: ImagePoint; start: ImagePoint; stop: ImagePoint;
+  } | null>(null);
   const maskFrame = React.useRef<number | null>(null);
   React.useEffect(() => {
     maskBounds.current = null;
-    maskPointer.current = null;
-    setMaskMode("off");
+    maskDrag.current = null;
+    setMaskEnabled(false);
     return () => { if (maskFrame.current !== null) cancelAnimationFrame(maskFrame.current); maskFrame.current = null; };
   }, [safeActivePanel, volumeBytes]);
   const [advancedControlsOpen, setAdvancedControlsOpen] = React.useState(false);
@@ -2480,11 +2483,14 @@ function Show3DSlices() {
   const paintMask = () => {
     const bounds = maskBounds.current;
     let mask = "";
-    if (maskMode !== "off" && bounds) {
+    if (maskEnabled && bounds) {
       const a = dataPointToCanvas(0, bounds.start.col, bounds.start.row);
       const b = dataPointToCanvas(0, bounds.stop.col, bounds.stop.row);
       const position = `${Math.min(a.x, b.x)}px ${Math.min(a.y, b.y)}px`;
       const size = `${Math.abs(b.x - a.x)}px ${Math.abs(b.y - a.y)}px`;
+      if (maskBox.current) Object.assign(maskBox.current.style, {
+        left: `${a.x}px`, top: `${a.y}px`, width: `${b.x - a.x}px`, height: `${b.y - a.y}px`,
+      });
       // Show the selection at full brightness over a dim, still-visible XY image.
       mask = `linear-gradient(black, black) ${position} / ${size} no-repeat, linear-gradient(rgb(0 0 0 / 40%), rgb(0 0 0 / 40%))`;
     }
@@ -2492,7 +2498,7 @@ function Show3DSlices() {
       if (layer) layer.style.mask = mask;
     }
   };
-  React.useLayoutEffect(paintMask, [maskMode, zooms, canvasSizes]);
+  React.useLayoutEffect(paintMask, [maskEnabled, zooms, canvasSizes]);
   const drawSliceDirect = (axis: number) => {
     if (axis === 0) paintMask();
     // Playback and scrubbing advance the XY frame without replacing the committed offscreen.
@@ -3070,7 +3076,7 @@ function Show3DSlices() {
   const [liveObliqueOffset, setLiveObliqueOffset] = React.useState<number | null>(null);
   const [obliqueAngleBounds, setObliqueAngleBounds] = React.useState<[number, number] | null>(null);
   const [obliquePositionBounds, setObliquePositionBounds] = React.useState<[number, number] | null>(null);
-  const imagePointFromEvent = (event: React.MouseEvent | MouseEvent, axis: number): ImagePoint | null => {
+  const imagePointFromEvent = (event: { clientX: number; clientY: number }, axis: number): ImagePoint | null => {
     const canvas = canvasRefs.current?.[axis];
     if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
@@ -3083,15 +3089,40 @@ function Show3DSlices() {
     const row = ((canvasY - centerY - view.panY) / view.zoom + centerY) / scaleY;
     return { row, col };
   };
-  const maskPoint = (event: React.PointerEvent) => {
-    const p = imagePointFromEvent(event, 0);
-    return p && { col: clampNumber(p.col, 0, numCols), row: clampNumber(p.row, 0, numRows) };
+  const toggleMask = (enabled: boolean) => {
+    const rect = canvasRefs.current[0]?.getBoundingClientRect();
+    if (enabled && rect) {
+      const corner = (fraction: number) => imagePointFromEvent({
+        clientX: rect.left + fraction * rect.width, clientY: rect.top + fraction * rect.height,
+      }, 0)!;
+      const a = corner(0.25), b = corner(0.75);
+      const start = { col: clampNumber(a.col, 0, numCols - 1), row: clampNumber(a.row, 0, numRows - 1) };
+      maskBounds.current = { start, stop: {
+        col: clampNumber(b.col, start.col + 1, numCols), row: clampNumber(b.row, start.row + 1, numRows),
+      } };
+    } else maskBounds.current = null;
+    maskDrag.current = null;
+    setMaskEnabled(enabled);
   };
   const moveMask = (event: React.PointerEvent) => {
-    if (maskPointer.current !== event.pointerId || !maskBounds.current) return;
-    const point = maskPoint(event);
-    if (!point) return;
-    maskBounds.current.stop = point;
+    const drag = maskDrag.current, point = imagePointFromEvent(event, 0);
+    if (!drag || drag.pointerId !== event.pointerId || !point) return;
+    const { start, stop, grip } = drag;
+    let dx = point.col - drag.origin.col, dy = point.row - drag.origin.row;
+    if (grip === "move") {
+      dx = clampNumber(dx, -start.col, numCols - stop.col);
+      dy = clampNumber(dy, -start.row, numRows - stop.row);
+      maskBounds.current = {
+        start: { col: start.col + dx, row: start.row + dy }, stop: { col: stop.col + dx, row: stop.row + dy },
+      };
+    } else {
+      maskBounds.current = {
+        start: { col: grip.includes("w") ? clampNumber(start.col + dx, 0, stop.col - 1) : start.col,
+          row: grip.includes("n") ? clampNumber(start.row + dy, 0, stop.row - 1) : start.row },
+        stop: { col: grip.includes("e") ? clampNumber(stop.col + dx, start.col + 1, numCols) : stop.col,
+          row: grip.includes("s") ? clampNumber(stop.row + dy, start.row + 1, numRows) : stop.row },
+      };
+    }
     if (maskFrame.current === null) maskFrame.current = requestAnimationFrame(() => {
       maskFrame.current = null;
       paintMask();
@@ -3314,7 +3345,7 @@ function Show3DSlices() {
     // the current (row, col) center, rotated about the slice axis.
     let value: number;
     if (axis === 0) {
-      const bounds = maskMode === "view" && maskBounds.current;
+      const bounds = maskEnabled && maskBounds.current;
       if (bounds && (point.col < Math.min(bounds.start.col, bounds.stop.col) ||
           point.col >= Math.max(bounds.start.col, bounds.stop.col) ||
           point.row < Math.min(bounds.start.row, bounds.stop.row) ||
@@ -4493,33 +4524,28 @@ function Show3DSlices() {
                     </Typography>
                   </Box>
                 )}
-                {axis === 0 && maskMode === "draw" && <div
-                  aria-label="Draw XY mask"
-                  title="Drag a rectangle to keep that part of the XY slice visible"
-                  style={{ position: "absolute", inset: 0, cursor: "crosshair", touchAction: "none" }}
-                  onMouseDown={e => e.stopPropagation()}
-                  onMouseUp={e => e.stopPropagation()}
+                {axis === 0 && maskEnabled && <div
+                  ref={maskBox} aria-label="XY mask" title="Drag to move. Drag a corner to resize."
+                  style={{ position: "absolute", boxSizing: "border-box", outline: "1px solid rgba(255,255,255,.65)", cursor: "move", touchAction: "none" }}
+                  onMouseDown={e => e.stopPropagation()} onMouseUp={e => e.stopPropagation()}
                   onDoubleClick={e => e.stopPropagation()}
                   onPointerDown={e => {
-                    if (e.button !== 0 || maskPointer.current !== null) return;
-                    const point = maskPoint(e);
-                    if (!point) return;
+                    const bounds = maskBounds.current, origin = imagePointFromEvent(e, 0);
+                    if (e.button !== 0 || maskDrag.current || !bounds || !origin) return;
+                    maskDrag.current = { ...bounds, origin, pointerId: e.pointerId, grip: (e.target as HTMLElement).dataset.grip ?? "move" };
                     e.currentTarget.setPointerCapture(e.pointerId);
-                    maskPointer.current = e.pointerId;
-                    maskBounds.current = { start: point, stop: point };
                   }}
                   onPointerMove={moveMask}
-                  onPointerUp={e => {
-                    if (maskPointer.current !== e.pointerId) return;
-                    moveMask(e);
-                    maskPointer.current = null;
-                    const bounds = maskBounds.current;
-                    if (bounds && Math.abs(bounds.start.col - bounds.stop.col) >= 1 &&
-                        Math.abs(bounds.start.row - bounds.stop.row) >= 1) setMaskMode("view");
-                    else maskBounds.current = null;
-                  }}
-                  onPointerCancel={() => { maskPointer.current = null; maskBounds.current = null; paintMask(); }}
-                />}
+                  onPointerUp={e => { if (maskDrag.current?.pointerId === e.pointerId) { moveMask(e); maskDrag.current = null; } }}
+                  onLostPointerCapture={e => { if (maskDrag.current?.pointerId === e.pointerId) maskDrag.current = null; }}
+                >
+                  {["nw", "ne", "sw", "se"].map(grip => <span key={grip} data-grip={grip}
+                    style={{ position: "absolute", [grip.includes("n") ? "top" : "bottom"]: -8,
+                      [grip.includes("w") ? "left" : "right"]: -8, width: 16, height: 16,
+                      display: "grid", placeItems: "center", cursor: `${grip}-resize` }}>
+                    <span style={{ width: 5, height: 5, background: "white", boxShadow: "0 0 1px black", pointerEvents: "none" }} />
+                  </span>)}
+                </div>}
                 {/* Over-clip warning: image is mostly black because histogram thumbs sit outside data range */}
                 {isOverClipped && axis === 0 && (
                   <Box sx={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", bgcolor: "rgba(255, 180, 0, 0.85)", color: "#000", px: 1, py: 0.5, fontSize: 11, fontWeight: "bold", borderRadius: 0.5, textAlign: "center", lineHeight: 1.3, pointerEvents: "none", maxWidth: canvasW - 20 }}>
@@ -4769,16 +4795,10 @@ function Show3DSlices() {
             </Box>
             {advancedControlsOpen && <Box id="show3dslices-advanced-controls" sx={contentControlRow}>
               <Typography sx={controlLabel}>Mask</Typography>
-              <Switch checked={maskMode !== "off"} size="small" sx={switchStyles.small}
+              <Switch checked={maskEnabled} size="small" sx={switchStyles.small}
                 slotProps={switchInputSlot("Mask XY slice")}
-                onChange={e => {
-                  maskBounds.current = null;
-                  maskPointer.current = null;
-                  setMaskMode(e.target.checked ? "draw" : "off");
-                }} />
-              {maskMode === "draw" && <Typography sx={controlLabel}>Drag a rectangle on XY</Typography>}
-              {maskMode === "view" && <Button size="small" sx={compactButton}
-                onClick={() => { maskBounds.current = null; setMaskMode("draw"); }}>Redraw mask</Button>}
+                onChange={e => toggleMask(e.target.checked)} />
+              {maskEnabled && <Typography sx={controlLabel}>Drag to move · corners resize</Typography>}
               <Typography sx={{ ...controlLabel }} title="Display-only global post-alignment through depth. Raw volume data is unchanged.">Align</Typography>
               <Switch
                 checked={alignmentActive}
