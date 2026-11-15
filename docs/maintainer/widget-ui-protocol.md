@@ -246,6 +246,7 @@ browser before claiming it is ready.
 
 ### Playback, zoom, and histogram checklist
 
+- [ ] Scroll the page partway down. Zoom in and out over the image, then over any mask or resize handle. The image should zoom around the pointer while the page and enclosing notebook keep their scroll positions, including at the zoom limits and during playback. Move outside the image and verify that ordinary page scrolling resumes.
 - [ ] Start playback on distinguishable frames. While it runs, zoom off-center and pan. Check that a feature stays under the zoom pointer and that both the frame index and **image pixels** keep advancing.
 - [ ] In the zoomed view, drag each histogram handle, hold it still through several frames, then release. Also drag the whole range if supported. The displayed contrast should follow the handle, hold steady, and match the released value. A fixed-intensity patch shared by the frames makes a contrast jump easy to detect.
 - [ ] Pause, resume, and reset zoom. Check that the same frame at the same settings reproduces the same pixels and that resetting zoom preserves contrast. For panel-local controls, check a neighboring panel too.

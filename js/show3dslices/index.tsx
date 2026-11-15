@@ -1736,16 +1736,17 @@ function Show3DSlices() {
     }
   }, [sliceDims]);
 
-  // Prevent page scroll on canvases
+  // Bind to the zoom surface so mask handles and other overlays also consume the wheel.
   React.useEffect(() => {
-    const preventDefault = (event: WheelEvent) => event.preventDefault();
-    canvasRefs.current.forEach(c => c?.addEventListener("wheel", preventDefault, { passive: false }));
-    fftCanvasRefs.current.forEach(c => c?.addEventListener("wheel", preventDefault, { passive: false }));
-    return () => {
-      canvasRefs.current.forEach(c => c?.removeEventListener("wheel", preventDefault));
-      fftCanvasRefs.current.forEach(c => c?.removeEventListener("wheel", preventDefault));
-    };
-  }, [panelFloats, showFft]);
+    const surfaces = [
+      ...imageBoxRefs.current,
+      ...fftCanvasRefs.current.map(canvas => canvas?.parentElement),
+      volumeCanvasRef.current?.parentElement,
+    ];
+    const preventScroll = (event: WheelEvent) => event.preventDefault();
+    surfaces.forEach(surface => surface?.addEventListener("wheel", preventScroll, { passive: false }));
+    return () => surfaces.forEach(surface => surface?.removeEventListener("wheel", preventScroll));
+  }, [panelFloats, showFft, webgpuSupported]);
 
   const histogramSample = React.useMemo(() => makeHistogramSample(panelFloats), [panelFloats]);
   const displayHistogramSample = React.useMemo(
@@ -1956,15 +1957,6 @@ function Show3DSlices() {
     });
     return () => cancelAnimationFrame(id);
   }, [rendererReady, panelFloats]);
-
-  // Prevent scroll on volume canvas
-  React.useEffect(() => {
-    const canvas = volumeCanvasRef.current;
-    if (!canvas || !webgpuSupported) return;
-    const preventDefault = (event: WheelEvent) => event.preventDefault();
-    canvas.addEventListener("wheel", preventDefault, { passive: false });
-    return () => canvas.removeEventListener("wheel", preventDefault);
-  }, [webgpuSupported]);
 
   // -------------------------------------------------------------------------
   // 3D Volume mouse handlers - document-level listeners for robust drag
