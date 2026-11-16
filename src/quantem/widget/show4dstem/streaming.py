@@ -18,6 +18,14 @@ if TYPE_CHECKING:
 STREAM_FOLLOW_PAUSE_S = 1.5
 
 
+def _shape_of(source) -> tuple:
+    """A source's (scan rows, scan cols, detector rows, detector cols): from ``shape``, else its counts."""
+    shape = getattr(source, "shape", None)
+    if shape is None:
+        shape = getattr(getattr(source, "counts", None), "shape", ())
+    return tuple(int(side) for side in tuple(shape)[-4:])
+
+
 class StreamFollower:
     """Follow one recording without taking ownership of its acquisitions."""
 
@@ -108,6 +116,16 @@ class StreamFollower:
                 return True
             with self.lock, viewer._defer_stream_observers():
                 sources = self.snapshot()
+                if sources:
+                    # One viewer holds one scan and detector shape: a scan of another size replaces the others and
+                    # the scans of its size are shown (2026-11-16: a 256 x 256 scan after 512 x 512 ones stopped the
+                    # live page: 'Live sessions must share scan/detector shape')
+                    newest = _shape_of(sources[-1])
+                    kept = [source for source in sources if _shape_of(source) == newest]
+                    if self.shown_sources and _shape_of(self.shown_sources[-1]) != newest:
+                        viewer._replace_stream_sources(self.shown_sources, [])
+                        self.shown_sources, self.previous, self.initialized = [], None, False
+                    sources = kept
                 shown = len(self.shown_sources)
                 if not sources:
                     if self.shown_sources:

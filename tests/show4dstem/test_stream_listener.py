@@ -1022,3 +1022,28 @@ def test_each_scan_shows_its_own_recorded_step_and_optics(recording):
         assert viewer.scan_sampling_A == [1.6, 1.6] and viewer.voltage_kV == 80.0
     finally:
         viewer.close()
+
+
+def test_a_scan_of_another_size_replaces_the_others(recording):
+    """2026-11-16 on the microscope: a 256 x 256 scan after 512 x 512 ones stopped the live page. It now replaces them,
+    with its own step, and the next 512 scan brings the 512 scans back."""
+    viewer = Show4DSTEM.stream(recording)
+    try:
+        big = LiveScan("big_1")
+        recording.acquisitions.append(big)
+        viewer.refresh_stream()
+        assert (viewer.shape_rows, viewer.shape_cols) == (3, 4)
+        small = LiveScan("small")
+        small.counts = torch.ones((2, 2, 8, 10), dtype=torch.float32)
+        small.received = small.total = 4
+        small.metadata = {"series": "small", "scan_sampling_A": [0.8, 1.2], "voltage_kV": 300.0}
+        recording.acquisitions.append(small)
+        viewer.refresh_stream()
+        assert viewer.stream_error is None and viewer.frame_labels == ["small"]
+        assert (viewer.shape_rows, viewer.shape_cols) == (2, 2) and viewer.scan_sampling_A == [0.8, 1.2]
+        recording.acquisitions.append(LiveScan("big_2"))
+        viewer.refresh_stream()
+        assert viewer.stream_error is None and sorted(viewer.frame_labels) == ["big_1", "big_2"]
+        assert (viewer.shape_rows, viewer.shape_cols) == (3, 4) and viewer.scan_sampling_A == [0.4, 0.6]
+    finally:
+        viewer.close()
