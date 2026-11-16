@@ -2304,10 +2304,6 @@ function Show3DSlices() {
       alignStartCol !== prev.alignStartCol || alignStartRow !== prev.alignStartRow ||
       alignStopCol !== prev.alignStopCol || alignStopRow !== prev.alignStopRow ||
       numCols !== prev.numCols || numRows !== prev.numRows || numSlices !== prev.numSlices;
-    const axisChanged = [
-      globalChanged || sliceIndex !== prev.sliceIndex,
-      true,
-    ];
 
     const lut = COLORMAPS[cmap] || COLORMAPS.inferno;
     const extractors = [
@@ -2328,10 +2324,11 @@ function Show3DSlices() {
       }
       if (gpuVolReady) engine.uploadLUT(cmap, lut);
     }
+    const backendChanged = gpuVolReadyRef.current !== gpuVolReady;
     gpuVolReadyRef.current = gpuVolReady;
     const { vmin, vmax } = volumeDisplayWindow(displayDataRange, imageVminPct, imageVmaxPct, flip);
     for (let axis = 0; axis < sliceDims.length; axis++) {
-      if (!axisChanged[axis]) continue;
+      if (axis === 0 && !globalChanged && !backendChanged && sliceIndex === prev.sliceIndex) continue;
       const [sliceH, sliceW] = sliceDims[axis];
       if (gpuVolReady && engine) {
         // Always cache the native slice raster. The displayed panel may be
@@ -2514,7 +2511,7 @@ function Show3DSlices() {
     // gpuSliceParams belongs here: toggling Align re-renders the offscreens with
     // new depth shifts, but without this dependency the blit never re-runs and
     // the visible canvases keep the previous alignment.
-  }, [panelFloats, colIndex, rowIndex, sliceIndex, obliqueAngle, numCols, numRows, numSlices, cmap, logScale, autoContrast, zooms, sliceDims, canvasSizes, imageVminPct, imageVmaxPct, smooth, flip, gpuSliceParams]);
+  }, [panelFloats, colIndex, rowIndex, sliceIndex, obliqueAngle, numCols, numRows, numSlices, cmap, logScale, autoContrast, zooms, sliceDims, canvasSizes, imageVminPct, imageVmaxPct, smooth, flip, gpuSliceParams, cmapReady]);
 
   // -------------------------------------------------------------------------
   // Render crosshair lines for the orthogonal slice intersections.

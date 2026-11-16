@@ -5951,6 +5951,10 @@ function Show3D() {
     } else {
       renderToOffscreenReuse(processed, lut, vmin, vmax, offscreen, imgData);
     }
+    // At fractional panel sizes Canvas2D and WebGPU can pick adjacent source texels.
+    // Present the calibrated comparison with the same sampler before and after a gesture.
+    if (perPanelContrast && sharedManualRange && gpuFrameCacheUploadedRef.current.has(renderIdx)
+        && renderGpuPackedPanelTransformSlice(renderIdx, false)) return;
     drawMain(ctx, offscreen);
     confirmStaticCanvasPresent();
   }, [frameBytes, frameSeq, width, height, cmap, panelCmapFor, hasMixedPanelCmaps, displayScale, canvasW, canvasH, imageVminPct, imageVmaxPct, logScale, autoContrast, percentileLow, percentileHigh, traitVmin, traitVmax, dataMin, dataMax, autoVmins, autoVmaxs, smooth, imageRotation, nPanels, sharedPanelSource, visiblePanelIndices, perPanelHistogramEnabled, linkContrast, panelStates, panelDataRanges, vminPerPanel, vmaxPerPanel, liveSliceIdx, diffMode, avgWindow, playing, gpuCmapReady, canvasRepaintSignal, isRgb, browserFilterTick, denoiseSigmaLive, displayFilter, spatialBin, browserFilterKnobsOn, frequencyRenderVersion, frequencyFilterIsActive, subpixelAlignEnabled, subpixelAlignVersion, compareMode, comparePair, blinkPhase, getOfflineFrame, nSlices]);
@@ -10112,7 +10116,10 @@ function Show3D() {
     }
   };
 
-  const needsReset = firstPanelZoom !== 1 || firstPanelPanX !== 0 || firstPanelPanY !== 0;
+  const needsReset = visiblePanelIndices.some(panel => {
+    const { zoom, panX, panY } = stateFor(panel);
+    return zoom !== 1 || panX !== 0 || panY !== 0;
+  });
   const scheduleScrubModelCommit = (idx: number, delayMs = 350) => {
     const next = clampSlice(idx);
     if (sliceCommitTimerRef.current !== null) {

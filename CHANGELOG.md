@@ -6,6 +6,10 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- Show3DSlices refreshes both slice views when WebGPU becomes ready, so the first zoom or reset preserves the other slice’s displayed pixels.
+
+- In Show2D and Show3D, Reset stays available when any visible image panel is zoomed or panned with the panels unlinked. Show3D also restores the original pixels after resetting a linked-contrast comparison with explicit limits.
+
 - In Show3D, drag directly on the histogram bars to adjust contrast. With linked contrast, Auto off, and explicit intensity limits, all panels share the same scale.
 
 - Show3DSlices adds an interactive XY mask under Advanced. Move or resize the rectangle to keep that region at full brightness during playback while the surrounding image stays dimly visible. Zooming over the mask or its handles keeps the page stationary.
