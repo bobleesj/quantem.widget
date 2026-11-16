@@ -1210,6 +1210,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         viewer.stream_error = None
         viewer._stream_follower = StreamFollower(
             viewer, recording, sources, labels=labels, refresh_s=refresh_s, options=viewer_kwargs)
+        viewer.observe(viewer._adopt_shown_calibration, names="frame_idx")   # a clicked scan shows its own step
         try:
             viewer._stream_follower.start()
         except Exception:
@@ -1301,6 +1302,30 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                     if index is None:
                         raise ValueError("This scan is no longer available; refresh the scan list.")
                     self.frame_idx = index
+
+    def _adopt_shown_calibration(self, _change=None) -> None:
+        """A stream shows scans of different steps and optics: take the shown scan's recorded calibration, with any
+        keyword the viewer was given still winning, so the scale bar and the readouts match the scan on screen."""
+        follower = getattr(self, "_stream_follower", None)
+        sources = list(getattr(follower, "shown_sources", None) or [])
+        if not sources:
+            return
+        source = sources[min(max(int(self.frame_idx), 0), len(sources) - 1)]
+        try:
+            recorded = (acquisition_calibration(source.sampling, source.units, source.metadata)
+                        if gpu_adapter.is_acquisition(source) else source.metadata)
+            calibration = {name: stated(name, follower.options.get(name), recorded.get(name)) for name in CALIBRATION_KEYS}
+        except (AttributeError, TypeError, ValueError):
+            return                                  # a source without a readable calibration keeps the shown one
+        if calibration["detector_sampling_mrad"] is not None:
+            calibration["detector_sampling_inv_A"] = None
+        for name, value in calibration.items():
+            if name in {"scan_sampling_A", "detector_sampling_mrad", "detector_sampling_inv_A"}:
+                value = [] if value is None or None in per_axis(value, 2) else list(self._positive_pair(value, name))
+            elif value is not None:
+                value = float(value)
+            if getattr(self, name) != value:
+                setattr(self, name, value)
 
     def _initialize_stream_geometry(self, source, options) -> None:
         """Adopt the first real scan's geometry and calibration after an idle start."""

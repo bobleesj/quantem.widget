@@ -999,3 +999,26 @@ def test_stream_resizes_the_pattern_and_the_image_independently(recording):
         assert viewer.sync_resize is True
     finally:
         viewer.close()
+
+
+def test_each_scan_shows_its_own_recorded_step_and_optics(recording):
+    """11-16 on the microscope: 256, 512 and 1024 scans in one live page have different steps; the scale bar must
+    follow the scan on screen, not stay at the first scan's."""
+    viewer = Show4DSTEM.stream(recording)
+    try:
+        first, second = LiveScan("first"), LiveScan("second")
+        second.metadata = {"series": "second", "scan_sampling_A": [1.6, 1.6], "voltage_kV": 80.0}
+        recording.acquisitions.append(first)
+        viewer.refresh_stream()
+        assert viewer.scan_sampling_A == [0.4, 0.6] and viewer.voltage_kV == 300.0
+        recording.acquisitions.append(second)
+        viewer.refresh_stream()
+        shown = viewer.frame_labels[viewer.frame_idx]
+        expected = {"first": ([0.4, 0.6], 300.0), "second": ([1.6, 1.6], 80.0)}[shown]
+        assert (viewer.scan_sampling_A, viewer.voltage_kV) == expected
+        viewer.frame_idx = viewer.frame_labels.index("first")             # the operator clicks the other scan
+        assert viewer.scan_sampling_A == [0.4, 0.6] and viewer.voltage_kV == 300.0
+        viewer.frame_idx = viewer.frame_labels.index("second")
+        assert viewer.scan_sampling_A == [1.6, 1.6] and viewer.voltage_kV == 80.0
+    finally:
+        viewer.close()
