@@ -660,6 +660,28 @@ function drawViRoiOverlayHiDPI(
  * Draw DP crosshair on high-DPI canvas (crisp regardless of detector resolution)
  * Note: Does NOT clear canvas - should be called after drawScaleBarHiDPI
  */
+/** Red rings on the diffraction pattern at the detector pixels the scan's mask excluded (filled at the receiver). */
+function drawMaskedPixelsHiDPI(
+  canvas: HTMLCanvasElement, dpr: number, pixels: number[][], zoom: number, panX: number, panY: number,
+  detWidth: number, detHeight: number,
+) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx || !pixels.length) return;
+  ctx.save();
+  ctx.scale(dpr, dpr);
+  const scaleX = canvas.width / dpr / detWidth;
+  const scaleY = canvas.height / dpr / detHeight;
+  const radius = Math.max(4, 0.8 * zoom * scaleX);
+  ctx.strokeStyle = "#ff3b30";
+  ctx.lineWidth = 1.5;
+  for (const [row, col] of pixels) {
+    ctx.beginPath();
+    ctx.arc(maskToCanvas(col, zoom, panX) * scaleX, maskToCanvas(row, zoom, panY) * scaleY, radius, 0, 2 * Math.PI);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawDpCrosshairHiDPI(
   canvas: HTMLCanvasElement,
   dpr: number,
@@ -2660,6 +2682,8 @@ function Show4DSTEM() {
   const viResizeStartRef = React.useRef<DetectorResizeStart | null>(null);
   // Independent colormaps for DP and VI panels
   const [showDpColorbar, setShowDpColorbar] = useModelState<boolean>("dp_show_colorbar");
+  const [maskedPixels] = useModelState<number[][]>("masked_pixels");
+  const [showMaskedPixels, setShowMaskedPixels] = useModelState<boolean>("show_masked_pixels");
   const [dpColormap, setDpColormap] = useModelState<string>("dp_colormap");
   const [viColormap, setViColormap] = useModelState<string>("vi_colormap");
   // vmin/vmax percentile clipping (0-100)
@@ -6174,6 +6198,9 @@ function Show4DSTEM() {
     if (profileActive && profilePoints.length > 0) {
       drawProfileOverlay(canvas, DPR, profilePoints, profileWidth, dpZoom, dpPanX, dpPanY, detCols, detRows, themeColors.accent);
     }
+    if (showMaskedPixels && maskedPixels?.length) {
+      drawMaskedPixelsHiDPI(canvas, DPR, maskedPixels, dpZoom, dpPanX, dpPanY, detCols, detRows);
+    }
 
     // Colorbar overlay: uses cached vmin/vmax from the expensive DP offscreen effect
     if (showDpColorbar) {
@@ -6189,7 +6216,7 @@ function Show4DSTEM() {
       }
     }
   }, [roiVirtualDetectorActive, dpZoom, dpPanX, dpPanY, kPixelSize, kPixelUnit, kCalibrated, detRows, detCols, roiMode, roiRadius, roiRadiusInner, roiWidth, roiHeight, localKCol, localKRow, isDraggingDP, isDraggingResize, isDraggingResizeInner, isHoveringResize, isHoveringResizeInner,
-      profileActive, profilePoints, profileWidth, themeColors, showDpColorbar, showScaleBar, dpColormap, dpScaleMode, dpVminPct, dpVmaxPct, canvasSize, roiColors, DPR]);
+      profileActive, profilePoints, profileWidth, themeColors, showDpColorbar, showScaleBar, dpColormap, dpScaleMode, dpVminPct, dpVmaxPct, canvasSize, roiColors, DPR, showMaskedPixels, maskedPixels]);
   drawDpUiRef.current = drawDpUi;
   React.useEffect(() => drawDpUi(), [drawDpUi]);
   
@@ -8122,12 +8149,16 @@ function Show4DSTEM() {
         </Select>
         <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Colorbar</Typography>
         <Switch checked={showDpColorbar} onChange={(event) => setShowDpColorbar(event.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Diffraction colorbar" } }} />
+        {maskedPixels?.length ? <>
+          <Typography sx={{ ...themedTypography.label, fontSize: 10 }} title={`The ${maskedPixels.length} detector pixels the mask excluded, filled with their neighbours\u2019 median`}>Masked</Typography>
+          <Switch checked={!!showMaskedPixels} onChange={(event) => setShowMaskedPixels(event.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Masked detector pixels" } }} />
+        </> : null}
       </Box>
     </Box>
   ), [
     beginDpRoiInteraction, detCols, detRows, dpColormap, dpScaleMode, finishDpRoiInteraction,
     requestCompareViLive, roiMode, roiRadius, roiRadiusInner, setDpColormap, setDpScaleMode, setRoiMode,
-    setRoiRadius, setRoiRadiusInner, setShowDpColorbar, showDpColorbar, themeColors, themedMenuProps,
+    setRoiRadius, setRoiRadiusInner, setShowDpColorbar, showDpColorbar, maskedPixels, showMaskedPixels, setShowMaskedPixels, themeColors, themedMenuProps,
     themedSelect, themedTypography
   ]);
   const viToolbarControls = React.useMemo(() => (

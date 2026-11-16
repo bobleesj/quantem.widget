@@ -86,6 +86,13 @@ PRODUCT_LABELS = ("DPC_row", "DPC_col", "Direct")
 # direct_phase()'s downloadable record; ShowPtycho's calibration.json has another shape and schema
 DIRECT_CALIBRATION_SCHEMA = "quantem.show4dstem-direct-calibration/5"
 FROM_TRAIT = object()  # a direct_phase() setting left to its direct_* trait (None is a value of its own)
+def masked_pixels(metadata) -> list[list[int]]:
+    """The (row, col) detector pixels a scan's mask excluded, from its ``hot_pixel_correction`` record (quantem.gpu
+    keeps it with every corrected scan, in GPU memory and in .qem); empty when none are recorded."""
+    record = (metadata or {}).get("hot_pixel_correction") or {}
+    return [[int(row), int(col)] for row, col in record.get("coordinates_row_col") or []]
+
+
 CALIBRATION_KEYS = ("scan_sampling_A", "detector_sampling_mrad", "detector_sampling_inv_A", "voltage_kV", "semiangle_mrad")
 # Soft guide for the inline offline pack: the browser's JSON parse of the embedded
 # base64 is the real ceiling, and gzip keeps a 2 GB uint8 stack under it.
@@ -354,6 +361,10 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     vi_panel_width_px = traitlets.Int(0).tag(sync=True)
     sync_resize = traitlets.Bool(True).tag(sync=True)
     dp_show_colorbar = traitlets.Bool(False).tag(sync=True)
+    # The detector pixels the scan's mask excluded (row, col), as its hot_pixel_correction record lists them, and
+    # whether the pattern marks them (2026-11-16: the operator checks whether one sits inside the bright-field disk)
+    masked_pixels = traitlets.List(traitlets.List(traitlets.Int()), default_value=[]).tag(sync=True)
+    show_masked_pixels = traitlets.Bool(False).tag(sync=True)
     vi_auto_contrast = traitlets.Bool(False).tag(sync=True)
     vi_smooth = traitlets.Bool(False).tag(sync=True)
     frame_idx = traitlets.Int(0).tag(sync=True)
@@ -580,6 +591,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         datasets = listed and all(core_adapter.is_dataset(item, ndim=4) for item in data)
         recorded = dict.fromkeys(CALIBRATION_KEYS)
         recorded_disk = None  # the bright-field disk data.calibration.detector_sampling() recorded
+        masked = []           # the detector pixels the source's mask excluded
         if prepared:
             recorded = {key: data.metadata.get(key) for key in CALIBRATION_KEYS}
             recorded_disk = gpu_adapter.recorded_bright_field_disk(data.metadata)
@@ -602,6 +614,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             # (an unknown axis is None) and a quantem core dataset (an unknown axis is 1.0 "pixels")
             recorded = acquisition_calibration(first.sampling, first.units, first.metadata)
             recorded_disk = gpu_adapter.recorded_bright_field_disk(first.metadata)
+            masked = masked_pixels(first.metadata)
         if prepared_series or waiting:
             if prepared_series:
                 data = SessionSeries(data)
@@ -713,6 +726,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self.detector_sampling_inv_A = calibration["detector_sampling_inv_A"]
         self.voltage_kV = None if calibration["voltage_kV"] is None else float(calibration["voltage_kV"])
         self.semiangle_mrad = None if calibration["semiangle_mrad"] is None else float(calibration["semiangle_mrad"])
+        self.masked_pixels = masked
         self.title = title
         self.show_title = bool(ui["show_title"])
         self.show_controls = bool(ui["show_controls"])
@@ -1326,6 +1340,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 value = float(value)
             if getattr(self, name) != value:
                 setattr(self, name, value)
+        shown = masked_pixels(getattr(source, "metadata", None) or {})
+        if shown != list(self.masked_pixels):
+            self.masked_pixels = shown
 
     def _initialize_stream_geometry(self, source, options) -> None:
         """Adopt the first real scan's geometry and calibration after an idle start."""
