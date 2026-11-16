@@ -126,6 +126,7 @@ def fit_disk(mean_pattern: np.ndarray, det_shape: tuple[int, int], default_ratio
     traits already hold.
     """
     pattern = np.asarray(mean_pattern, dtype=np.float64)
+    pattern = np.where(pattern >= 65535.0, 0.0, pattern)     # flagged detector pixels are not the disk
     if not np.any(pattern > pattern.mean() + pattern.std()):
         return det_shape[0] / 2, det_shape[1] / 2, min(det_shape) * default_ratio
     (center_row, center_col), radius = bright_field_disk(pattern)
@@ -160,6 +161,8 @@ def bright_field_disk(mean_pattern: np.ndarray) -> tuple[tuple[float, float], fl
     if gpu_adapter.available():
         return gpu_adapter.bright_field_disk(mean_pattern)
     pattern = np.asarray(mean_pattern, dtype=np.float64)
+    if (pattern >= 65535.0).any():           # flagged detector pixels left out, as quantem.gpu's _unflagged
+        pattern = np.where(pattern >= 65535.0, 0.0, pattern)
     disk = pattern > pattern.mean() + pattern.std()
     if not disk.any():
         raise ValueError("The mean diffraction pattern has no bright-field disk: no pixel exceeds its mean plus one "
