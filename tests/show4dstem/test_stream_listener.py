@@ -1082,3 +1082,11 @@ def test_a_failed_update_does_not_stop_the_live_panel(monkeypatch):
         assert "series_16" in viewer.title
     finally:
         viewer.close()
+
+
+def test_a_size_group_is_named_by_its_scan_and_detector_size():
+    """11-16: Show4DSTEM(spectra.arina.latest(10)) with 512x512x192 and 256x256x96 scans: one button per size."""
+    from quantem.widget.show4dstem.widget import _size_label
+
+    assert _size_label((512, 512, 192, 192), 6) == "512×512×192 · 6 scans"
+    assert _size_label((256, 128, 96, 80), 1) == "256×128×96×80 · 1 scan"

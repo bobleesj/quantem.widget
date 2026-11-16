@@ -68,6 +68,7 @@ from quantem.widget.show4dstem.detector import (
 )
 from quantem.widget.show4dstem.preview import static_png_b64
 from quantem.widget.show4dstem.reader import acquisition_name
+from quantem.widget.show4dstem.streaming import _shape_of
 from quantem.widget.show4dstem.session import DetectorSessionSource, SessionSeries
 from quantem.widget.show4dstem.streaming import StreamFollower
 from quantem.widget.show4dstem.live import LiveFolder
@@ -91,6 +92,13 @@ def masked_pixels(metadata) -> list[list[int]]:
     keeps it with every corrected scan, in GPU memory and in .qem); empty when none are recorded."""
     record = (metadata or {}).get("hot_pixel_correction") or {}
     return [[int(row), int(col)] for row, col in record.get("coordinates_row_col") or []]
+
+
+def _size_label(shape, count: int) -> str:
+    """A size group's name: scan rows x columns x detector (one number when square), and how many scans."""
+    rows, cols, det_rows, det_cols = shape
+    detector = f"{det_rows}" if det_rows == det_cols else f"{det_rows}×{det_cols}"
+    return f"{rows}×{cols}×{detector} · {count} scan{'s' if count != 1 else ''}"
 
 
 CALIBRATION_KEYS = ("scan_sampling_A", "detector_sampling_mrad", "detector_sampling_inv_A", "voltage_kV", "semiangle_mrad")
@@ -371,6 +379,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     n_frames = traitlets.Int(1).tag(sync=True)
     frame_dim_label = traitlets.Unicode("Frame").tag(sync=True)
     frame_labels = traitlets.List(traitlets.Unicode(), []).tag(sync=True)
+    # Scans of different sizes in one viewer: one group per size ("512×512×192 · 6 scans"), the shown one by index
+    size_groups = traitlets.List(traitlets.Unicode(), []).tag(sync=True)
+    size_group = traitlets.Int(0).tag(sync=True)
     _stream_source_ids = traitlets.List(traitlets.Unicode(), []).tag(sync=True)
     _stream_selected_source = traitlets.Unicode("").tag(sync=True)
     frame_playing = traitlets.Bool(False).tag(sync=True)
@@ -587,6 +598,18 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         if (prepared or prepared_series or waiting) and (scan_region is not None or browser_urls or offline is not False):
             raise ValueError("A prepared detector session is already scoped to its scan; use offline=False without scan_region or browser URLs.")
         series = listed and any(gpu_adapter.is_acquisition(item) for item in data)
+        # Scans of different sizes (11-16, Show4DSTEM(spectra.arina.latest(10)) raised 'must share scan/detector
+        # shape'): grouped by size in their order, the newest scan's group shown; size_group switches the group.
+        size_groups = []
+        if series and len({_shape_of(item) for item in data}) > 1:
+            items = list(data)
+            given = [str(label) for label in frame_labels] if frame_labels else []
+            shapes = [_shape_of(item) for item in items]
+            for shape in dict.fromkeys(reversed(shapes)):
+                members = [index for index, other in enumerate(shapes) if other == shape]
+                size_groups.append((shape, [items[index] for index in members],
+                                    [given[index] for index in members] if given else None))
+            data, frame_labels = size_groups[0][1], size_groups[0][2]
         bounded = gpu_adapter.is_acquisition(data) or series
         datasets = listed and all(core_adapter.is_dataset(item, ndim=4) for item in data)
         recorded = dict.fromkeys(CALIBRATION_KEYS)
@@ -810,6 +833,13 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self.observe(self._on_vi_roi_center_change, names=["vi_roi_center"])
         self._schedule_initial_view_sync()
         self._pack_offline(offline)
+        self._size_groups, self._size_shown = size_groups, (list(size_groups[0][1]) if size_groups else [])
+        self._size_options = dict(scan_sampling_A=scan_sampling_A, detector_sampling_mrad=detector_sampling_mrad,
+                                  detector_sampling_inv_A=detector_sampling_inv_A, voltage_kV=voltage_kV,
+                                  semiangle_mrad=semiangle_mrad)
+        if size_groups:
+            self.size_groups = [_size_label(shape, len(sources)) for shape, sources, _ in size_groups]
+            self.observe(self._show_size_group, names=["size_group"])
         if state is not None:
             self.load_state_dict(state)
         if self._verbose:
@@ -1343,6 +1373,25 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         shown = masked_pixels(getattr(source, "metadata", None) or {})
         if shown != list(self.masked_pixels):
             self.masked_pixels = shown
+
+    def _show_size_group(self, change) -> None:
+        """Show the scans of another size: the live viewer's path for a new scan size (its scans, its geometry, its
+        recorded calibration and bright-field disk; keywords given to the viewer still win)."""
+        index = int(change["new"])
+        if not 0 <= index < len(self._size_groups):
+            return
+        _shape, sources, labels = self._size_groups[index]
+        with self._defer_stream_observers():
+            self._replace_stream_sources(self._size_shown, [])
+            with self.hold_sync(), self.hold_trait_notifications():
+                self._replace_stream_sources([], list(sources), labels=labels)
+                self._initialize_stream_geometry(sources[0], self._size_options)
+                self.frame_idx = 0
+        self._size_shown = list(sources)
+        self.title = self.size_groups[index]
+        self._compute_virtual_image_from_roi()          # the images of this size, as a new viewer draws them
+        self._refresh_compare_virtual_images()
+        self._update_frame()
 
     def _initialize_stream_geometry(self, source, options) -> None:
         """Adopt the first real scan's geometry and calibration after an idle start."""

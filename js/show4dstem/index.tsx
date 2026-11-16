@@ -2363,6 +2363,9 @@ function Show4DSTEM() {
   const [nFrames] = useModelState<number>("n_frames");
   const [frameDimLabel] = useModelState<string>("frame_dim_label");
   const [frameLabels] = useModelState<string[]>("frame_labels");
+  // Scans of different sizes: one group per size, one button each (11-16)
+  const [sizeGroups] = useModelState<string[]>("size_groups");
+  const [sizeGroup, setSizeGroup] = useModelState<number>("size_group");
   const [framePlaying, setFramePlaying] = useModelState<boolean>("frame_playing");
   const [frameLoop, setFrameLoop] = useModelState<boolean>("frame_loop");
   const [frameFps, setFrameFps] = useModelState<number>("frame_fps");
@@ -8359,6 +8362,22 @@ function Show4DSTEM() {
       />
       {/* HEADER */}
       {titleHeading}
+      {sizeGroups && sizeGroups.length > 1 && (
+        <Box role="tablist" aria-label="Scan size" sx={{ display: "flex", flexWrap: "wrap", gap: "4px", mb: `${SPACING.SM}px` }}>
+          {sizeGroups.map((label, index) => (
+            <Box key={label} role="tab" tabIndex={0} aria-selected={index === sizeGroup}
+              title="The scans of this size: one grid shares one scan and detector size"
+              onClick={() => setSizeGroup(index)}
+              onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSizeGroup(index); } }}
+              sx={{ px: "8px", py: "2px", fontSize: 12, borderRadius: "3px", cursor: "pointer", userSelect: "none",
+                    border: `1px solid ${index === sizeGroup ? themeColors.accent : themeColors.border}`,
+                    bgcolor: index === sizeGroup ? themeColors.accent : "transparent",
+                    color: index === sizeGroup ? themeColors.bg : themeColors.text }}>
+              {label}
+            </Box>
+          ))}
+        </Box>
+      )}
       {showOfflineStatus && (
         <Box
           role="status"
