@@ -85,6 +85,7 @@ import {
   type DetectorResizeStart,
   type DetectorRoiMode,
 } from "./detectorInteraction";
+import { livePreviewImages, upsampledTransform, type UpsampledImage } from "./upsampledImage";
 
 // A .qem viewer URL ends in the exported file name, which also names a granted local file.
 const qemFileName = (url: string): string => url.slice(url.lastIndexOf("/") + 1);
@@ -2244,18 +2245,18 @@ function Show4DSTEM() {
   const [liveStream] = useModelState<boolean>("live_phase_stream");
   const [preview] = useModelState<{
     rows?: number; cols?: number; total?: number; detRows?: number; detCols?: number;
-    mode?: string; phase?: DataView; dp?: DataView; roi?: DataView;
+    mode?: string; upsample?: number; phase?: DataView; dp?: DataView; roi?: DataView;
   }>("live_phase_preview");
   const [viSource, setViSource] = useModelState<string>("vi_source");
-  const liveImage = React.useMemo(() => {
-    const data = viSource === "Direct" && preview?.mode === "Direct" ? preview.phase : preview?.roi;
-    if (!preview?.rows || !preview.cols || !preview.total || preview.rows > preview.total ||
-        data?.byteLength !== preview.rows * preview.cols * 4 ||
-        !preview.detRows || !preview.detCols || preview.dp?.byteLength !== preview.detRows * preview.detCols * 4) return null;
-    const pixels = new Float32Array(preview.total * preview.cols).fill(NaN);
-    new Uint8Array(pixels.buffer).set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
-    return new DataView(pixels.buffer);
+  // The row preview on the scan grid; a Direct phase sent k x the grid is also kept at full resolution to draw.
+  const liveImages = React.useMemo(() => {
+    if (!preview?.detRows || !preview.detCols || preview.dp?.byteLength !== preview.detRows * preview.detCols * 4) return null;
+    return livePreviewImages(preview, viSource === "Direct");
   }, [preview, viSource]);
+  const liveImage = liveImages?.image ?? null;
+  const [viDetailState] = useModelState<{
+    label?: string; frame?: number; factor?: number; rows?: number; cols?: number; image?: DataView;
+  }>("vi_detail");
   const [savedShapeRows] = useModelState<number>("shape_rows");
   const [savedShapeCols] = useModelState<number>("shape_cols");
   const [savedDetRows] = useModelState<number>("det_rows");
@@ -4545,6 +4546,19 @@ function Show4DSTEM() {
     viProductMapsBytes,
     virtualImageBytes,
   ]);
+  // The image in view at full resolution when it is k x the scan grid: the live Direct preview, or attach()'s
+  // image of the shown scan. Hover, profile and FFT keep reading the scan-grid image above.
+  const viDetail = React.useMemo<UpsampledImage | null>(() => {
+    if (compareMode) return null;
+    if (liveImage) return liveImages?.upsampled ?? null;
+    const detail = viDetailState;
+    if (!detail?.image || !detail.factor || detail.factor < 2 || detail.label !== activeViSource
+        || detail.frame !== frameIdx || detail.rows !== shapeRows * detail.factor || detail.cols !== shapeCols * detail.factor
+        || detail.image.byteLength !== detail.rows * detail.cols * 4) return null;
+    return { data: new Float32Array(detail.image.buffer, detail.image.byteOffset, detail.rows * detail.cols),
+             factor: detail.factor, rows: detail.rows, cols: detail.cols };
+  }, [activeViSource, compareMode, frameIdx, liveImage, liveImages, shapeCols, shapeRows, viDetailState]);
+  const viFactor = viDetail?.factor ?? 1;
   const comparePageButtonItems = React.useMemo<(number | "gap")[]>(() => {
     if (activeComparePageCount <= 8) {
       return Array.from({ length: activeComparePageCount }, (_, idx) => idx);
@@ -5671,15 +5685,16 @@ function Show4DSTEM() {
     if (!rawVirtualImageRef.current) return;
     if (
       !compareMode
+      && !viDetail
       && viGpuImageRef.current
       && activeViSource === viGpuImageRef.current.source
     ) {
       return;
     }
 
-    const width = shapeCols;
-    const height = shapeRows;
-    const filtered = rawVirtualImageRef.current;
+    const width = viDetail ? viDetail.cols : shapeCols;
+    const height = viDetail ? viDetail.rows : shapeRows;
+    const filtered = viDetail ? viDetail.data : rawVirtualImageRef.current;
 
     const scaled = viScaleMode === "log" ? displayLogScale(filtered) : filtered;
 
@@ -5744,7 +5759,7 @@ function Show4DSTEM() {
     applyColormap(scaled, imageData.data, lut, vmin, vmax);
     offCtx.putImageData(imageData, 0, 0);
     setViOffscreenVersion(version => version + 1);
-  }, [activeViSource, compareMode, displayedVirtualImageBytes, shapeRows, shapeCols, viGpuVersion, viColormap, viVminPct, viVmaxPct, viScaleMode, traitViVmin, traitViVmax, viAutoContrast]);
+  }, [activeViSource, compareMode, displayedVirtualImageBytes, shapeRows, shapeCols, viDetail, viGpuVersion, viColormap, viVminPct, viVmaxPct, viScaleMode, traitViVmin, traitViVmax, viAutoContrast]);
 
   // Present resident reductions directly, including while the pointer is held.
   // Offscreen bitmap snapshots can be black and can lag the latest detector. The
@@ -5759,6 +5774,7 @@ function Show4DSTEM() {
       !gpuImage
       || !engine
       || compareMode
+      || viDetail
       || (activeViSource !== gpuImage.source && currentSource !== gpuImage.source)
     ) {
       return;
@@ -5866,6 +5882,7 @@ function Show4DSTEM() {
     viPanX,
     viPanY,
     viSmooth,
+    viDetail,
     model,
     setViVminPct,
     setViVmaxPct,
@@ -5873,7 +5890,7 @@ function Show4DSTEM() {
 
   // Cheap: VI zoom/pan redraw is one drawImage from the cached offscreen canvas
   React.useLayoutEffect(() => {
-    if (!compareMode && viGpuImageRef.current?.source === activeViSource && viGpuRetainedReady) return;
+    if (!compareMode && !viDetail && viGpuImageRef.current?.source === activeViSource && viGpuRetainedReady) return;
     const offscreen = viOffscreenRef.current;
     if (!offscreen || !virtualCanvasRef.current) return;
     const canvas = virtualCanvasRef.current;
@@ -5883,11 +5900,13 @@ function Show4DSTEM() {
     if (viSmooth) ctx.imageSmoothingQuality = "high";
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.save();
-    ctx.translate(viPanX, viPanY);
-    ctx.scale(viZoom, viZoom);
+    // pan is in scan positions, as the pointer overlay is; a k x canvas moves k pixels per position
+    const transform = upsampledTransform(viPanX, viPanY, viZoom, viFactor);
+    ctx.translate(transform.translateX, transform.translateY);
+    ctx.scale(transform.scale, transform.scale);
     ctx.drawImage(offscreen, 0, 0);
     ctx.restore();
-  }, [activeViSource, compareMode, viGpuRetainedReady, viOffscreenVersion, viZoom, viPanX, viPanY, viSmooth]);
+  }, [activeViSource, compareMode, viDetail, viFactor, viGpuRetainedReady, viOffscreenVersion, viZoom, viPanX, viPanY, viSmooth]);
 
   // Compute FFT (expensive and async: only re-run on data/GPU changes)
   const fftRealRef = React.useRef<Float32Array | null>(null);
@@ -7647,7 +7666,7 @@ function Show4DSTEM() {
   }, []);
   const currentViSource = model.get("vi_source");
   const viGpuVisible = Boolean(
-    !liveImage && viGpuRetainedReady
+    !liveImage && !viDetail && viGpuRetainedReady
     && !compareMode
     && viGpuImageRef.current
     && (
@@ -8530,9 +8549,9 @@ function Show4DSTEM() {
           {/* VI Header */}
           <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ ...panelHeaderSx, flexWrap: "nowrap", ...hideBetweenPanelsOnMobileSx }}>
             <Stack direction="row" alignItems="center" spacing={`${SPACING.SM}px`} sx={{ minWidth: 0, flexWrap: "nowrap" }}>
-              <Typography noWrap title={`${compareMode ? "Multiple " : ""}${viSourceLabel(activeViSource)} | ${shapeRows}×${shapeCols}`}
+              <Typography noWrap title={`${compareMode ? "Multiple " : ""}${viSourceLabel(activeViSource)}${viFactor > 1 ? ` upsampled ${viFactor}×` : ""} | ${shapeRows}×${shapeCols}`}
                 sx={{ ...themedTypography.label, color: themeColors.textMuted, minWidth: 0 }}>
-                {viSourceLabel(activeViSource)}{compareMode ? ` · ${shapeRows}×${shapeCols}` : ` | ${shapeRows}×${shapeCols} | ${detRows}×${detCols}`}
+                {viSourceLabel(activeViSource)}{viFactor > 1 ? ` ${viFactor}×` : ""}{compareMode ? ` · ${shapeRows}×${shapeCols}` : ` | ${shapeRows}×${shapeCols} | ${detRows}×${detCols}`}
               </Typography>
               {controlsVisible && compareMode && activeComparePageCount > 1 && (
                 <Box sx={{ display: "flex", alignItems: "center", gap: 0.35, flexShrink: 0 }}>
@@ -8760,8 +8779,8 @@ function Show4DSTEM() {
               <canvas
                 data-quantem-scientific-output={viGpuVisible ? "show4dstem-virtual-image-cpu" : "show4dstem-virtual-image"}
                 ref={virtualCanvasRef}
-                width={shapeCols}
-                height={shapeRows}
+                width={shapeCols * viFactor}
+                height={shapeRows * viFactor}
                 style={{
                   position: "absolute",
                   width: "100%",

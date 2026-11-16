@@ -219,6 +219,42 @@ def test_an_attached_phase_stays_with_its_scan_as_a_stream_grows(tmp_path, accel
             acquisition.close()
 
 
+def test_an_upsampled_phase_is_drawn_at_full_resolution_and_kept_on_the_scan_grid(tmp_path, accelerator):
+    """attach("Direct", ...) takes a phase 3x the scan grid: the image panel gets it whole for the shown scan
+    (vi_detail), while hover, profile and FFT read it binned 3x to the scan positions."""
+    from types import SimpleNamespace
+
+    FACTOR = 3
+    loaded = [gpu_adapter.load_acquisition(_write_master(tmp_path, f"scan{index}", _counts(index))) for index in range(2)]
+    recording = SimpleNamespace(datasets=list(loaded), error=None, receiving=False)
+    widget = Show4DSTEM.stream(recording, refresh_s=0.02, labels=["a", "b"], verbose=False)
+    try:
+        widget._stream_thread.join(timeout=5)
+        rows, cols = SCAN
+        fine = np.random.default_rng(0).random((rows * FACTOR, cols * FACTOR), dtype=np.float32)
+        widget.attach("Direct", fine, frame="a")
+        widget.attach("Direct", np.ones(SCAN, np.float32), frame="b")
+        stack = np.frombuffer(widget.vi_product_maps_bytes, np.float32).reshape(2, *SCAN)
+        np.testing.assert_allclose(stack[0], fine.reshape(rows, FACTOR, cols, FACTOR).mean(axis=(1, 3)), rtol=1e-6)
+        widget.vi_source, widget.frame_idx = "Direct", 0
+        detail = widget.vi_detail
+        assert (detail["label"], detail["frame"], detail["factor"]) == ("Direct", 0, FACTOR)
+        assert (detail["rows"], detail["cols"]) == (rows * FACTOR, cols * FACTOR)
+        np.testing.assert_array_equal(np.frombuffer(detail["image"], np.float32).reshape(fine.shape), fine)
+        widget.frame_idx = 1                                         # scan b's phase is on the scan grid
+        assert widget.vi_detail == {}
+        widget.frame_idx = 0
+        assert widget.vi_detail["factor"] == FACTOR
+        widget.vi_source = "roi"
+        assert widget.vi_detail == {}
+        with pytest.raises(ValueError, match="or k times"):
+            widget.attach("Direct", fine[:, :-1], frame="a")
+    finally:
+        widget.close()
+        for acquisition in loaded:
+            acquisition.close()
+
+
 def _live(tmp_path, monkeypatch, **options):
     """A viewer live on ``tmp_path`` whose looks at the folder the test makes itself, one at a time."""
     monkeypatch.setattr(LiveFolder, "start", lambda self: None)

@@ -276,6 +276,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     roi_height = traitlets.Float(10.0).tag(sync=True)
     live_phase_stream = traitlets.Bool(False).tag(sync=True)
     live_phase_preview = traitlets.Dict(default_value={}).tag(sync=True)
+    # The shown scan's attach() image at full resolution when it is k x the scan grid; the image panel draws it
+    # at the scan's size and the pointer still picks scan positions (image pixel / k).
+    vi_detail = traitlets.Dict(default_value={}).tag(sync=True)
     virtual_image_bytes = _ImageMemoryView(b"").tag(sync=True)
     vi_source = traitlets.Unicode("roi").tag(sync=True)
     vi_product_labels = traitlets.List(traitlets.Unicode(), default_value=[]).tag(sync=True)
@@ -451,6 +454,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._stream_completed_sources: dict[int, object] = {}
         self._vi_product_maps: dict[str, np.ndarray] = {}
         self._attached: dict[str, dict[str, np.ndarray]] = {}  # attach(): label -> {frame identity: image}
+        self._attached_upsampled: dict[str, dict[str, np.ndarray]] = {}  # the same, k x the scan grid
         self._attached_lock = threading.RLock()
         self._preset_images: dict[str, bytes | memoryview] = {}
         self._suppress_roi_recompute = False
@@ -772,6 +776,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                                                  "roi_active", "roi_mode", "roi_width", "roi_height"])
         self.observe(self._on_roi_center_change, names=["roi_center"])
         self.observe(self._on_vi_source_change, names=["vi_source"])
+        self.observe(self._publish_detail, names=["vi_source", "frame_idx"])
         self.observe(self._on_calibration_change, names=["bright_field_center_row_px", "bright_field_center_col_px", "bright_field_radius_px"])
         # The first render shows the bright-field image: a point detector paints near black.
         self._set_roi_to_disk()
@@ -1776,8 +1781,10 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
 
         ``frame`` is the scan's index, its label, or the scan (dataset) itself, which names it when labels repeat.
         In a streaming viewer the image stays with its scan as scans arrive and leave; a scan without one shows that
-        source blank (NaN). The image is the scan's size, rows by columns. A scan not in the viewer (not shown yet, or
-        gone) raises ``LookupError``.
+        source blank (NaN). The image is the scan's size, rows by columns, or ``k`` times it (an upsampled phase,
+        ``k`` = 2, 3, ...): the image panel then draws it at full resolution at the scan's size, the pointer still
+        picks scan positions, and the label says ``k``x. A scan not in the viewer (not shown yet, or gone) raises
+        ``LookupError``.
 
         Examples
         --------
@@ -1791,12 +1798,22 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         elif hasattr(image, "get"):             # CuPy
             image = image.get()
         image = np.asarray(image)
-        if np.iscomplexobj(image) or image.shape != (self.shape_rows, self.shape_cols):
-            raise ValueError(f"{label} must be one real image of the scan's {self.shape_rows} x {self.shape_cols} "
-                             f"positions; got {image.dtype} {image.shape}.")
+        rows, cols = self.shape_rows, self.shape_cols
+        factor = image.shape[0] // rows if image.ndim == 2 and rows and cols else 0
+        if np.iscomplexobj(image) or factor < 1 or image.shape != (rows * factor, cols * factor):
+            raise ValueError(f"{label} must be one real image of the scan's {rows} x {cols} positions, or k times "
+                             f"that (upsampled); got {image.dtype} {image.shape}.")
+        image = image.astype(np.float32)
         with self._attached_lock:
             index = self._frame_index(frame)
-            self._attached.setdefault(label, {})[self._frame_identity(index)] = image.astype(np.float32)
+            identity = self._frame_identity(index)
+            upsampled = self._attached_upsampled.setdefault(label, {})
+            if factor > 1:
+                upsampled[identity] = image     # scan-grid tools (hover, profile, FFT) read it binned k x
+                image = image.reshape(rows, factor, cols, factor).mean(axis=(1, 3))
+            else:
+                upsampled.pop(identity, None)
+            self._attached.setdefault(label, {})[identity] = image
             self._restack_attached(label)
             if self.live_phase_stream and label == "Direct":
                 self.frame_idx = index
@@ -1834,6 +1851,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             identities = [self._frame_identity(index) for index in range(self.n_frames)]
             maps = {label: stored for label, stored in self._vi_product_maps.items()
                     if label not in self._attached and stored.shape[0] in (1, self.n_frames)}
+            for images in self._attached_upsampled.values():
+                for identity in [identity for identity in images if identity not in identities]:
+                    del images[identity]
             for label, images in self._attached.items():
                 for identity in [identity for identity in images if identity not in identities]:
                     del images[identity]                # its scan left the viewer
@@ -1845,6 +1865,20 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                         stack[slot] = images[identity]
                 maps[label] = stack
             self._publish_product_maps(maps, changed)
+            self._publish_detail()
+
+    def _publish_detail(self, change=None) -> None:
+        """Send the shown scan's upsampled attach() image for the image source in view, or nothing."""
+        with self._attached_lock:
+            images = self._attached_upsampled.get(self.vi_source, {})
+            index = int(self.frame_idx)
+            image = images.get(self._frame_identity(index)) if images and 0 <= index < self.n_frames else None
+            if image is None:
+                if self.vi_detail:
+                    self.vi_detail = {}
+                return
+            self.vi_detail = dict(label=self.vi_source, frame=index, factor=image.shape[0] // self.shape_rows,
+                                  rows=int(image.shape[0]), cols=int(image.shape[1]), image=image.tobytes())
 
     def _on_vi_source_change(self, change=None) -> None:
         """React to an image-source switch: fall back to the ROI image when that product map does not exist, then repaint."""

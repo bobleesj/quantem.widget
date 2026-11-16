@@ -90,11 +90,11 @@ test("FFT reads the selected current comparison panel, not the single-image stre
   const factory = memo.arguments[0] as ts.ArrowFunction;
   const select = new Function("comparisonImageView", "compareMode", "displayedCompareVirtualImageBytes",
     "comparePanelIndices", "frameIdx", "shapeRows", "shapeCols", "frontendVirtualImageBytes",
-    "virtualImageBytes", "activeViSource", `return (${factory.getText(tree)})();`);
+    "virtualImageBytes", "activeViSource", "liveImage", `return (${factory.getText(tree)})();`);
   const placeholder = new DataView(new Float32Array([NaN, NaN]).buffer);
   const original = new DataView(new Float32Array([99, 3, 4, 1, 2, 99]).buffer, 4, 16);
   const read = (stack: DataView, indices: number[], frame: number, multiple = true) => select(
-    comparisonImageView, multiple, stack, indices, frame, 1, 2, null, placeholder, "roi",
+    comparisonImageView, multiple, stack, indices, frame, 1, 2, null, placeholder, "roi", null,
   ) as DataView;
   const selected = read(original, [1, 0], 0);
   expect([...new Float32Array(selected.buffer, selected.byteOffset, 2)]).toEqual([1, 2]);
