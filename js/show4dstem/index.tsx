@@ -37,6 +37,8 @@ import {
   DetectorCompute,
 } from "../.generated/engine/detector/webgpu/backend";
 import { isRansBatch, type RansDetectorCompute } from "../.generated/engine/detector/webgpu/rans";
+import { DirectPhaseDialog } from "./DirectPhaseDialog";
+import { standalonePhase } from "./standaloneDirect";
 import { RansResidentSeries } from "../.generated/engine/detector/webgpu/rans-series";
 import { qemHttpFiles, type QemByteFile } from "../.generated/engine/detector/webgpu/qem-source";
 import { currentGPUDevice, getGPUDevice } from "../display/device";
@@ -70,6 +72,7 @@ import { RenderPathBadge } from "../shared/RenderPathBadge";
 import { KeyboardShortcuts } from "../shared/KeyboardShortcuts";
 import { HTML_EXPORT_OVERHEAD_BYTES, exportTitleSlug } from "../shared/exportFormat";
 import { HTML_PICKER_TYPE, type PendingSave, type SavePickerWindow, pickSaveHandle, useSaveExportPayload } from "../shared/exportSave";
+import { usePanelTouch, transformPanelView } from "../shared/panelTouch";
 import { pointToSegmentDistance, touchDistance, touchMidpoint } from "../shared/geometry";
 import { shouldIgnoreWidgetShortcut } from "../shared/widgetShortcuts";
 import { Histogram } from "../shared/Histogram";
@@ -87,6 +90,7 @@ import {
 } from "./detectorInteraction";
 
 // A .qem viewer URL ends in the exported file name, which also names a granted local file.
+const QEM_DEVICE_LOST = "WebGPU stopped. The last image is stale. Reload the viewer to resume detector calculations.";
 const qemFileName = (url: string): string => url.slice(url.lastIndexOf("/") + 1);
 
 // The exported page reduces the 4D counts on WebGPU (no JavaScript reducer);
@@ -1644,18 +1648,16 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     };
   }, []);
 
-  const zoomCompareAt = React.useCallback((tile: HTMLDivElement, clientX: number, clientY: number, deltaY: number) => {
+  const panelTouch = usePanelTouch();
+  const transformCompare = React.useCallback((tile: Element, from: {x: number; y: number}, to: {x: number; y: number}, scale: number) => {
     const rect = tile.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
-    const mouseX = ((clientX - rect.left) / rect.width) * shapeCols;
-    const mouseY = ((clientY - rect.top) / rect.height) * shapeRows;
+    const pixel = (p: {x: number; y: number}) => ({
+      x: (p.x - rect.left) * shapeCols / rect.width,
+      y: (p.y - rect.top) * shapeRows / rect.height,
+    });
     const view = compareViewRef.current;
-    const zoomFactor = deltaY > 0 ? 0.9 : 1.1;
-    const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, view.zoom * zoomFactor));
-    const zoomRatio = newZoom / view.zoom;
-    view.zoom = newZoom;
-    view.panX = mouseX - (mouseX - view.panX) * zoomRatio;
-    view.panY = mouseY - (mouseY - view.panY) * zoomRatio;
+    Object.assign(view, transformPanelView(view, pixel(from), pixel(to), scale, MIN_ZOOM, MAX_ZOOM));
     if (view.raf === 0) {
       view.raf = requestAnimationFrame(() => {
         view.raf = 0;
@@ -1673,7 +1675,8 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       const listener = (event: WheelEvent) => {
         event.preventDefault();
         event.stopPropagation();
-        zoomCompareAt(node, event.clientX, event.clientY, event.deltaY);
+        const point = { x: event.clientX, y: event.clientY };
+        transformCompare(node, point, point, event.deltaY > 0 ? 0.9 : 1.1);
       };
       node.addEventListener("wheel", listener, { passive: false });
       listeners.push([node, listener]);
@@ -1681,7 +1684,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     return () => {
       listeners.forEach(([node, listener]) => node.removeEventListener("wheel", listener));
     };
-  }, [orderKey, renderEntries.length, zoomCompareAt]);
+  }, [orderKey, renderEntries.length, transformCompare]);
 
   const handleCompareDoubleClick = React.useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -1841,10 +1844,19 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
               data-comparison-pan={`${comparePanX},${comparePanY}`}
               tabIndex={0}
               draggable={reorderMode}
+              {...(!reorderMode && panelTouch((tile, from, to, scale, count) => {
+                if (count === 2 || compareViewRef.current.zoom > 1) transformCompare(tile, from, to, scale);
+              }))}
               onDoubleClick={handleCompareDoubleClick}
               onPointerDown={(event) => {
                 const target = event.target instanceof Element ? event.target : null;
                 if (!loaded || reorderMode || target?.closest("button")) return;
+                if (event.pointerType === "touch" && (!event.isPrimary || compareViewRef.current.zoom > 1)) {
+                  positionDragKeyRef.current = null;
+                  isDraggingPositionRef.current = false;
+                  setIsDraggingPosition(false);
+                  return;
+                }
                 positionDragKeyRef.current = comparisonPanelKey(frame, sourceIds);
                 event.currentTarget.setPointerCapture(event.pointerId);
                 if (event.shiftKey) {
@@ -2177,7 +2189,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
           );
         }), [
     renderEntries, activeIdx, labels, sourceIds, starred, draggingFrame,
-    pendingMoveFrame, themeColors, reorderMode, handleCompareDoubleClick,
+    pendingMoveFrame, themeColors, reorderMode, handleCompareDoubleClick, transformCompare, panelTouch,
     updatePositionFromPointer, updateReadout, hideReadout, onSelect, onPendingMoveFrameChange, onReorderFrame,
     displayIndices, onDragFrameChange, movePreviewFrame, shapeCols, shapeRows,
     imageLeft, imageTop, imageWidth, imageHeight, smooth, panelChromeVisible,
@@ -2273,9 +2285,9 @@ function Show4DSTEM() {
   const [, setDirectRequest] = useModelState<string>("direct_request");
   // A preset button asks the kernel (or, offline, the browser backend) to place the detector.
   const [, requestViPreset] = useModelState<string>("_preset_request");
-  const [directStatus] = useModelState<string>("direct_status");
-  const [directBusy] = useModelState<boolean>("direct_busy");
-  const [directEnabled] = useModelState<boolean>("direct_enabled");
+  const [kernelDirectStatus] = useModelState<string>("direct_status");
+  const [kernelDirectBusy] = useModelState<boolean>("direct_busy");
+  const [kernelDirectEnabled] = useModelState<boolean>("direct_enabled");
   const [directTrials, setDirectTrials] = useModelState<number>("direct_trials");
   const [directTilt, setDirectTilt] = useModelState<boolean>("direct_tilt");
   // quantem.gpu's two direct ptychography fits: tilt-corrected (default) and tilt=False
@@ -2496,7 +2508,16 @@ function Show4DSTEM() {
   const queueRoiCenter = React.useCallback((row: number, col: number) => {
     roiCenterPendingRef.current = [row, col];
     if (roiCenterRafRef.current === null) {
-      roiCenterRafRef.current = requestAnimationFrame(() => flushRoiCenter());
+      roiCenterRafRef.current = requestAnimationFrame(() => {
+        roiCenterRafRef.current = null;
+        if (dpRoiInteractiveRef.current && requestCompareViLiveRef.current && roiCenterPendingRef.current) {
+          // The pointer owns the outline. The next available GPU request consumes
+          // the latest center, and release commits the final scientific position.
+          drawDpUiRef.current?.(roiCenterPendingRef.current);
+        } else {
+          flushRoiCenter();
+        }
+      });
     }
   }, [flushRoiCenter]);
   // Radius drags keep the latest geometry in refs (read by the DP overlay and
@@ -2775,6 +2796,16 @@ function Show4DSTEM() {
   const qemSourceAvailable = qemUrls.length > 0;
   const qemNeedsLocalFiles = qemSourceAvailable && globalThis.location?.protocol === "file:";
   const [qemLocalFiles, setQemLocalFiles] = React.useState<File[] | null>(null);
+  const [directFolder] = useModelState<string>("direct_folder");
+  const residentSeries = React.useRef<RansResidentSeries | null>(null);
+  const [localBusy,setLocalBusy] = React.useState(false);
+  const [localStatus,setLocalStatus] = React.useState("");
+  const [phaseOpen, setPhaseOpen] = React.useState(false);
+  const [phaseView,setPhaseView] = React.useState<Awaited<ReturnType<typeof standalonePhase>> | null>(null);
+  const directEnabled = offline ? Boolean(directFolder) : kernelDirectEnabled;
+  const directBusy = offline ? localBusy : kernelDirectBusy;
+  const directStatus = offline ? localStatus : kernelDirectStatus;
+
   const [qemSeriesLoading, setQemSeriesLoading] = React.useState(false);
   const [h5LocalFilesGranted, setH5LocalFilesGranted] = React.useState(show4DSTEMHasLocalFiles());
   const [h5LocalSourceStatus, setH5LocalSourceStatus] = React.useState("");
@@ -3197,8 +3228,21 @@ function Show4DSTEM() {
         // panel paints as soon as it is resident, not after the whole series.
         const device = await getGPUDevice();
         if (!device) throw new Error(OFFLINE_NEEDS_WEBGPU);
-        const files: QemByteFile[] = qemLocalFiles ?? (await Promise.all(qemUrls.map(url =>
+        void device.lost.then(() => {
+          if (!disposed) {
+            setOfflineBackendLoading(false);
+            setOfflineBackendError(QEM_DEVICE_LOST);
+          }
+        });
+        const files: QemByteFile[] = qemLocalFiles ? [...qemLocalFiles] : (await Promise.all(qemUrls.map(url =>
           qemHttpFiles(new URL(".", new URL(url, location.href)).href, [qemFileName(url)], qemLoadAbort.signal)))).flat();
+        if (directFolder && files.length === 1) {
+          const url = new URL("source.json",new URL(directFolder,document.baseURI));
+          const manifest = await (await fetch(url)).json();
+          files[0] = {name: files[0].name, size: files[0].size, mode: files[0].mode,
+            slice: files[0].slice.bind(files[0]), chunks: files[0].chunks?.bind(files[0]),
+            recycleChunk: files[0].recycleChunk?.bind(files[0]), expectedHeaderSha256: manifest.header_sha256};
+        }
         const totalGB = files.reduce((sum, file) => sum + file.size, 0) / 1e9;
         if (!disposed) {
           setOfflineBackendStatus(`Loading ${files.length} acquisitions, ${totalGB.toFixed(1)} GB`);
@@ -3221,7 +3265,9 @@ function Show4DSTEM() {
           series.dispose();
           throw new Error("These .qem files have another scan or detector shape than this viewer; select the files it was exported with.");
         }
+        setPhaseView(null); setPhaseOpen(false); setLocalStatus("");
         qemSeries = series;
+        residentSeries.current = series;
         volumeCount = files.length;
         getVol = async (idx: number) => volCache.get(Math.max(0, Math.min(files.length - 1, idx))) ?? null;
         compute = volCache.get(Math.max(0, Math.min(files.length - 1, model.get("frame_idx") | 0))) ?? volCache.get(0)!;
@@ -3448,7 +3494,10 @@ function Show4DSTEM() {
         const centerCol = Number(model.get("bright_field_center_col_px") || model.get("roi_center_col") || detectorCols / 2);
         const disk = { centerRow, centerCol, width: 0, height: 0 };
         if (name === "abf") return { ...disk, mode: "annular", radius: brightFieldRadiusPx, radiusInner: Math.max(0.5, brightFieldRadiusPx * 0.5) };
-        if (name === "adf") return { ...disk, mode: "annular", radius: brightFieldRadiusPx * 2, radiusInner: brightFieldRadiusPx };
+        if (name === "adf") {
+          const reach = Math.min(centerRow + 0.5, detectorRows - 0.5 - centerRow, centerCol + 0.5, detectorCols - 0.5 - centerCol);
+          return { ...disk, mode: "annular", radius: Math.min(brightFieldRadiusPx * 2, reach), radiusInner: brightFieldRadiusPx };
+        }
         return { ...disk, mode: "circle", radius: brightFieldRadiusPx, radiusInner: 0 };
       };
       const maskForRoiGeometry = (geometry: WarmRoiGeometry): Uint32Array => {
@@ -3522,12 +3571,12 @@ function Show4DSTEM() {
       const computeRoiBufferImage = (
         backend: DetectorCompute,
         mask: Uint32Array,
-      ): boolean => {
+      ) => {
         const engine = ensureViGpuColormap(backend.getDevice());
         const { buffer, n } = backend.maskedSumBuffer(mask);
         if (n === 0) {
           buffer.destroy();
-          return false;
+          return null;
         }
         engine.adoptBuffer(VI_GPU_SLOT, buffer, scanCols, scanRows);
         viGpuImageRef.current = {
@@ -3539,7 +3588,7 @@ function Show4DSTEM() {
           rawVersionAfter: rawVirtualImageVersionRef.current + 1,
         };
         setViGpuVersion(version => version + 1);
-        return true;
+        return buffer;
       };
       const readGpuFloatBuffer = async (
         device: GPUDevice,
@@ -3643,9 +3692,12 @@ function Show4DSTEM() {
         }
         if (disposed || generation !== viRecomputeGen) return;
         if (displayed && dpRoiInteractiveRef.current) {
+          await compute.getDevice().queue.onSubmittedWorkDone();
           return;
         }
-        const virtualImage = await compute!.maskedSum(mask);
+        const virtualImage = displayed
+          ? await readGpuFloatBuffer(compute.getDevice(), displayed, scanRows * scanCols)
+          : await compute.maskedSum(mask);
         if (disposed || generation !== viRecomputeGen) return;
         setWarmCacheEntry({
           source: "roi",
@@ -3655,15 +3707,14 @@ function Show4DSTEM() {
         publishVirtualImageBytes(new DataView(virtualImage.buffer));
       };
       const warmStandardViCache = async () => {
-        // A .qem panel keeps one resident image per acquisition; warming other
-        // masks on it would move the mask history its compare deltas build on.
-        if (viWarmupStarted || disposed || !compute || qemSeries) {
+        // Multi-acquisition comparisons own their resident mask history.
+        if (viWarmupStarted || disposed || !compute || (qemSeries && volumeCount !== 1)) {
           return;
         }
         viWarmupStarted = true;
         const warmGeneration = ++viWarmupGeneration;
         try {
-          for (const preset of ["bf", "abf", "adf"] as WarmRoiPresetName[]) {
+          for (const preset of ["bf", "adf", "abf"] as WarmRoiPresetName[]) {
             if (disposed || warmGeneration !== viWarmupGeneration || !compute) {
               return;
             }
@@ -3679,6 +3730,13 @@ function Show4DSTEM() {
               data,
               key,
             });
+          }
+          if (qemSeries) {
+            const resident = volCache.get(0) as unknown as RansDetectorCompute | undefined;
+            if (volumeCount === 1 && resident?.getDevice().adapterInfo?.vendor?.toLowerCase() === "qualcomm") {
+              await resident.set.prepareDetectorDrags();
+            }
+            return;
           }
           for (const source of ["DPC_row", "DPC_col"] as DpcGpuSource[]) {
             if (disposed || warmGeneration !== viWarmupGeneration || !compute) {
@@ -3701,13 +3759,26 @@ function Show4DSTEM() {
           console.warn("Show4DSTEM could not pre-compute the BF, ABF, ADF and DPC images", error);
         }
       };
+      let warmTimer: ReturnType<typeof setTimeout> | undefined;
+      let fittedPresetsReady = false;
       const resetWarmViCache = () => {
+        clearTimeout(warmTimer);
+        warmTimer = undefined;
         viWarmupGeneration += 1;
         viWarmupStarted = false;
         viWarmCache.clear();
       };
       const scheduleWarmStandardViCache = () => {
         if (viWarmupStarted || disposed) return;
+        if (qemSeries) {
+          if (volumeCount === 1 && fittedPresetsReady && !warmTimer) {
+            warmTimer = setTimeout(() => {
+              warmTimer = undefined;
+              if (!dpRoiInteractiveRef.current) void warmStandardViCache();
+            }, 350);
+          }
+          return;
+        }
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             if (!disposed) {
@@ -3960,7 +4031,7 @@ function Show4DSTEM() {
       };
       const recomputeVisibleVirtualImages = async () => {
         const mode = String(model.get("view_mode") || "single");
-        if (mode === "multiple") {
+        if (mode === "multiple" && Number(model.get("n_frames")) > 1) {
           await recomputeCompareVI();
           return;
         }
@@ -4279,6 +4350,8 @@ function Show4DSTEM() {
         model.off("change:frame_idx", onFrame);
         model.off("change:view_mode", recomputeActiveView);
         volCache.forEach((volume) => volume.dispose()); volCache.clear();  // every cached lazy volume
+        clearTimeout(warmTimer);
+        if (residentSeries.current === qemSeries) residentSeries.current = null;
         qemSeries?.dispose();
         inlineVolCache.forEach((volume) => volume.dispose()); inlineVolCache.clear();
       };
@@ -4367,6 +4440,7 @@ function Show4DSTEM() {
       await fitBrightFieldDiskFromMeanPattern().catch((error) => {
         console.warn("Show4DSTEM BF disk fit failed; keeping the default bright_field_radius_px", error);
       });
+      fittedPresetsReady = true;
       scheduleWarmStandardViCache();
       // Safety re-run: at first mount the offline stack / roi-detector traits can
       // still be settling, so the very first maskedSum can return an empty (zero)
@@ -4674,7 +4748,8 @@ function Show4DSTEM() {
     const rest = mainRowWidth > 0
       ? Math.max(SIDE_BY_SIDE_MIN, Math.floor((mainRowWidth - fittedDpWidth - PANEL_GAP * (showFft ? 2 : 1)) / (showFft ? 2 : 1)))
       : CANVAS_SIZE;
-    const cap = viPanelWidthPx || panelWidthPx;
+    const phoneWidth = window.matchMedia?.("(pointer: coarse) and (max-width: 1024px)").matches ? fittedDpWidth : 0;
+    const cap = viPanelWidthPx || panelWidthPx || phoneWidth;
     // Linked panels share the row; an independent image keeps its own width (up to the row) and wraps below.
     const room = syncResize ? rest : Math.max(rest, mainRowWidth || CANVAS_SIZE);
     setViCanvasSize(cap ? Math.min(cap, room) : rest);
@@ -4712,6 +4787,18 @@ function Show4DSTEM() {
     phi12Deg?: number;
     rotationDeg?: number;
   }) => {
+    if (offline && directFolder) {
+      const series = residentSeries.current;
+      if (!series || series.acquisitionCount !== 1) { setLocalStatus("Open the calibrated QEM first."); return; }
+      if (localBusy) return;
+      setLocalBusy(true); setPhaseView(null);
+      const resident = series.resident(0);
+      void resident.withForegroundCompute(() => standalonePhase(directFolder, resident, setLocalStatus)).then(result => {
+        if (residentSeries.current !== series) return;
+        setPhaseView(result); setPhaseOpen(true); setLocalStatus("Full-field phase ready");
+      }).catch(error => setLocalStatus("Direct ptycho failed: "+String(error))).finally(()=>setLocalBusy(false));
+      return;
+    }
     const nTrials = Math.max(0, Math.round(Number(directTrials ?? 200)));
     const manualAberrations = Boolean(options?.manualAberrations);
     const c10Nm = Number(options?.c10Nm ?? directC10Nm ?? 0);
@@ -4735,7 +4822,7 @@ function Show4DSTEM() {
     if (options?.closeMenu !== false) setDpMoreAnchor(null);
     setDirectRequest(payload);
   }, [
-    setDirectRequest,
+    setDirectRequest, offline, directFolder, localBusy,
     directC10Nm,
     directC12Nm,
     directLockC10,
@@ -5279,6 +5366,7 @@ function Show4DSTEM() {
     startPanY: number;
   };
   const touchTransformRef = React.useRef<TouchTransformState | null>(null);
+  const pendingTouchPress = React.useRef<React.PointerEvent<HTMLCanvasElement> | null>(null);
   const lastTapRef = React.useRef<{ kind: TouchPanelKind; time: number } | null>(null);
 
   // Offscreen version counters: bumped when colormap/data change, the cheap draw effects depend on them
@@ -5577,7 +5665,7 @@ function Show4DSTEM() {
     }
   };
   // The DP UI overlay draws the colorbar from the limits cached below; it is declared further down.
-  const drawDpUiRef = React.useRef<(() => void) | null>(null);
+  const drawDpUiRef = React.useRef<((center?: [number, number]) => void) | null>(null);
 
   // Render DP with zoom (use summed DP when VI ROI is active)
   // Expensive: colormap + data processing → cached offscreen canvas, painted
@@ -6470,7 +6558,7 @@ function Show4DSTEM() {
     // Capture the pointer so a fast edge-drag resize keeps receiving move/up
     // events even when the cursor leaves the canvas (#751). Without capture the
     // window listener can miss events and the radius never updates.
-    event.currentTarget.setPointerCapture(event.pointerId);
+    if (event.pointerType !== "touch") event.currentTarget.setPointerCapture(event.pointerId);
     dpClickStartRef.current = { x: event.clientX, y: event.clientY };
 
     // When profile mode is active, use profile interactions only
@@ -6776,7 +6864,7 @@ function Show4DSTEM() {
     // Capture the pointer so a touch/mouse probe-drag keeps receiving move/up
     // events even when the finger leaves the small canvas. Needed for mobile
     // parity: touchscreens deliver these as pointer events (mirrors DP #751).
-    event.currentTarget.setPointerCapture(event.pointerId);
+    if (event.pointerType !== "touch") event.currentTarget.setPointerCapture(event.pointerId);
     const canvas = virtualOverlayRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -7080,6 +7168,46 @@ function Show4DSTEM() {
     };
   };
 
+  // A touch starts as either a scientific edit or the first finger of a pinch.
+  // Start an edit on a tap or a one-finger drag; a second finger owns navigation.
+  const panelPointerHandlers = (kind: "dp" | "vi") => {
+    const down = kind === "dp" ? handleDpMouseDown : handleViMouseDown;
+    const move = kind === "dp" ? handleDpMouseMove : handleViMouseMove;
+    const up = kind === "dp" ? handleDpMouseUp : handleViMouseUp;
+    const editing = () => touchTransformRef.current?.kind !== kind;
+    return {
+      onPointerDown(event: React.PointerEvent<HTMLCanvasElement>) {
+        if (event.pointerType !== "touch") return down(event);
+        pendingTouchPress.current = event.isPrimary ? event : null;
+      },
+      onPointerMove(event: React.PointerEvent<HTMLCanvasElement>) {
+        if (event.pointerType === "touch") {
+          const press = pendingTouchPress.current;
+          if (!event.isPrimary) return;
+          if (press && Math.hypot(event.clientX - press.clientX, event.clientY - press.clientY) < 3) return;
+          pendingTouchPress.current = null;
+          if (!editing()) return;
+          if (press) down(press);
+        }
+        move(event);
+      },
+      onPointerUp(event: React.PointerEvent<HTMLCanvasElement>) {
+        if (event.pointerType === "touch") {
+          if (!event.isPrimary) return;
+          const press = pendingTouchPress.current;
+          pendingTouchPress.current = null;
+          if (press) down(press);
+          else if (!editing()) return;
+        }
+        up(event);
+      },
+      onPointerCancel(event: React.PointerEvent<HTMLCanvasElement>) {
+        pendingTouchPress.current = null;
+        up(event);
+      },
+    };
+  };
+
   const handlePanelTouchStart = (kind: TouchPanelKind) => (event: React.TouchEvent<HTMLCanvasElement>) => {
     const refs = getTouchPanelRefs(kind);
     const canvas = refs.canvasRef.current;
@@ -7090,18 +7218,20 @@ function Show4DSTEM() {
       const previousTap = lastTapRef.current;
       lastTapRef.current = { kind, time: now };
       if (previousTap && previousTap.kind === kind && now - previousTap.time < 320) {
-        event.preventDefault();
         refs.reset();
         touchTransformRef.current = null;
         return;
       }
 
-      if (kind !== "fft" && refs.viewRef.current.zoom <= 1) {
+      const touch = event.touches[0];
+      const detectorPoint = kind === "dp" && roiVirtualDetectorActive && refs.viewRef.current.zoom > 1
+        ? getDpImageCoordsFromClient(touch.clientX, touch.clientY) : null;
+      const grabbedDetector = detectorPoint && grabDpRoi(detectorPoint.maskCol, detectorPoint.maskRow).action !== "outside";
+      if ((kind !== "fft" && refs.viewRef.current.zoom <= 1) || grabbedDetector) {
         touchTransformRef.current = null;
         return;
       }
 
-      const touch = event.touches[0];
       touchTransformRef.current = {
         kind,
         mode: "pan",
@@ -7114,11 +7244,17 @@ function Show4DSTEM() {
         startPanX: refs.viewRef.current.panX,
         startPanY: refs.viewRef.current.panY,
       };
-      event.preventDefault();
       return;
     }
 
     if (event.touches.length >= 2) {
+      pendingTouchPress.current = null;
+      if (kind === "dp" && dpPointerOwner.active) {
+        dpPointerOwner.reset();
+        handleDpMouseLeave();
+      } else if (kind === "vi") {
+        handleViMouseLeave();
+      }
       const first = event.touches[0];
       const second = event.touches[1];
       const midpoint = touchMidpoint(first, second);
@@ -7134,7 +7270,6 @@ function Show4DSTEM() {
         startPanX: refs.viewRef.current.panX,
         startPanY: refs.viewRef.current.panY,
       };
-      event.preventDefault();
     }
   };
 
@@ -7159,7 +7294,6 @@ function Show4DSTEM() {
         state.startPanX + dx,
         state.startPanY + dy,
       );
-      event.preventDefault();
       return;
     }
 
@@ -7182,13 +7316,16 @@ function Show4DSTEM() {
         currentCanvasPoint.x - imageX * newZoom,
         currentCanvasPoint.y - imageY * newZoom,
       );
-      event.preventDefault();
     }
   };
 
   const handlePanelTouchEnd = (event: React.TouchEvent<HTMLCanvasElement>) => {
-    if (event.touches.length === 0) {
-      touchTransformRef.current = null;
+    const previous = touchTransformRef.current;
+    touchTransformRef.current = null;
+    if (previous?.mode === "pinch" && event.touches.length === 1 && event.type !== "touchcancel") {
+      lastTapRef.current = null;
+      handlePanelTouchStart(previous.kind)(event);
+      lastTapRef.current = null;
     }
   };
 
@@ -7699,7 +7836,9 @@ function Show4DSTEM() {
       {/* One line beside narrow panels: the full title is on hover. */}
       <span title={title || "4D-STEM Explorer"} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {title || "4D-STEM Explorer"}</span>
-      <RenderPathBadge colors={themeColors} />
+      {offlineBackendError === QEM_DEVICE_LOST
+        ? <span role="status" title={QEM_DEVICE_LOST} style={{ marginLeft: 4, fontSize: 11 }}>WebGPU stopped</span>
+        : <RenderPathBadge colors={themeColors} />}
       {nFrames > 1 && <span style={{ fontWeight: "normal", fontSize: 13, marginLeft: 8, opacity: 0.7 }}>({frameLabels && frameLabels.length > frameIdx ? frameLabels[frameIdx] : `${frameDimLabel} ${frameIdx + 1}/${nFrames}`})</span>}
       {panelChromeVisible && <InfoTooltip text={<Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
         <MetadataSection rows={[
@@ -7730,7 +7869,7 @@ function Show4DSTEM() {
   ), [
     detCols, detRows, frameDimLabel, frameIdx, frameLabels, kCalibrated, kPixelSize, kPixelUnit,
     keyboardShortcutItems, nFrames, panelChromeVisible, pixelSize, scanUnit, shapeCols, shapeRows,
-    showTitle, themeColors, themeInfo, themedTypography, title
+    showTitle, themeColors, themeInfo, themedTypography, title, offlineBackendError
   ]);
   const dpToolbarControls = React.useMemo(() => (
     controlsVisible && <Stack
@@ -7738,7 +7877,7 @@ function Show4DSTEM() {
       spacing={`${SPACING.SM}px`}
       alignItems="center"
       justifyContent="flex-start"
-      sx={{ flexWrap: "nowrap", whiteSpace: "nowrap" }}
+      sx={{ minWidth: 0, maxWidth: "100%", flexWrap: "nowrap", whiteSpace: "nowrap" }}
     >
       <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Profile</Typography>
       <Switch checked={profileActive} onChange={(event) => {
@@ -7811,14 +7950,13 @@ function Show4DSTEM() {
           </MenuItem>
         ))}
       </Menu>}
-      {directEnabled && <Button
-        size="small"
-        sx={compactButton}
-        onClick={(event) => setDpMoreAnchor(event.currentTarget)}
-        title="More actions"
-      >
-        More
-      </Button>}
+      {directEnabled && <>
+        {!offline && <Button size="small" sx={compactButton} aria-haspopup="menu"
+          aria-label="Direct Ptycho settings" title="Direct Ptycho settings"
+          onClick={(event) => setDpMoreAnchor(event.currentTarget)}>
+          ▾
+        </Button>}
+      </>}
       {directEnabled && <Menu
         anchorEl={dpMoreAnchor}
         open={Boolean(dpMoreAnchor)}
@@ -8023,7 +8161,7 @@ function Show4DSTEM() {
     directMethod,
     directBfCountText, directBusy, directC10Nm, directC12Nm, directEnabled, directLockC10,
     directLockC12, directTrials, directRefinement, directStatus, directTilt, directProgressText,
-    directStatusIsFailure, starredReportCount, themeColors, themeInfo, themedMenuProps, themedSelect,
+    phaseView, directStatusIsFailure, starredReportCount, themeColors, themeInfo, themedMenuProps, themedSelect,
     themedTypography, title, writeRoiCenterModel
   ]);
   const dpControlRows = React.useMemo(() => (
@@ -8284,6 +8422,7 @@ function Show4DSTEM() {
         {...(qemSourceAvailable ? {} : { webkitdirectory: "", directory: "" })}
       />
       {/* HEADER */}
+      {phaseView && phaseOpen && <DirectPhaseDialog result={phaseView} onClose={()=>setPhaseOpen(false)} />}
       {titleHeading}
       {showOfflineStatus && (
         <Box
@@ -8388,8 +8527,7 @@ function Show4DSTEM() {
             <canvas data-quantem-scientific-output="show4dstem-diffraction-pattern" ref={dpCanvasRef} width={detCols} height={detRows} style={{ position: "absolute", width: "100%", height: "100%", imageRendering: "pixelated" }} />
             <canvas
               ref={dpOverlayRef} width={detCols} height={detRows}
-              onPointerDown={handleDpMouseDown} onPointerMove={handleDpMouseMove}
-              onPointerUp={handleDpMouseUp} onPointerCancel={handleDpMouseUp} onPointerLeave={handleDpMouseLeave}
+              {...panelPointerHandlers("dp")} onPointerLeave={handleDpMouseLeave}
               onWheel={createZoomHandler(setDpZoom, setDpPanX, setDpPanY, dpViewRef, dpOverlayRef)}
               onDoubleClick={handleDpDoubleClick}
               onTouchStart={handlePanelTouchStart("dp")}
@@ -8412,7 +8550,7 @@ function Show4DSTEM() {
             />
             <canvas ref={dpUiRef} width={canvasSize * DPR} height={canvasSize * DPR} style={{ position: "absolute", width: "100%", height: "100%", pointerEvents: "none" }} />
             {(dpPanelLoading || offlineBackendError) && renderPanelLoadingOverlay(
-              offlineBackendError === OFFLINE_NEEDS_WEBGPU ? "Needs WebGPU" : offlineBackendError ? "Show4DSTEM load failed" : "Loading DP",
+              offlineBackendError === OFFLINE_NEEDS_WEBGPU ? "Needs WebGPU" : offlineBackendError === QEM_DEVICE_LOST ? "WebGPU stopped · reload viewer" : offlineBackendError ? "Show4DSTEM load failed" : "Loading DP",
             )}
             {panelChromeVisible && cursorInfo && cursorInfo.panel === "DP" && (
               <Box sx={{ position: "absolute", top: 3, right: 3, bgcolor: "rgba(0,0,0,0.35)", px: 0.5, py: 0.15, pointerEvents: "none", minWidth: 100, textAlign: "right" }}>
@@ -8451,6 +8589,12 @@ function Show4DSTEM() {
                     </Typography>
                   );
                 })}
+                {directEnabled && <Button size="small" disabled={directBusy}
+                  onClick={() => phaseView ? setPhaseOpen(true) : requestDirect()}
+                  title={phaseView ? "Open the full-field phase" : "Fit the central crop and reconstruct the full field"}
+                  sx={{ ...viSourceButtonSx("Direct"), color: "error.main", minWidth: 0, px: 0.25, py: 0, textTransform: "none" }}>
+                  Direct Ptycho
+                </Button>}
               </>}
             </Box>
           )}
@@ -8755,8 +8899,7 @@ function Show4DSTEM() {
               />
               <canvas
                 ref={virtualOverlayRef} width={shapeCols} height={shapeRows}
-                onPointerDown={handleViMouseDown} onPointerMove={handleViMouseMove}
-                onPointerUp={handleViMouseUp} onPointerCancel={handleViMouseUp} onMouseLeave={handleViMouseLeave}
+                {...panelPointerHandlers("vi")} onMouseLeave={handleViMouseLeave}
                 onWheel={createZoomHandler(setViZoom, setViPanX, setViPanY, viViewRef, virtualOverlayRef)}
                 onDoubleClick={handleViDoubleClick}
                 onTouchStart={handlePanelTouchStart("vi")}
@@ -8777,7 +8920,7 @@ function Show4DSTEM() {
               />
               <canvas ref={viUiRef} width={viCanvasWidth * DPR} height={viCanvasHeight * DPR} style={{ position: "absolute", width: "100%", height: "100%", pointerEvents: "none" }} />
               {(viPanelLoading || offlineBackendError) && renderPanelLoadingOverlay(
-                offlineBackendError === OFFLINE_NEEDS_WEBGPU ? "Needs WebGPU" : offlineBackendError ? "Show4DSTEM load failed" : "Loading virtual image",
+                offlineBackendError === OFFLINE_NEEDS_WEBGPU ? "Needs WebGPU" : offlineBackendError === QEM_DEVICE_LOST ? "WebGPU stopped · reload viewer" : offlineBackendError ? "Show4DSTEM load failed" : "Loading virtual image",
               )}
               {panelChromeVisible && cursorInfo && cursorInfo.panel === "VI" && (
                 <Box sx={{ position: "absolute", top: 3, right: 3, bgcolor: "rgba(0,0,0,0.35)", px: 0.5, py: 0.15, pointerEvents: "none", minWidth: 100, textAlign: "right" }}>

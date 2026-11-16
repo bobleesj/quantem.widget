@@ -6,6 +6,14 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- In calibrated standalone QEM viewers, open Direct Ptycho beside iDPC. Pinch to inspect the full-field phase and tap Fit to restore the whole image.
+
+- On a compatible mobile WebGPU device, Show4DSTEM prepares exact detector images in the background so the aperture can follow a held drag.
+
+- In Show4DSTEM, drag the detector aperture with one finger even when zoomed in. Drag outside the aperture to pan.
+
+- Show4DSTEM prepares BF, ADF and ABF images after opening a single QEM. On touch screens the virtual image defaults to the diffraction pattern’s width.
+
 - Save the live ShowPtycho calibration and phase preview with the reviewed reconstruction.
 
 - Show3DSlices refreshes both slice views when WebGPU becomes ready, so the first zoom or reset preserves the other slice’s displayed pixels.
