@@ -74,3 +74,45 @@ def test_show3d_zoom_during_playback(webgpu, serve, open_page, hardware_adapter,
     page.wait_for_function("document.querySelector('[data-show3d-playback-count]').textContent.trim() === '3/12'")
     assert center_value() != live
     assert not page.errors
+
+
+@pytest.mark.parametrize("webgpu", [False, True], ids=["cpu", "webgpu"])
+def test_histogram_plot_drag_on_linked_stacks(webgpu, serve, open_page, hardware_adapter, browser_out):
+    from io import BytesIO
+
+    from PIL import Image
+    from quantem.widget import Show3D
+
+    # Same center intensity, different extrema. A shared scale must render both centers alike.
+    stacks = np.full((2, 3, 24, 24), 0.4, dtype=np.float32)
+    stacks[:, :, :, 0] = 0
+    stacks[0, :, :, -1] = 1
+    stacks[1, :, :, -1] = 2
+    viewer = Show3D(*stacks, cmap="gray", vmin=0, vmax=1, auto_contrast=False,
+                    link_contrast=True, panel_width_px=160, show_scale_bar=False)
+    path = browser_out / "linked-histogram.html"
+    viewer.export_html(path)
+    page = open_page(f"{serve(browser_out)}/{path.name}", webgpu=webgpu)
+    if webgpu:
+        hardware_adapter(page.adapter())
+    image = page.locator('canvas[data-quantem-scientific-output="show3d-image"]')
+    plot = page.get_by_role("img", name="Histogram of intensity values with min and max clip handles")
+    plot.wait_for()
+    def centers():
+        pixels = np.asarray(Image.open(BytesIO(image.screenshot())))
+        h, w = pixels.shape[:2]
+        return pixels[h // 2, [w // 4, 3 * w // 4], 0].astype(int)
+
+    before = centers()
+    plot.scroll_into_view_if_needed()
+    rect = plot.bounding_box()
+    y = rect["y"] + rect["height"] / 2
+    page.mouse.move(rect["x"] + rect["width"] * .9, y)
+    page.mouse.down()
+    page.mouse.move(rect["x"] + rect["width"] * .6, y, steps=8)
+    page.mouse.up()
+    page.wait_for_timeout(250)
+    after = centers()
+    assert abs(before[0] - before[1]) <= 1 and abs(after[0] - after[1]) <= 1
+    assert np.all(after > before + 20), (before, after)
+    assert not page.errors

@@ -3278,10 +3278,10 @@ function Show3D() {
   const previewGestureRef = React.useRef(false);
   const panelHistogramPreviewPctRef = React.useRef<Map<number, [number, number]>>(new Map());
   const histogramPreviewPaintRafRef = React.useRef<number | null>(null);
-  // Packed panels are independent scientific domains. Always compute their
-  // histograms and numerical ranges independently; `linkContrast` links only
-  // the relative handle gesture and must never share one absolute range.
-  const perPanelHistogramEnabled = (nPanels || 1) > 1 && !sharedPanelSource;
+  // Packed panels normally use their own intensity domains. Explicit manual limits
+  // with linked contrast give a calibrated comparison one shared histogram.
+  const sharedManualRange = linkContrast && !autoContrast && traitVmin != null && traitVmax != null;
+  const perPanelHistogramEnabled = (nPanels || 1) > 1 && !sharedPanelSource && !sharedManualRange;
 
   const setPanelRangePercentages = (
     panel: number,
@@ -3529,6 +3529,10 @@ function Show3D() {
     low: number,
     high: number,
   ): { vmin: number; vmax: number; logScale: boolean } => {
+    if (sharedManualRange && !autoOn) {
+      const live = playRef.current;
+      return { ...resolveDisplayRange(dataMin, dataMax, traitVmin, traitVmax, logScale, live.imageVminPct, live.imageVmaxPct), logScale };
+    }
     const stablePanelRange = stablePanelAutoRange(panel, low, high);
     if (autoOn && stablePanelRange) {
       return { ...stablePanelRange, logScale };
@@ -5593,7 +5597,7 @@ function Show3D() {
       const engine = gpuSlot !== null && gpuCmapReadyRef.current ? gpuCmapRef.current : null;
       const frame = transformed && residentSlot === null ? displayFrameRef.current : getOfflineFrame(renderIdx);
       if (!engine && (!frame || frame.length === 0)) return;
-      const stackBounds = resolveDisplayBounds(dataMin, dataMax, null, null, logScale);
+      const stackBounds = resolveDisplayBounds(dataMin, dataMax, traitVmin, traitVmax, logScale);
       if (perPanelHistogramEnabled) {
         const panelCount = Math.max(1, nPanels || 1);
         const nextBins: (number[] | null)[] = Array.from({ length: panelCount }, () => null);
@@ -5644,7 +5648,7 @@ function Show3D() {
         window.setTimeout(() => { void refreshHistogram(pending.idx, pending.residentSlot); }, 0);
       }
     }
-  }, [logScale, dataMin, dataMax, perPanelHistogramEnabled, nPanels, nSlices, visiblePanelIndices, extractPanelSlice, displaySliceIdx, isRgb, height, sharedPanelSource, sourcePanelWidth, diffMode, avgWindow, frequencyFilterIsActive, subpixelAlignEnabled, compareMode, getOfflineFrame]);
+  }, [logScale, dataMin, dataMax, traitVmin, traitVmax, perPanelHistogramEnabled, nPanels, nSlices, visiblePanelIndices, extractPanelSlice, displaySliceIdx, isRgb, height, sharedPanelSource, sourcePanelWidth, diffMode, avgWindow, frequencyFilterIsActive, subpixelAlignEnabled, compareMode, getOfflineFrame]);
   refreshHistogramRef.current = refreshHistogram;
   React.useEffect(() => {
     if (playing) {
