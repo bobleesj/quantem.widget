@@ -16,6 +16,8 @@ if TYPE_CHECKING:
 
 # Seconds after the user last touched the viewer before the probe follows the newest pattern again.
 STREAM_FOLLOW_PAUSE_S = 1.5
+# Seconds before a failed live update is tried again (the receiver still runs; the next scan must show).
+STREAM_RETRY_S = 1.0
 
 
 def _shape_of(source) -> tuple:
@@ -197,8 +199,13 @@ class StreamFollower:
                     viewer.title = self.options.get("title") or getattr(self.recording, "title", None) or self.title
                 self.previous = progress
                 self.last_refresh = time.monotonic()
+            if viewer.stream_error is not None and self.recording.error is None:
+                viewer.stream_error = None              # recovered: the update after a failed one went through
             return not complete
         except Exception as error:
+            previous = viewer.stream_error
+            if previous is not None and previous is not error:
+                _release_error_frames(previous)     # a retried failure: the earlier one must not hold scans
             viewer.stream_error = error
             viewer.title = f"Live acquisition stopped: {error}"
             if force:
@@ -296,18 +303,36 @@ class StreamFollower:
                 viewer._stream_display_barrier()
             return viewer.stream_error is None and (receiving or bool(viewer._stream_display_pending))
 
+    def retrying(self) -> bool:
+        """After a failed update: try again while the receiver still runs. A method, not a local in ``follow``: an
+        error's frames lead back to that loop's frame, and a local there would keep the recording after close."""
+        recording = self.recording
+        return (recording is not None and recording.error is None and bool(recording.receiving)
+                and self.viewer.stream_error is not None)
+
     def follow(self) -> None:
-        """Keep background failures visible; yield between expensive refreshes."""
+        """Keep background failures visible; yield between expensive refreshes.
+
+        A failed update (a scan released from GPU memory while it was drawn, a display hiccup) shows in the title
+        and is tried again after ``STREAM_RETRY_S``: the follower ends only when the receiver has stopped (its
+        ``error`` is set or it is no longer receiving) or the viewer closes. 11-16 at the microscope: one failure
+        ended it, and the live page's left panel never showed another scan."""
         viewer = self.viewer
-        try:
-            while not viewer._stream_stop.is_set():
-                started = time.monotonic()
-                if not self.update():
-                    break
-                viewer._stream_stop.wait(max(0.005, started + self.refresh_s - time.monotonic()))
-        except Exception as error:
-            viewer.stream_error = error
-            viewer.title = f"Live acquisition stopped: {error}"
+        while not viewer._stream_stop.is_set():
+            started = time.monotonic()
+            try:
+                alive = self.update()
+            except Exception as error:
+                viewer.stream_error = error
+                viewer.title = f"Live acquisition stopped: {error}"
+                alive = False
+            if not alive:
+                if not self.retrying():
+                    break                               # the receiver stopped, or the acquisition ended
+                viewer.title = f"Live: retrying after {type(viewer.stream_error).__name__}: {viewer.stream_error}"[:160]
+                viewer._stream_stop.wait(STREAM_RETRY_S)
+                continue
+            viewer._stream_stop.wait(max(0.005, started + self.refresh_s - time.monotonic()))
 
 
 def _release_error_frames(error: BaseException | None) -> None:

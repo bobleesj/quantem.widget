@@ -933,10 +933,12 @@ def test_background_transport_failure_is_reported(monkeypatch):
     monkeypatch.setattr(viewer, '_stream_display_barrier', fail_delivery)
     try:
         recording.acquisitions.append(LiveScan('arriving'))
-        viewer._stream_thread.join(5)
-        assert not viewer._stream_thread.is_alive()
+        deadline = time.monotonic() + 5
+        while viewer.stream_error is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert viewer._stream_thread.is_alive()           # retrying while the receiver runs (11-16)
         assert viewer.stream_error is failure
-        assert viewer.title == 'Live acquisition stopped: Display transport disconnected'
+        assert viewer.title == 'Live: retrying after RuntimeError: Display transport disconnected'
     finally:
         viewer.close()
 
@@ -967,12 +969,14 @@ def test_failed_stream_releases_counts_but_preserves_error_details(monkeypatch, 
     scan_ref, counts_ref = weakref.ref(scan), weakref.ref(scan.counts)
     recording.acquisitions.append(scan)
     try:
-        viewer._stream_thread.join(5)
-        assert not viewer._stream_thread.is_alive()
+        deadline = time.monotonic() + 5
+        while viewer.stream_error is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert viewer._stream_thread.is_alive()           # retrying while the receiver runs (11-16)
+        viewer.close()                                    # the follower retried until now; the last error stays
         error = viewer.stream_error
         stack = traceback.format_exception(error)
         assert 'Cannot publish 12 patterns' in ''.join(stack)
-        viewer.close()
         del scan, recording
         gc.collect()
         assert scan_ref() is None and counts_ref() is None
@@ -1045,5 +1049,36 @@ def test_a_scan_of_another_size_replaces_the_others(recording):
         viewer.refresh_stream()
         assert viewer.stream_error is None and sorted(viewer.frame_labels) == ["big_1", "big_2"]
         assert (viewer.shape_rows, viewer.shape_cols) == (3, 4) and viewer.scan_sampling_A == [0.4, 0.6]
+    finally:
+        viewer.close()
+
+
+def test_a_failed_update_does_not_stop_the_live_panel(monkeypatch):
+    """11-16 at the microscope: after one failed update (a scan released by the GPU memory limit while it was being
+    drawn), the live page's left panel never showed another scan. The follower keeps going: the failure shows in
+    the title, and the next scans appear."""
+    recording = SimpleNamespace(lock=threading.RLock(), acquisitions=[], datasets=[], receiving=True, error=None)
+    viewer = Show4DSTEM.stream(recording, refresh_s=0.01)
+    refresh, failures = Show4DSTEM.refresh, [LookupError("series_14 was released from GPU memory")]
+
+    def refresh_once_failing(widget):
+        if failures:
+            raise failures.pop()
+        return refresh(widget)
+
+    monkeypatch.setattr(Show4DSTEM, "refresh", refresh_once_failing)
+    try:
+        recording.acquisitions.append(LiveScan("series_14"))
+        deadline = time.monotonic() + 5
+        while viewer.stream_error is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert isinstance(viewer.stream_error, LookupError)
+        recording.acquisitions.extend([LiveScan("series_15", 2), LiveScan("series_16", 3)])
+        deadline = time.monotonic() + 5
+        while viewer.n_frames < 3 and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert viewer._stream_thread.is_alive()
+        assert viewer.n_frames == 3 and viewer.stream_error is None
+        assert "series_16" in viewer.title
     finally:
         viewer.close()
