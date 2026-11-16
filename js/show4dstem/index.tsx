@@ -1345,6 +1345,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     styleKey: string;
   }>());
   const overlayRefs = React.useRef<(HTMLCanvasElement | null)[]>([]);
+  const gridRef = React.useRef<HTMLDivElement>(null);
   const tileRefs = React.useRef<(HTMLDivElement | null)[]>([]);
   const isDraggingPositionRef = React.useRef(false);
   const positionDragKeyRef = React.useRef<string | number | null>(null);
@@ -1666,22 +1667,22 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     }
   }, [shapeCols, shapeRows]);
 
+  // Rolling streams replace tile nodes even when their frame indices and count stay the same.
+  const hasTiles = renderEntries.length > 0;
   React.useEffect(() => {
-    const listeners: Array<[HTMLDivElement, (event: WheelEvent) => void]> = [];
-    tileRefs.current.forEach((node) => {
-      if (!node) return;
-      const listener = (event: WheelEvent) => {
-        event.preventDefault();
-        event.stopPropagation();
-        zoomCompareAt(node, event.clientX, event.clientY, event.deltaY);
-      };
-      node.addEventListener("wheel", listener, { passive: false });
-      listeners.push([node, listener]);
-    });
-    return () => {
-      listeners.forEach(([node, listener]) => node.removeEventListener("wheel", listener));
+    const grid = gridRef.current;
+    if (!grid) return;
+    const onWheel = (event: WheelEvent) => {
+      const tile = event.target instanceof Element
+        ? event.target.closest<HTMLDivElement>("[data-comparison-zoom]") : null;
+      if (!tile || !event.deltaY) return;
+      event.preventDefault();
+      event.stopPropagation();
+      zoomCompareAt(tile, event.clientX, event.clientY, event.deltaY);
     };
-  }, [orderKey, renderEntries.length, zoomCompareAt]);
+    grid.addEventListener("wheel", onWheel, { passive: false });
+    return () => grid.removeEventListener("wheel", onWheel);
+  }, [hasTiles, zoomCompareAt]);
 
   const handleCompareDoubleClick = React.useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -2195,7 +2196,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   }
 
   return (
-    <Box title="Scroll to zoom · Shift-drag to pan" sx={{ width: "100%", maxWidth: gridWidth > 0 ? `${gridWidth}px` : "100%", position: "relative", "@media (max-width: 700px)": { maxWidth: "100%" } }}>
+    <Box ref={gridRef} title="Scroll to zoom · Shift-drag to pan" sx={{ width: "100%", maxWidth: gridWidth > 0 ? `${gridWidth}px` : "100%", position: "relative", "@media (max-width: 700px)": { maxWidth: "100%" } }}>
       {/* Zoom readout only while zoomed, over the grid: no line of its own. */}
       {Math.abs(compareZoom - 1) > 1e-3 && <Box sx={{ position: "absolute", top: 2, right: 2, zIndex: 3, display: "flex", alignItems: "center", gap: 0.5,
         px: 0.5, borderRadius: "3px", bgcolor: "rgba(0,0,0,0.55)", color: "#fff", fontSize: 10 }}>
@@ -2240,10 +2241,25 @@ function Show4DSTEM() {
   // ─────────────────────────────────────────────────────────────────────────
   // Model State (synced with Python)
   // ─────────────────────────────────────────────────────────────────────────
-  const [shapeRows] = useModelState<number>("shape_rows");
-  const [shapeCols] = useModelState<number>("shape_cols");
-  const [detRows] = useModelState<number>("det_rows");
-  const [detCols] = useModelState<number>("det_cols");
+  const [liveStream] = useModelState<boolean>("live_phase_stream");
+  const [preview] = useModelState<{
+    rows?: number; cols?: number; total?: number; detRows?: number; detCols?: number;
+    mode?: string; phase?: DataView; dp?: DataView; roi?: DataView;
+  }>("live_phase_preview");
+  const [viSource, setViSource] = useModelState<string>("vi_source");
+  const liveImage = React.useMemo(() => {
+    const data = viSource === "Direct" && preview?.mode === "Direct" ? preview.phase : preview?.roi;
+    if (!preview?.rows || !preview.cols || !preview.total || preview.rows > preview.total ||
+        data?.byteLength !== preview.rows * preview.cols * 4 ||
+        !preview.detRows || !preview.detCols || preview.dp?.byteLength !== preview.detRows * preview.detCols * 4) return null;
+    const pixels = new Float32Array(preview.total * preview.cols).fill(NaN);
+    new Uint8Array(pixels.buffer).set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+    return new DataView(pixels.buffer);
+  }, [preview, viSource]);
+  const [savedShapeRows] = useModelState<number>("shape_rows");
+  const [savedShapeCols] = useModelState<number>("shape_cols");
+  const [savedDetRows] = useModelState<number>("det_rows");
+  const [savedDetCols] = useModelState<number>("det_cols");
 
   const [posRow, setPosRow] = useModelState<number>("pos_row");
   const [posCol, setPosCol] = useModelState<number>("pos_col");
@@ -2263,10 +2279,14 @@ function Show4DSTEM() {
   const [title] = useModelState<string>("title");
   const [showTitle] = useModelState<boolean>("show_title");
 
-  const [frameBytes] = useModelState<DataView>("frame_bytes");
+  const shapeRows = liveImage ? preview.total! : savedShapeRows;
+  const shapeCols = liveImage ? preview.cols! : savedShapeCols;
+  const detRows = liveImage ? preview.detRows! : savedDetRows;
+  const detCols = liveImage ? preview.detCols! : savedDetCols;
+  const [savedFrameBytes] = useModelState<DataView>("frame_bytes");
+  const frameBytes = liveImage ? preview.dp! : savedFrameBytes;
   const [virtualImageBytes, setVirtualImageBytes] = useModelState<DataView>("virtual_image_bytes");
   const [frontendVirtualImage, setFrontendVirtualImage] = React.useState<{ bytes: DataView; over: DataView | null } | null>(null);
-  const [viSource, setViSource] = useModelState<string>("vi_source");
   const [viProductLabels] = useModelState<string[]>("vi_product_labels");
   const [viProductMapFrames] = useModelState<number>("vi_product_map_frames");
   const [viProductMapsBytes] = useModelState<DataView>("vi_product_maps_bytes");
@@ -4443,7 +4463,7 @@ function Show4DSTEM() {
   const compareGridResizeCleanupRef = React.useRef<(() => void) | null>(null);
   const [compareHiddenMenuAnchor, setCompareHiddenMenuAnchor] = React.useState<HTMLElement | null>(null);
 
-  const compareMode = viewMode === "multiple" && nFrames > 1;
+  const compareMode = !liveImage && viewMode === "multiple" && nFrames > 1;
   const viProductSourceOptions = React.useMemo(() => {
     const seen = new Set<string>();
     const out: string[] = [];
@@ -4455,13 +4475,14 @@ function Show4DSTEM() {
     (Array.isArray(viProductLabels) ? viProductLabels : []).forEach((label) => {
       add(label);
     });
+    if (preview?.mode === "Direct") add("Direct");
     if (webgpuDpcReady) {
       add("DPC_row");
       add("DPC_col");
       add("iDPC");
     }
     return out;
-  }, [viProductLabels, webgpuDpcReady]);
+  }, [viProductLabels, webgpuDpcReady, preview?.mode]);
   const activeViSource = React.useMemo(() => {
     return viSource === "roi" || viProductSourceOptions.includes(viSource) ? viSource : "roi";
   }, [viProductSourceOptions, viSource]);
@@ -4498,6 +4519,7 @@ function Show4DSTEM() {
     viProductMapsBytes,
   ]);
   const displayedVirtualImageBytes = React.useMemo(() => {
+    if (liveImage) return liveImage;
     // Multiple-mode streaming sends the current image stack, while the single
     // image trait can still contain its initial NaN placeholder. FFT and line
     // profiles must read the selected displayed panel, including live patches.
@@ -4508,6 +4530,7 @@ function Show4DSTEM() {
     if (activeViSource === "roi") return roiBytes;
     return viProductFrameView(model, shapeRows, shapeCols, activeViSource) ?? roiBytes;
   }, [
+    liveImage,
     activeViSource,
     compareMode,
     comparePanelIndices,
@@ -4676,9 +4699,9 @@ function Show4DSTEM() {
       : CANVAS_SIZE;
     const cap = viPanelWidthPx || panelWidthPx;
     // Linked panels share the row; an independent image keeps its own width (up to the row) and wraps below.
-    const room = syncResize ? rest : Math.max(rest, mainRowWidth || CANVAS_SIZE);
+    const room = (syncResize || liveStream) ? rest : Math.max(rest, mainRowWidth || CANVAS_SIZE);
     setViCanvasSize(cap ? Math.min(cap, room) : rest);
-  }, [viPanelWidthPx, panelWidthPx, mainRowWidth, fittedDpWidth, showFft, syncResize]);
+  }, [viPanelWidthPx, panelWidthPx, mainRowWidth, fittedDpWidth, showFft, syncResize, liveStream]);
   const [isResizingCanvas, setIsResizingCanvas] = React.useState(false);
   const [resizeCanvasStart, setResizeCanvasStart] = React.useState<{ x: number; y: number; size: number; panel: "dp" | "vi" } | null>(null);
 
@@ -5000,7 +5023,7 @@ function Show4DSTEM() {
 
 
   const usesViRoiDp = viRoiMode && viRoiMode !== "off" && viRoiDpBytes && viRoiDpBytes.byteLength > 0;
-  const displayedDpBytes = usesViRoiDp ? viRoiDpBytes : frameBytes;
+  const displayedDpBytes = !liveImage && usesViRoiDp ? viRoiDpBytes : frameBytes;
 
   // DP stats (computed JS-side from frame_bytes, not 4 Python traits) and the
   // histogram input derive from the displayed pattern in the render that shows
@@ -7624,7 +7647,7 @@ function Show4DSTEM() {
   }, []);
   const currentViSource = model.get("vi_source");
   const viGpuVisible = Boolean(
-    viGpuRetainedReady
+    !liveImage && viGpuRetainedReady
     && !compareMode
     && viGpuImageRef.current
     && (
@@ -8253,7 +8276,7 @@ function Show4DSTEM() {
     themeColors, themedMenuProps, themedSelect, themedTypography, viColormap, viRoiMode, viRoiRadius,
     viRoiReduce, viScaleMode
   ]);
-  if (nFrames === 0) {
+  if (nFrames === 0 && !liveImage) {
     return (
       <Box ref={rootRef} className="show4dstem-root" sx={{ p: "4px", bgcolor: themeColors.bg, color: themeColors.text }}>
         {titleHeading}

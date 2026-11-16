@@ -274,6 +274,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     roi_radius_inner = traitlets.Float(5.0).tag(sync=True)
     roi_width = traitlets.Float(20.0).tag(sync=True)
     roi_height = traitlets.Float(10.0).tag(sync=True)
+    live_phase_stream = traitlets.Bool(False).tag(sync=True)
+    live_phase_preview = traitlets.Dict(default_value={}).tag(sync=True)
     virtual_image_bytes = _ImageMemoryView(b"").tag(sync=True)
     vi_source = traitlets.Unicode("roi").tag(sync=True)
     vi_product_labels = traitlets.List(traitlets.Unicode(), default_value=[]).tag(sync=True)
@@ -1796,6 +1798,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             index = self._frame_index(frame)
             self._attached.setdefault(label, {})[self._frame_identity(index)] = image.astype(np.float32)
             self._restack_attached(label)
+            if self.live_phase_stream and label == "Direct":
+                self.frame_idx = index
 
     def _frame_index(self, frame) -> int:
         """The viewer's index of ``frame``: an index, a label that names one scan, or the scan itself."""
@@ -1845,7 +1849,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     def _on_vi_source_change(self, change=None) -> None:
         """React to an image-source switch: fall back to the ROI image when that product map does not exist, then repaint."""
         source = self.vi_source
-        if source != "roi" and source not in self._vi_product_maps:
+        if source != "roi" and source not in self._vi_product_maps and not (self.live_phase_stream and source == "Direct"):
             source = "roi"
         if source != self.vi_source:
             self.vi_source = source  # re-enters this observer with a valid source

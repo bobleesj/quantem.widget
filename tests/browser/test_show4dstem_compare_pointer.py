@@ -105,3 +105,21 @@ def test_comparison_detector_drag_and_scan_region_switch(
         "region": region, "point": point,
     }, indent=2))
     assert [error for error in page.errors if "debugger session" not in error] == []
+
+
+def test_wheel_zoom_after_stream_tiles_are_replaced(jupyter, open_page, hardware_adapter, browser_out):
+    notebook = "show4dstem_rolling_zoom.ipynb"
+    jupyter.write_notebook(notebook, SOURCE)
+    page = jupyter.open(open_page, notebook, "rolling_zoom", webgpu=True, ready=COMPARISON, out=browser_out)
+    hardware_adapter(page.adapter())
+    tile = page.get_by_role("button", name="Show4DSTEM multiple panel 1", exact=True)
+    original = tile.element_handle()
+    jupyter.run_in_kernel(notebook, "viewer._stream_source_ids = ['new-a', 'new-b', 'new-c']")
+    page.wait_for_function("tile => !tile.isConnected", arg=original)
+    tile.scroll_into_view_if_needed()
+    box = tile.bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    before = tile.screenshot(path=str(browser_out / "rolling_zoom_before.png"))
+    page.mouse.wheel(0, -120)
+    page.wait_for_function("tile => Number(tile.dataset.comparisonZoom) > 1", arg=tile.element_handle(), timeout=4000)
+    assert tile.screenshot(path=str(browser_out / "rolling_zoom_after.png")) != before
