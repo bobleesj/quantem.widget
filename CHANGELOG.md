@@ -6,6 +6,8 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- Save the live ShowPtycho calibration and phase preview with the reviewed reconstruction.
+
 - Show3DSlices refreshes both slice views when WebGPU becomes ready, so the first zoom or reset preserves the other slice’s displayed pixels.
 
 - In Show2D and Show3D, Reset stays available when any visible image panel is zoomed or panned with the panels unlinked. Show3D also restores the original pixels after resetting a linked-contrast comparison with explicit limits.
