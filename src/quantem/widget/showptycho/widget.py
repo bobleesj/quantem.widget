@@ -44,6 +44,7 @@ from quantem.widget.device import gpu_path_hint, no_gpu_path
 from quantem.widget.showptycho.export import write_showptycho_folder
 from quantem.widget.units import axis_pair, image_axes, per_axis, stated, wrap_degrees
 from quantem.widget.utils.array import device_array
+from quantem.widget.utils.ui import ViewerSize, resolve_panel_width
 
 STARS_FILENAME = "showptycho_stars.json"
 CALIBRATION_FILENAME = "calibration.json"
@@ -197,6 +198,7 @@ class ShowPtycho(anywidget.AnyWidget):
     scan region and fits it afresh, and every saved calibration and star names the file.
     """
 
+    panel_px = traitlets.Int(0).tag(sync=True)
     compute_loss = traitlets.Bool(False).tag(sync=True)
 
     local_tilt_selection_json = traitlets.Unicode("").tag(sync=True)
@@ -673,6 +675,7 @@ class ShowPtycho(anywidget.AnyWidget):
         *,
         sampling: float | tuple[float, float] | None = None,
         units: str | None = None,
+        size: ViewerSize = "medium",
         save_dir: str | pathlib.Path | None = None,
         restore: bool = True,
         show_fft: bool = False,
@@ -735,7 +738,7 @@ class ShowPtycho(anywidget.AnyWidget):
             data = device_array(data)  # a tensor or CuPy array stays on its GPU until the 2D result is drawn
         if not is_array and sampling is not None:
             raise ValueError("sampling describes an array; a direct ptychography session carries its own scan_sampling_A.")
-        super().__init__()
+        super().__init__(panel_px=resolve_panel_width(size))
         self.method = method
         self.compute_loss = compute_loss
         self._explicit_reconstruction_options = {
@@ -1594,6 +1597,21 @@ class ShowPtycho(anywidget.AnyWidget):
         --------
         >>> path = viewer.save_calibration()
         """
+        self._save_review()
+        return self._calibration_path.resolve()
+
+    def _reviewed_result(self, folder: pathlib.Path):
+        """Reconstruct the accepted settings on the scan currently open in the viewer."""
+        review = self._save_review(folder)
+        return self._direct.direct.run(
+            aberrations=review["aberrations"], upsample=review["upsample"],
+            compute_loss=False, **review["reconstruction"],
+        )
+
+    def _save_review(self, folder: pathlib.Path | None = None) -> dict:
+        """Persist one reviewed calibration and return the exact reconstruction settings."""
+        from quantem.gpu.direct_ptycho.persistence import portable_source
+
         if self._direct is None:
             raise ValueError("save_calibration() writes a direct ptychography session's model; open ShowPtycho on a direct ptychography session.")
         if self._region_busy:
@@ -1605,14 +1623,19 @@ class ShowPtycho(anywidget.AnyWidget):
         self._direct.store({**higher_order, **aberrations}, loss, sample=sample)
         payload = {**self._calibration_record({**higher_order, **aberrations}, sample, loss),
                    "id": uuid.uuid4().hex[:12], "generated_at_utc": utc_now()}
-        write_json(self._calibration_path, payload)
-        self.calibration_path = str(self._calibration_path.resolve())
+        if folder is None:
+            folder = self._calibration_path.parent
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / CALIBRATION_FILENAME
+        payload["source"] = portable_source(self._source_path, folder)
+        write_json(path, payload)
+        self.calibration_path = str(path.resolve())
         self.calibration_saved_at = payload["generated_at_utc"]
-        self._write_phase_image()
+        self._write_phase_image(folder / CALIBRATION_IMAGE_FILENAME)
         self.calibration_status = "Saved calibration and phase PNG"
-        return self._calibration_path.resolve()
+        return payload
 
-    def _write_phase_image(self) -> None:
+    def _write_phase_image(self, path: pathlib.Path) -> None:
         """Write the displayed phase as ``calibration_phase.png``, the reviewed image beside its calibration.
 
         ``rgb = colorize(contrast_uint8(phase, vmin, vmax) / 255, cmap)`` at the phase's native
@@ -1628,8 +1651,8 @@ class ShowPtycho(anywidget.AnyWidget):
         else:
             low, high = (float(value) for value in np.percentile(phase[np.isfinite(phase)], (1, 99)))
         pixels = colorize(contrast_uint8(phase, low, high) / 255.0, self.cmap)
-        Image.fromarray(pixels, mode="RGB").save(self._calibration_image_path)
-        self.calibration_image_path = str(self._calibration_image_path.resolve())
+        Image.fromarray(pixels, mode="RGB").save(path)
+        self.calibration_image_path = str(path.resolve())
 
     def freeze(self):
         """Keep the displayed phase visible while detaching its live direct ptychography controls.

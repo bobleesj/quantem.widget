@@ -1998,6 +1998,8 @@ function Explore() {
   const ampDataRef = React.useRef<{ data: Float32Array; w: number; h: number } | null>(null);
 
   const [panel, setPanel] = React.useState<number>(DEFAULT_PANEL);
+  const [panelPx] = useModelState<number>("panel_px");
+  React.useEffect(() => { if (panelPx > 0) setPanel(panelPx); }, [panelPx]);
   const shownPanelRef = React.useRef(DEFAULT_PANEL);
   // content width of the widget root (its parent's width less the root padding)
   const rootRef = React.useRef<HTMLDivElement>(null);
