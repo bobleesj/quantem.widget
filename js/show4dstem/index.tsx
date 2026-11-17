@@ -7711,6 +7711,9 @@ function Show4DSTEM() {
     whiteSpace: "nowrap",
     flexShrink: 0,
   };
+  // While a scan streams its statistics change with every row and say little: they are hidden in place
+  // (the line keeps its height) and return with the Dataset rows.
+  const statsShownSx = streaming ? { ...statsTextSx, visibility: "hidden" as const } : statsTextSx;
   const viSourceButtonSx = (source: string, active = false) => {
     const color = viSourceDisplayColor(source, themeInfo.theme);
     return {
@@ -8755,10 +8758,10 @@ function Show4DSTEM() {
           {/* DP Stats Bar */}
           {showStats && !dpPanelLoading && dpStats && dpStats.length === 4 && (
             <Box sx={{ ...statsBarSx, ...hideBetweenPanelsOnMobileSx }}>
-              <Typography sx={statsTextSx}>Mean <Box component="span" sx={statsValueSx}>{formatStat(dpStats[0])}</Box></Typography>
+              <Typography sx={statsShownSx}>Mean <Box component="span" sx={statsValueSx}>{formatStat(dpStats[0])}</Box></Typography>
               {/* no Min: detector counts start at 0, and the row then fits one line beside the image buttons */}
-              <Typography sx={statsTextSx}>Max <Box component="span" sx={statsValueSx}>{formatStat(dpStats[2])}</Box></Typography>
-              <Typography sx={statsTextSx}>Std <Box component="span" sx={statsValueSx}>{formatStat(dpStats[3])}</Box></Typography>
+              <Typography sx={statsShownSx}>Max <Box component="span" sx={statsValueSx}>{formatStat(dpStats[2])}</Box></Typography>
+              <Typography sx={statsShownSx}>Std <Box component="span" sx={statsValueSx}>{formatStat(dpStats[3])}</Box></Typography>
               {/* The image buttons together on a line of their own, under the readings (one of them alone at the end of
                   the readings' line read as a stray label). */}
               {controlsVisible && <Box sx={{ display: "flex", flexBasis: "100%", alignItems: "center", columnGap: "12px", flexWrap: "wrap" }}>
@@ -9129,10 +9132,10 @@ function Show4DSTEM() {
           {/* VI Stats Bar: stats on left, Auto/Smooth toggles on right edge */}
           {showStats && !viPanelLoading && <Subscribe store={viDisplayStore}>{({ stats: viStats }) => viStats.length === 4 && (
             <Box sx={statsBarSx}>
-              <Typography sx={statsTextSx} title={`Mean ${viStats[0]}`}>Mean <Box component="span" sx={statsValueSx}>{formatMean(viStats[0], viStats[3])}</Box></Typography>
-              <Typography sx={statsTextSx}>Min <Box component="span" sx={statsValueSx}>{formatStat(viStats[1])}</Box></Typography>
-              <Typography sx={statsTextSx}>Max <Box component="span" sx={statsValueSx}>{formatStat(viStats[2])}</Box></Typography>
-              <Typography sx={statsTextSx}>Std <Box component="span" sx={statsValueSx}>{formatStat(viStats[3])}</Box></Typography>
+              <Typography sx={statsShownSx} title={`Mean ${viStats[0]}`}>Mean <Box component="span" sx={statsValueSx}>{formatMean(viStats[0], viStats[3])}</Box></Typography>
+              <Typography sx={statsShownSx}>Min <Box component="span" sx={statsValueSx}>{formatStat(viStats[1])}</Box></Typography>
+              <Typography sx={statsShownSx}>Max <Box component="span" sx={statsValueSx}>{formatStat(viStats[2])}</Box></Typography>
+              <Typography sx={statsShownSx}>Std <Box component="span" sx={statsValueSx}>{formatStat(viStats[3])}</Box></Typography>
               {controlsVisible && <Box sx={{ ml: "auto", display: "flex", alignItems: "center", gap: "2px", flexWrap: "nowrap", whiteSpace: "nowrap", flexShrink: 0 }}>
                 <Typography sx={{ ...themedTypography.label, fontSize: 10, lineHeight: "20px" }} title="CSS bilinear interpolation. Same data, browser smooths visually.">Smooth</Typography>
                 <Switch checked={viSmooth} onChange={(event) => setViSmooth(event.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Image smoothing" } }} />
@@ -9382,10 +9385,10 @@ function Show4DSTEM() {
             {/* FFT Stats Bar */}
             {showStats && !fftPanelLoading && fftStats && fftStats.length === 4 && (
               <Box sx={statsBarSx}>
-                <Typography sx={statsTextSx}>Mean <Box component="span" sx={statsValueSx}>{formatStat(fftStats[0])}</Box></Typography>
-                <Typography sx={statsTextSx}>Min <Box component="span" sx={statsValueSx}>{formatStat(fftStats[1])}</Box></Typography>
-                <Typography sx={statsTextSx}>Max <Box component="span" sx={statsValueSx}>{formatStat(fftStats[2])}</Box></Typography>
-                <Typography sx={statsTextSx}>Std <Box component="span" sx={statsValueSx}>{formatStat(fftStats[3])}</Box></Typography>
+                <Typography sx={statsShownSx}>Mean <Box component="span" sx={statsValueSx}>{formatStat(fftStats[0])}</Box></Typography>
+                <Typography sx={statsShownSx}>Min <Box component="span" sx={statsValueSx}>{formatStat(fftStats[1])}</Box></Typography>
+                <Typography sx={statsShownSx}>Max <Box component="span" sx={statsValueSx}>{formatStat(fftStats[2])}</Box></Typography>
+                <Typography sx={statsShownSx}>Std <Box component="span" sx={statsValueSx}>{formatStat(fftStats[3])}</Box></Typography>
               </Box>
             )}
 
