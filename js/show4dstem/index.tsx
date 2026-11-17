@@ -8669,7 +8669,7 @@ function Show4DSTEM() {
               <StopIcon sx={{ fontSize: 16 }} />
             </IconButton>
           </Stack>
-          <Slider value={chosenFrameIdx} onChange={(_, value) => { setFramePlaying(false); setFrameIdx(value as number); }} min={0} max={Math.max(0, nFrames - 1)} size="small" aria-label={frameSliderAriaLabel} sx={{ flex: "1 1 100px", maxWidth: 220, minWidth: 60, "& .MuiSlider-thumb": { width: 10, height: 10 } }} />
+          <Slider value={chosenFrameIdx} onChange={(_, value) => { setFramePlaying(false); setFrameIdx(value as number); }} min={0} max={Math.max(0, nFrames - 1)} size="small" aria-label={frameSliderAriaLabel} sx={{ flex: "0 1 220px", minWidth: 60, "& .MuiSlider-thumb": { width: 10, height: 10 } }} />
           <Typography sx={{ ...themedTypography.value, minWidth: 24, textAlign: "right", flexShrink: 0, whiteSpace: "nowrap" }}>{frameLabels && frameLabels.length > frameIdx ? frameLabels[frameIdx] : `${frameIdx + 1}/${nFrames}`}</Typography>
           <Typography sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted, flexShrink: 0 }}>fps</Typography>
           <Slider value={frameFps} min={1} max={30} step={1} onChange={(_, value) => setFrameFps(value as number)} size="small" sx={{ ...sliderStyles.small, width: 35, flexShrink: 0 }} />
