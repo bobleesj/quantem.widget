@@ -77,7 +77,9 @@ export function downloadBlob(blob: Blob, filename: string): void {
 }
 
 /** Format number with exponential notation for large/small values. */
-export function formatNumber(val: number, decimals: number = 2): string {
+export function formatNumber(val: number | null | undefined, decimals: number = 2): string {
+  // No value yet (a view between two sets of images): a dash. A throw here took a whole viewer off the page.
+  if (val === null || val === undefined) return "–";
   if (val === 0) return "0";
   if (Math.abs(val) >= 1000 || Math.abs(val) < 0.01) return val.toExponential(decimals);
   return val.toFixed(decimals);

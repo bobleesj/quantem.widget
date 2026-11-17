@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { formatNumber } from "../format";
 import { formatMean, formatStat } from "./statText";
 
 describe("stats line", () => {
+  it("shows a dash for a statistic that is not there yet, and never throws", () => {
+    expect(formatStat(undefined)).toBe("–");
+    expect(formatStat(null)).toBe("–");
+    expect(formatMean(undefined, 0.04)).toBe("–");
+    expect(formatNumber(undefined)).toBe("–");
+  });
+
   it("formats by magnitude", () => {
     expect(formatStat(0)).toBe("0");
     expect(formatStat(0.187)).toBe("0.187");
