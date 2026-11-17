@@ -291,6 +291,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     roi_height = traitlets.Float(10.0).tag(sync=True)
     live_phase_stream = traitlets.Bool(False).tag(sync=True)
     live_phase_preview = traitlets.Dict(default_value={}).tag(sync=True)
+    # The newest diffraction pattern of the scan being received (float32, detector rows x cols): sent alone, many
+    # times a second, while live_phase_preview carries the image with the rows.
+    live_pattern = traitlets.Bytes(b"").tag(sync=True)
     # The shown scan's attach() image at full resolution when it is k x the scan grid; the image panel draws it
     # at the scan's size and the pointer still picks scan positions (image pixel / k).
     vi_detail = traitlets.Dict(default_value={}).tag(sync=True)

@@ -2350,6 +2350,7 @@ function Show4DSTEM() {
     rows?: number; cols?: number; total?: number; detRows?: number; detCols?: number;
     mode?: string; upsample?: number; phase?: DataView; dp?: DataView; roi?: DataView; scan?: string;
   }>("live_phase_preview");
+  const [livePattern] = useModelState<DataView>("live_pattern");
   const [viSource, setViSource] = useModelState<string>("vi_source");
   // The row preview on the scan grid; a Direct phase sent k x the grid is also kept at full resolution to draw.
   // A new scan paints over the last scan's image, as Velox does, not over black (11-16).
@@ -2396,7 +2397,11 @@ function Show4DSTEM() {
   const detRows = liveImage ? preview.detRows! : savedDetRows;
   const detCols = liveImage ? preview.detCols! : savedDetCols;
   const [savedFrameBytes] = useModelState<DataView>("frame_bytes");
-  const frameBytes = liveImage ? preview.dp! : savedFrameBytes;
+  // While a scan arrives its newest pattern comes on its own trait, many times a second; the preview's pattern (one
+  // per batch of rows) shows until the first of those is there.
+  const frameBytes = liveImage
+    ? (livePattern && livePattern.byteLength === preview.detRows! * preview.detCols! * 4 ? livePattern : preview.dp!)
+    : savedFrameBytes;
   const [virtualImageBytes, setVirtualImageBytes] = useModelState<DataView>("virtual_image_bytes");
   const [frontendVirtualImage, setFrontendVirtualImage] = React.useState<{ bytes: DataView; over: DataView | null } | null>(null);
   const [viProductLabels] = useModelState<string[]>("vi_product_labels");
