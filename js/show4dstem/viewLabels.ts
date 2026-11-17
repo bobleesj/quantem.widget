@@ -18,3 +18,8 @@ export function positionLabelAnchor(
   if (x + textWidth > barLeft && y > barTop) y = Math.max(13, barTop);
   return { x, y };
 }
+
+/** True when the title already names this scan as one of its words ("Live · series_13 · …" names "series_13", not "series_1"). */
+export function titleNamesScan(title: string | undefined, name: string | undefined): boolean {
+  return Boolean(title && name) && title!.split(/[^A-Za-z0-9_]+/).includes(name!);
+}

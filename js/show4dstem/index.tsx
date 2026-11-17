@@ -3,7 +3,7 @@ import { captureGpuCanvas } from "./captureGpuCanvas";
 import { createLatestFrameQueue } from "./latestFrameQueue";
 import { chosenFrameIndex, createScanChoice } from "./scanChoice";
 import { formatMean, formatStat } from "./statText";
-import { positionLabelAnchor, shortScanName } from "./viewLabels";
+import { positionLabelAnchor, shortScanName, titleNamesScan } from "./viewLabels";
 import { createLiveImage, positionValues, type PositionsMessage } from "./liveImagePositions";
 import {
   CONTRAST_PERCENTILES, chosenPercentiles, contrastRangeChoice, handlePositions, percentilesLabel,
@@ -2531,6 +2531,18 @@ function Show4DSTEM() {
   // Printed by number ("41" for "series_41"); the scan's identity is `_stream_source_ids`, not its label.
   const [frameNames] = useModelState<string[]>("frame_labels");
   const frameLabels = React.useMemo(() => frameNames?.map(shortScanName), [frameNames]);
+  // When a stream ends the Dataset selection goes to the scan just taken (once it is among the kept
+  // scans), so the image, the slider and the title name the scan the operator was watching.
+  const streamedScanRef = React.useRef<string | null>(null);
+  if (liveScan && streaming) streamedScanRef.current = liveScan;
+  React.useEffect(() => {
+    const scan = streamedScanRef.current;
+    if (streaming || !scan) return;
+    const index = frameNames ? frameNames.indexOf(scan) : -1;
+    if (index < 0) return;
+    streamedScanRef.current = null;
+    if (index !== frameIdx) setFrameIdx(index);
+  }, [frameIdx, frameNames, setFrameIdx, streaming]);
   // Scans of different sizes: one group per size, one button each (11-16)
   const [sizeGroups] = useModelState<string[]>("size_groups");
   const [sizeGroup, setSizeGroup] = useModelState<number>("size_group");
@@ -8031,7 +8043,8 @@ function Show4DSTEM() {
       <span title={title || "4D-STEM Explorer"} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {title || "4D-STEM Explorer"}</span>
       <RenderPathBadge colors={themeColors} />
-      {nFrames > 1 && !streaming && <span style={{ fontWeight: "normal", fontSize: 13, marginLeft: 8, opacity: 0.7 }}>({frameLabels && frameLabels.length > frameIdx ? frameLabels[frameIdx] : `${frameDimLabel} ${frameIdx + 1}/${nFrames}`})</span>}
+      {nFrames > 1 && !streaming && !titleNamesScan(title, frameNames?.[frameIdx])
+        && <span style={{ fontWeight: "normal", fontSize: 13, marginLeft: 8, opacity: 0.7 }}>({frameLabels && frameLabels.length > frameIdx ? frameLabels[frameIdx] : `${frameDimLabel} ${frameIdx + 1}/${nFrames}`})</span>}
       {panelChromeVisible && <InfoTooltip text={<Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
         <MetadataSection rows={[
           ["Scan", `${shapeRows} x ${shapeCols}`],
@@ -8059,7 +8072,7 @@ function Show4DSTEM() {
       </Box>} theme={themeInfo.theme} />}
     </Typography>
   ), [
-    detCols, detRows, frameDimLabel, frameIdx, frameLabels, kCalibrated, kPixelSize, kPixelUnit,
+    detCols, detRows, frameDimLabel, frameIdx, frameLabels, frameNames, kCalibrated, kPixelSize, kPixelUnit,
     keyboardShortcutItems, nFrames, panelChromeVisible, pixelSize, scanUnit, shapeCols, shapeRows,
     showTitle, streaming, themeColors, themeInfo, themedTypography, title
   ]);
