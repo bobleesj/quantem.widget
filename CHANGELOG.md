@@ -6,6 +6,8 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- Report visible GPUs and process memory without opening CUDA contexts on idle devices.
+
 - In calibrated standalone QEM viewers, open Direct Ptycho beside iDPC. Pinch to inspect the full-field phase and tap Fit to restore the whole image.
 
 - On a compatible mobile WebGPU device, Show4DSTEM prepares exact detector images in the background so the aperture can follow a held drag.
