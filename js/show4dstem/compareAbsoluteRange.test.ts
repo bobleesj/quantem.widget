@@ -85,7 +85,7 @@ describe("signed comparison limits", () => {
     const lut = new Uint8Array(256 * 3);
     for (let i = 0; i < 256; i++) lut.fill(i, i * 3, i * 3 + 3);
     const bindings = {
-      absoluteMin: -10, absoluteMax: 10, autoContrast: true, colormap: "gray", COLORMAPS: {gray: lut},
+      absoluteMin: -10, absoluteMax: 10, autoContrast: true, percentileLow: 1, percentileHigh: 99, colormap: "gray", COLORMAPS: {gray: lut},
       gpuEngine: null, gpuSlots: null, scaleMode: "linear", vminPct: 0, vmaxPct: 100,
       smooth: false, shapeRows: 2, shapeCols: 2, canvasDrawCacheRef: {current: new Map()},
       renderEntries: [{frame: 0, panel: new Float32Array([-8, 0, 2, 10])}],

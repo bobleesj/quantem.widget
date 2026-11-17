@@ -3,6 +3,10 @@ import { captureGpuCanvas } from "./captureGpuCanvas";
 import { createLatestFrameQueue } from "./latestFrameQueue";
 import { chosenFrameIndex, createScanChoice } from "./scanChoice";
 import { formatMean, formatStat } from "./statText";
+import {
+  CONTRAST_PERCENTILES, chosenPercentiles, contrastRangeChoice, handlePositions, percentilesLabel,
+  percentilesOfChoice, type Percentiles,
+} from "./contrastRange";
 import { createDpPointerOwner } from "./dpPointerOwner";
 import * as React from "react";
 import { createRender, useModelState, useModel } from "@anywidget/react";
@@ -1340,7 +1344,8 @@ interface CompareVirtualGridProps {
   scaleMode: "linear" | "log";
   vminPct: number;
   vmaxPct: number;
-  autoContrast: boolean;
+  /** Contrast between two percentiles of each image, or null for the handles' range. */
+  percentiles: Percentiles | null;
   absoluteMin?: number | null;
   absoluteMax?: number | null;
   smooth: boolean;
@@ -1392,7 +1397,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   scaleMode,
   vminPct,
   vmaxPct,
-  autoContrast,
+  percentiles,
   absoluteMin,
   absoluteMax,
   smooth,
@@ -1426,6 +1431,9 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   gpuBytesCurrent = false,
   sourceLoading = false,
 }: CompareVirtualGridProps) {
+  const autoContrast = percentiles !== null;
+  const percentileLow = percentiles ? percentiles[0] : 1;
+  const percentileHigh = percentiles ? percentiles[1] : 99;
   const panDragRef = React.useRef<{ clientX: number; clientY: number; panX: number; panY: number } | null>(null);
   const batchModel = useModel();
   const canvasRefs = React.useRef<(HTMLCanvasElement | null)[]>([]);
@@ -1535,7 +1543,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       const displayRange = absoluteMin != null && absoluteMax != null
         ? {vmin: transformRangeValue(absoluteMin), vmax: transformRangeValue(absoluteMax)}
         : autoContrast && entry.panel
-          ? percentileClip(scaleMode === "log" ? displayLogScale(entry.panel) : entry.panel, 1, 99)
+          ? percentileClip(scaleMode === "log" ? displayLogScale(entry.panel) : entry.panel, percentileLow, percentileHigh)
         : {
           vmin: rangeMin + span * Math.max(0, Math.min(100, vminPct)) / 100,
           vmax: rangeMin + span * Math.max(0, Math.min(100, vmaxPct)) / 100,
@@ -1582,7 +1590,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       );
     }
     return panels.length;
-  }, [absoluteMin, absoluteMax, autoContrast, colormap, gpuBytesCurrent, gpuEngine, gpuRanges, gpuSlots, renderEntries, scaleMode, shapeCols, shapeRows, smooth, vmaxPct, vminPct]);
+  }, [absoluteMin, absoluteMax, autoContrast, colormap, gpuBytesCurrent, gpuEngine, gpuRanges, gpuSlots, percentileHigh, percentileLow, renderEntries, scaleMode, shapeCols, shapeRows, smooth, vmaxPct, vminPct]);
 
   const gpuRenderRef = React.useRef(renderGpuSlotsNow);
   gpuRenderRef.current = renderGpuSlotsNow;
@@ -1605,7 +1613,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     // New host bytes are not a new GPU image until the uploader advances the
     // version. Redrawing for the bytes as well would present the old slots.
     requestGpuRender();
-  }, [gpuVersion, requestGpuRender, absoluteMin, absoluteMax, autoContrast,
+  }, [gpuVersion, requestGpuRender, absoluteMin, absoluteMax, autoContrast, percentileHigh, percentileLow,
     colormap, gpuEngine, gpuRanges, gpuSlots, orderKey, previewIndices,
     scaleMode, shapeCols, shapeRows, smooth, vmaxPct, vminPct]);
 
@@ -1629,7 +1637,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       scaleMode,
       vminPct,
       vmaxPct,
-      autoContrast ? 1 : 0,
+      autoContrast ? `${percentileLow}-${percentileHigh}` : 0,
       absoluteMin,
       absoluteMax,
       smooth ? 1 : 0,
@@ -1673,7 +1681,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
         vmin = scaleMode === "log" ? displayLog(absoluteMin) : absoluteMin;
         vmax = scaleMode === "log" ? displayLog(absoluteMax) : absoluteMax;
       } else if (autoContrast) {
-        ({ vmin, vmax } = percentileClip(scaled, 1, 99));
+        ({ vmin, vmax } = percentileClip(scaled, percentileLow, percentileHigh));
       } else {
         ({ vmin, vmax } = sliderRange(min, max, vminPct, vmaxPct));
       }
@@ -1682,7 +1690,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       ctx.putImageData(imageData, 0, 0);
       canvasDrawCacheRef.current.set(frame, { canvas, panel, styleKey });
     });
-  }, [absoluteMin, absoluteMax, autoContrast, colormap, gpuEngine, gpuSlots, gpuVersion, renderEntries, scaleMode, shapeCols, shapeRows, smooth, vmaxPct, vminPct]);
+  }, [absoluteMin, absoluteMax, autoContrast, colormap, gpuEngine, gpuSlots, gpuVersion, percentileHigh, percentileLow, renderEntries, scaleMode, shapeCols, shapeRows, smooth, vmaxPct, vminPct]);
 
   const displayCount = Math.max(1, renderEntries.length);
   const autoCols = preferredPanelWidthPx > 0
@@ -2813,23 +2821,43 @@ function Show4DSTEM() {
   // Scale mode: "linear" | "log"
   const [dpScaleMode, setDpScaleMode] = useModelState<"linear" | "log">("dp_scale_mode");
   const [viScaleMode, setViScaleMode] = useModelState<"linear" | "log">("vi_scale_mode");
-  // VI auto-contrast (1st/99th percentile clip) + Smooth (CSS bilinear blit).
-  // DP doesn't need them: Bragg spots read best with the slider's percentile
-  // range and nearest-neighbor blit.
+  // Contrast range of the image and of the pattern: the full range of the data (the default, nothing
+  // hidden), the data between two percentiles (`vi_percentiles`, `dp_percentiles`), or wherever the two
+  // handles on the histogram were put. `vi_auto_contrast` is the older switch: percentiles 1 to 99.
   const [viAutoContrast, setViAutoContrast] = useModelState<boolean>("vi_auto_contrast");
+  const [viPercentilesTrait, setViPercentilesTrait] = useModelState<number[] | null>("vi_percentiles");
+  const [dpPercentilesTrait, setDpPercentilesTrait] = useModelState<number[] | null>("dp_percentiles");
+  const [viPercentileLow, viPercentileHigh] = chosenPercentiles(viPercentilesTrait, viAutoContrast) ?? [NaN, NaN];
+  const [dpPercentileLow, dpPercentileHigh] = chosenPercentiles(dpPercentilesTrait, false) ?? [NaN, NaN];
+  const viPercentiles = React.useMemo((): Percentiles | null => (
+    Number.isFinite(viPercentileLow) ? [viPercentileLow, viPercentileHigh] : null
+  ), [viPercentileLow, viPercentileHigh]);
+  const dpPercentiles = React.useMemo((): Percentiles | null => (
+    Number.isFinite(dpPercentileLow) ? [dpPercentileLow, dpPercentileHigh] : null
+  ), [dpPercentileLow, dpPercentileHigh]);
   const [viSmooth, setViSmooth] = useModelState<boolean>("vi_smooth");
-  const viPreAutoPctRef = React.useRef<[number, number] | null>(null);
-  const toggleViAutoContrast = React.useCallback((on: boolean) => {
-    if (on) {
-      viPreAutoPctRef.current = [viVminPct, viVmaxPct];
-    } else if (viPreAutoPctRef.current) {
-      const [savedVminPct, savedVmaxPct] = viPreAutoPctRef.current;
-      setViVminPct(savedVminPct);
-      setViVmaxPct(savedVmaxPct);
-      viPreAutoPctRef.current = null;
-    }
-    setViAutoContrast(on);
-  }, [setViAutoContrast, setViVmaxPct, setViVminPct, viVmaxPct, viVminPct]);
+  /** The image's Range menu: "full", a percentile pair, or "handles" (leaves the handles where they are). */
+  const chooseViContrastRange = React.useCallback((choice: string) => {
+    if (choice === "handles") return;
+    setViAutoContrast(false);
+    setViPercentilesTrait(percentilesOfChoice(choice));
+    if (choice === "full") { setViVminPct(0); setViVmaxPct(100); }
+  }, [setViAutoContrast, setViPercentilesTrait, setViVmaxPct, setViVminPct]);
+  /** A handle moved on the image's histogram: the range is the handles' from now on. */
+  const moveViContrastHandles = React.useCallback((low: number, high: number) => {
+    if (model.get("vi_auto_contrast")) setViAutoContrast(false);
+    if (model.get("vi_percentiles") != null) setViPercentilesTrait(null);
+    setViVminPct(low); setViVmaxPct(high);
+  }, [model, setViAutoContrast, setViPercentilesTrait, setViVmaxPct, setViVminPct]);
+  const chooseDpContrastRange = React.useCallback((choice: string) => {
+    if (choice === "handles") return;
+    setDpPercentilesTrait(percentilesOfChoice(choice));
+    if (choice === "full") { setDpVminPct(0); setDpVmaxPct(100); }
+  }, [setDpPercentilesTrait, setDpVmaxPct, setDpVminPct]);
+  const moveDpContrastHandles = React.useCallback((low: number, high: number) => {
+    if (model.get("dp_percentiles") != null) setDpPercentilesTrait(null);
+    setDpVminPct(low); setDpVmaxPct(high);
+  }, [model, setDpPercentilesTrait, setDpVmaxPct, setDpVminPct]);
 
   // VI ROI state (real-space region selection for summed DP) - synced with Python
   const [viRoiMode, setViRoiMode] = useModelState<string>("vi_roi_mode");
@@ -5504,7 +5532,7 @@ function Show4DSTEM() {
   // Store raw data for filtering/FFT
   const rawVirtualImageRef = React.useRef<Float32Array | null>(null);
   const viDisplayRangeRef = React.useRef<{
-    version: number; log: boolean; auto: boolean;
+    version: number; log: boolean; percentiles: Percentiles | null;
     min: number; max: number; vmin: number; vmax: number;
   } | null>(null);
   const fftMagnitudeRef = React.useRef<Float32Array | null>(null);
@@ -5532,7 +5560,7 @@ function Show4DSTEM() {
       const stats = computeStats(rawData);
       setViStats([stats.mean, stats.min, stats.max, stats.std]);
       viDisplayRangeRef.current = { min: stats.min, max: stats.max,
-        vmin: stats.min, vmax: stats.max, version: rawVirtualImageVersionRef.current, log: false, auto: false };
+        vmin: stats.min, vmax: stats.max, version: rawVirtualImageVersionRef.current, log: false, percentiles: null };
       if (isDpcGpuSource(activeViSource)) {
         const span = Math.max(Math.abs(stats.min), Math.abs(stats.max), 1e-12);
         setViDataMin(-span);
@@ -5800,6 +5828,12 @@ function Show4DSTEM() {
         vmin = traitDpVmin;
         vmax = traitDpVmax;
       }
+    } else if (dpPercentiles) {
+      ({ vmin, vmax } = percentileClip(scaled, dpPercentiles[0], dpPercentiles[1]));
+      // The handles follow the percentiles, so the histogram shows what is drawn.
+      const handles = handlePositions(vmin, vmax, dataMin, dataMax);
+      if (handles && Math.abs(handles[0] - dpVminPct) > 0.5) setDpVminPct(handles[0]);
+      if (handles && Math.abs(handles[1] - dpVmaxPct) > 0.5) setDpVmaxPct(handles[1]);
     } else {
       ({ vmin, vmax } = sliderRange(dataMin, dataMax, dpVminPct, dpVmaxPct));
     }
@@ -5834,7 +5868,7 @@ function Show4DSTEM() {
     paintDpCanvas();
     // A new DP render also updates cached colorbar limits, without an ROI edit.
     drawDpUiRef.current?.();
-  }, [displayedDpBytes, detRows, detCols, dpColormap, dpVminPct, dpVmaxPct, dpScaleMode, traitDpVmin, traitDpVmax]);
+  }, [displayedDpBytes, detRows, detCols, dpColormap, dpVminPct, dpVmaxPct, dpScaleMode, traitDpVmin, traitDpVmax, dpPercentiles, setDpVminPct, setDpVmaxPct]);
 
   // useLayoutEffect prevents black flash when canvas dimensions change (resize)
   React.useLayoutEffect(() => paintDpCanvas(), [dpZoom, dpPanX, dpPanY]);
@@ -5885,8 +5919,8 @@ function Show4DSTEM() {
         vmin = traitViVmin;
         vmax = traitViVmax;
       }
-    } else if (viAutoContrast) {
-      ({ vmin, vmax } = percentileClip(scaled, 1, 99));
+    } else if (viPercentiles) {
+      ({ vmin, vmax } = percentileClip(scaled, viPercentiles[0], viPercentiles[1]));
       const span = dataMax - dataMin;
       if (span > 0) {
         const lo = Math.max(0, Math.min(100, ((vmin - dataMin) / span) * 100));
@@ -5921,7 +5955,7 @@ function Show4DSTEM() {
     applyColormap(scaled, imageData.data, lut, vmin, vmax);
     offCtx.putImageData(imageData, 0, 0);
     setViOffscreenVersion(version => version + 1);
-  }, [activeViSource, liveImage, compareMode, displayedVirtualImageBytes, shapeRows, shapeCols, viDetail, viGpuVersion, viColormap, viVminPct, viVmaxPct, viScaleMode, traitViVmin, traitViVmax, viAutoContrast]);
+  }, [activeViSource, liveImage, compareMode, displayedVirtualImageBytes, shapeRows, shapeCols, viDetail, viGpuVersion, viColormap, viVminPct, viVmaxPct, viScaleMode, traitViVmin, traitViVmax, viPercentiles]);
 
   // Present resident reductions directly, including while the pointer is held.
   // Offscreen bitmap snapshots can be black and can lag the latest detector. The
@@ -5952,11 +5986,11 @@ function Show4DSTEM() {
     );
     if (rawReady && raw) {
       let range = viDisplayRangeRef.current;
-      if (!range || range.version !== rawVirtualImageVersionRef.current || range.log !== (viScaleMode === "log") || range.auto !== viAutoContrast) {
+      if (!range || range.version !== rawVirtualImageVersionRef.current || range.log !== (viScaleMode === "log") || range.percentiles !== viPercentiles) {
         const scaled = viScaleMode === "log" ? displayLogScale(raw) : raw;
-        const bounds = viAutoContrast ? percentileClip(scaled, 1, 99) : findDataRange(scaled);
+        const bounds = viPercentiles ? percentileClip(scaled, viPercentiles[0], viPercentiles[1]) : findDataRange(scaled);
         range = { vmin: bounds.min, vmax: bounds.max, ...bounds,
-          version: rawVirtualImageVersionRef.current, log: viScaleMode === "log", auto: viAutoContrast };
+          version: rawVirtualImageVersionRef.current, log: viScaleMode === "log", percentiles: viPercentiles };
         viDisplayRangeRef.current = range;
       }
       let dataMin = range.min;
@@ -5975,7 +6009,7 @@ function Show4DSTEM() {
           vmin = traitViVmin;
           vmax = traitViVmax;
         }
-      } else if (viAutoContrast) {
+      } else if (viPercentiles) {
         ({ vmin, vmax } = range);
         const span = dataMax - dataMin;
         if (span > 0) {
@@ -6039,7 +6073,7 @@ function Show4DSTEM() {
     viScaleMode,
     traitViVmin,
     traitViVmax,
-    viAutoContrast,
+    viPercentiles,
     viZoom,
     viPanX,
     viPanY,
@@ -7634,6 +7668,27 @@ function Show4DSTEM() {
   };
   const statsValueSx = { color: themeColors.accent };
 
+  /** The Range menu above a histogram: the full range, or the data between two percentiles. */
+  const contrastRangeMenu = (what: "Image" | "Pattern", choice: string, choose: (choice: string) => void) => (
+    <Select
+      value={choice}
+      onChange={(event) => choose(String(event.target.value))}
+      size="small"
+      title="Contrast range: all of the data, or the data between two percentiles. The two handles on the histogram set any other range."
+      inputProps={{ "aria-label": `${what} contrast range` }}
+      sx={{ ...themedSelect, width: 110, fontSize: 10 }}
+      MenuProps={themedMenuProps}
+    >
+      <MenuItem value="full">Full range</MenuItem>
+      {CONTRAST_PERCENTILES.map(pair => (
+        <MenuItem key={pair.join(",")} value={pair.join(",")}>{percentilesLabel(pair)}</MenuItem>
+      ))}
+      {percentilesOfChoice(choice) && !CONTRAST_PERCENTILES.some(pair => pair.join(",") === choice)
+        && <MenuItem value={choice}>{percentilesLabel(percentilesOfChoice(choice)!)}</MenuItem>}
+      {choice === "handles" && <MenuItem value="handles">Handles</MenuItem>}
+    </Select>
+  );
+
   const keyboardShortcutItems = React.useMemo((): [string, string][] => [
     ["↑ / ↓", "Move scan row"],
     ["← / →", "Move scan col"],
@@ -8708,7 +8763,8 @@ function Show4DSTEM() {
                   {dpControlRows}
                   {/* Right: Histogram spanning both rows */}
                   <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", flex: "0 0 auto", maxWidth: "100%" }}>
-                    <Histogram data={dpHistogramData} vminPct={dpVminPct} vmaxPct={dpVmaxPct} onRangeChange={(min, max) => { setDpVminPct(min); setDpVmaxPct(max); }} width={110} height={40} sliderInset={6} theme={themeInfo.theme} dataMin={dpStats[1]} dataMax={dpStats[2]}
+                    {contrastRangeMenu("Pattern", contrastRangeChoice(dpPercentiles, dpVminPct, dpVmaxPct), chooseDpContrastRange)}
+                    <Histogram data={dpHistogramData} vminPct={dpVminPct} vmaxPct={dpVmaxPct} onRangeChange={moveDpContrastHandles} width={110} height={40} sliderInset={6} theme={themeInfo.theme} dataMin={dpStats[1]} dataMax={dpStats[2]}
                       fixedRange={traitDpVmin != null && traitDpVmax != null ? [traitDpVmin, traitDpVmax] : undefined} />
                   </Box>
                 </Box>
@@ -8862,7 +8918,7 @@ function Show4DSTEM() {
               gpuEngine={engine} labels={frameLabels || []} sourceIds={streamSourceIds} activeIdx={frameIdx}
               shapeRows={detRows} shapeCols={detCols} cols={compareCols || 0}
               colormap={dpColormap} scaleMode={dpScaleMode} vminPct={dpVminPct}
-              vmaxPct={dpVmaxPct} autoContrast={false} smooth={false}
+              vmaxPct={dpVmaxPct} percentiles={dpPercentiles} smooth={false}
               absoluteMin={traitDpVmin} absoluteMax={traitDpVmax}
               cursorRow={localKRow} cursorCol={localKCol} status=""
               themeColors={themeColors} panelChromeVisible={panelChromeVisible}
@@ -8916,7 +8972,7 @@ function Show4DSTEM() {
               scaleMode={viScaleMode}
               vminPct={viVminPct}
               vmaxPct={viVmaxPct}
-              autoContrast={viAutoContrast}
+              percentiles={viPercentiles}
               absoluteMin={traitViVmin}
               absoluteMax={traitViVmax}
               smooth={viSmooth}
@@ -9019,8 +9075,6 @@ function Show4DSTEM() {
               <Typography sx={statsTextSx}>Max <Box component="span" sx={statsValueSx}>{formatStat(viStats[2])}</Box></Typography>
               <Typography sx={statsTextSx}>Std <Box component="span" sx={statsValueSx}>{formatStat(viStats[3])}</Box></Typography>
               {controlsVisible && <Box sx={{ ml: "auto", display: "flex", alignItems: "center", gap: "2px", flexWrap: "nowrap", whiteSpace: "nowrap", flexShrink: 0 }}>
-                <Typography sx={{ ...themedTypography.label, fontSize: 10, lineHeight: "20px" }}>Auto</Typography>
-                <Switch checked={viAutoContrast} onChange={(event) => toggleViAutoContrast(event.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Image auto contrast" } }} />
                 <Typography sx={{ ...themedTypography.label, fontSize: 10, lineHeight: "20px" }} title="CSS bilinear interpolation. Same data, browser smooths visually.">Smooth</Typography>
                 <Switch checked={viSmooth} onChange={(event) => setViSmooth(event.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Image smoothing" } }} />
               </Box>}
@@ -9065,8 +9119,9 @@ function Show4DSTEM() {
                   {viControlRows}
                   {/* Right: Histogram spanning both rows */}
                   <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", flex: "0 0 auto", maxWidth: "100%" }}>
+                    {contrastRangeMenu("Image", contrastRangeChoice(viPercentiles, viVminPct, viVmaxPct), chooseViContrastRange)}
                     <Subscribe store={viDisplayStore}>{(vi) => (
-                    <Histogram data={vi.histogramData} bins={vi.histogramBins} vminPct={viVminPct} vmaxPct={viVmaxPct} onRangeChange={(min, max) => { if (viAutoContrast) { viPreAutoPctRef.current = null; setViAutoContrast(false); } setViVminPct(min); setViVmaxPct(max); }} width={110} height={40} sliderInset={6} theme={themeInfo.theme} dataMin={vi.dataMin} dataMax={vi.dataMax}
+                    <Histogram data={vi.histogramData} bins={vi.histogramBins} vminPct={viVminPct} vmaxPct={viVmaxPct} onRangeChange={moveViContrastHandles} width={110} height={40} sliderInset={6} theme={themeInfo.theme} dataMin={vi.dataMin} dataMax={vi.dataMax}
                       fixedRange={traitViVmin != null && traitViVmax != null ? [traitViVmin, traitViVmax] : undefined} />)}
                     </Subscribe>
                   </Box>

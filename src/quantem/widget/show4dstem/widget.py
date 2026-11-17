@@ -377,6 +377,10 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     masked_pixels = traitlets.List(traitlets.List(traitlets.Int()), default_value=[]).tag(sync=True)
     show_masked_pixels = traitlets.Bool(False).tag(sync=True)
     vi_auto_contrast = traitlets.Bool(False).tag(sync=True)
+    # Contrast between two percentiles of the data, for example [2, 98]; None is the full range (or the
+    # handles' range, `vi_vmin_pct` and `vi_vmax_pct`). The Range menu above each histogram sets these.
+    vi_percentiles = traitlets.List(traitlets.Float(), default_value=None, allow_none=True, minlen=2, maxlen=2).tag(sync=True)
+    dp_percentiles = traitlets.List(traitlets.Float(), default_value=None, allow_none=True, minlen=2, maxlen=2).tag(sync=True)
     vi_smooth = traitlets.Bool(False).tag(sync=True)
     frame_idx = traitlets.Int(0).tag(sync=True)
     n_frames = traitlets.Int(1).tag(sync=True)
@@ -1035,7 +1039,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         "fft_vmin_pct", "fft_vmax_pct", "dp_vmin", "dp_vmax", "vi_vmin", "vi_vmax", "fft_auto", "show_fft",
         "fft_window", "show_controls", "controls_collapsed", "show_stats", "show_scale_bar", "panel_width_px",
         "dp_panel_width_px", "vi_panel_width_px", "sync_resize",
-        "dp_show_colorbar", "vi_auto_contrast", "vi_smooth", "view_mode", "compare_columns",
+        "dp_show_colorbar", "vi_auto_contrast", "vi_percentiles", "dp_percentiles", "vi_smooth", "view_mode", "compare_columns",
         "compare_grid_width_px", "compare_max_panels", "compare_group_mode", "compare_page_idx",
         "compare_dp_mode", "profile_width", "frame_idx", "frame_dim_label", "frame_loop", "frame_fps",
         "frame_reverse", "frame_boomerang",
