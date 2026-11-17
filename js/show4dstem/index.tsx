@@ -248,6 +248,18 @@ const MIN_CANVAS_SIZE = 240;
 const SIDE_BY_SIDE_MIN = 160;  // panels shrink this far to stay side by side in a narrow notebook
 const PANEL_GAP = 4;  // between the diffraction pattern, the image or scan grid and the FFT
 const COMPARE_GRID_DEFAULT_WIDTH = 980;
+
+/** Linear or log display, one small button that says which (11-16: the operator wanted the diffraction pattern
+ *  smaller, so its controls had to fit under it; the "Scale" label and its menu took half a row). */
+function ScaleToggle({ value, onChange, name }: { value: string; onChange: (mode: "linear" | "log") => void; name: string }) {
+  const log = value === "log";
+  return (
+    <Button size="small" variant="outlined" onClick={() => onChange(log ? "linear" : "log")}
+      aria-label={`${name} display scale: ${log ? "log" : "linear"}`}
+      title={`Display scale: ${log ? "log" : "linear"}; click for ${log ? "linear" : "log"} (the display only, never the counts)`}
+      sx={{ ...compactButton, px: 0.75, lineHeight: 1.4 }}>{log ? "log" : "lin"}</Button>
+  );
+}
 const MIN_COMPARE_GRID_WIDTH = 320;
 type Show4DSTEMWindow = SavePickerWindow & {
   showDirectoryPicker?: (options?: { mode?: "read" | "readwrite"; startIn?: string }) => Promise<unknown>;
@@ -8102,8 +8114,7 @@ function Show4DSTEM() {
     <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: "1 1 220px", minWidth: 0, justifyContent: "center" }}>
       {/* Row 1: Detector + slider */}
       <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-        <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Detector</Typography>
-        <Select value={roiMode || "point"} onChange={(event) => setRoiMode(event.target.value)} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
+        <Select title="Detector" inputProps={{ "aria-label": "Detector" }} value={roiMode || "point"} onChange={(event) => setRoiMode(event.target.value)} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
           <MenuItem value="point">Point</MenuItem>
           <MenuItem value="circle">Circle</MenuItem>
           <MenuItem value="square">Square</MenuItem>
@@ -8140,17 +8151,11 @@ function Show4DSTEM() {
       </Box>
       {/* Row 2: Color + Scale + Colorbar */}
       <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-        <Typography component="span" aria-label="Colormap" title="Colormap" sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted }}>Color</Typography>
-        <Select value={dpColormap} onChange={(event) => setDpColormap(String(event.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
+        <Select title="Colormap" inputProps={{ "aria-label": "Colormap" }} value={dpColormap} onChange={(event) => setDpColormap(String(event.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
           {COLORMAP_OPTIONS}
         </Select>
-        <Typography component="span" aria-label="Display scale" title="Display scale: changes the display only, never the counts" sx={{ ...themedTypography.label }}>Scale</Typography>
-        <Select value={dpScaleMode} onChange={(event) => setDpScaleMode(event.target.value as "linear" | "log")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
-          <MenuItem value="linear">Lin</MenuItem>
-          <MenuItem value="log">Log</MenuItem>
-
-        </Select>
-        <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Colorbar</Typography>
+        <ScaleToggle value={dpScaleMode} onChange={setDpScaleMode} name="Diffraction" />
+        <Typography sx={{ ...themedTypography.label, fontSize: 10 }} title="Colorbar">bar</Typography>
         <Switch checked={showDpColorbar} onChange={(event) => setShowDpColorbar(event.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Diffraction colorbar" } }} />
         {maskedPixels?.length ? <>
           <Typography sx={{ ...themedTypography.label, fontSize: 10 }} title={`The ${maskedPixels.length} detector pixels the mask excluded, filled with their neighbours\u2019 median`}>Masked</Typography>
@@ -8314,15 +8319,10 @@ function Show4DSTEM() {
       </Box>
       {/* Row 2: Color + Scale */}
       <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-        <Typography component="span" aria-label="Colormap" title="Colormap" sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted }}>Color</Typography>
-        <Select value={viColormap} onChange={(event) => setViColormap(String(event.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
+        <Select title="Colormap" inputProps={{ "aria-label": "Colormap" }} value={viColormap} onChange={(event) => setViColormap(String(event.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
           {COLORMAP_OPTIONS}
         </Select>
-        <Typography component="span" aria-label="Display scale" title="Display scale: changes the display only, never the counts" sx={{ ...themedTypography.label }}>Scale</Typography>
-        <Select value={viScaleMode} onChange={(event) => setViScaleMode(event.target.value as "linear" | "log")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
-          <MenuItem value="linear">Lin</MenuItem>
-          <MenuItem value="log">Log</MenuItem>
-        </Select>
+        <ScaleToggle value={viScaleMode} onChange={setViScaleMode} name="Image" />
       </Box>
     </Box>
   ), [
@@ -9186,12 +9186,7 @@ function Show4DSTEM() {
                     <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: "1 1 220px", minWidth: 0, justifyContent: "center" }}>
                       {/* Row 1: Scale + Clip */}
                       <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                        <Typography component="span" aria-label="Display scale" title="Display scale: changes the display only, never the counts" sx={{ ...themedTypography.label }}>Scale</Typography>
-                        <Select value={fftScaleMode} onChange={(event) => setFftScaleMode(event.target.value as "linear" | "log")} size="small" sx={{ ...themedSelect, minWidth: 50, fontSize: 10 }} MenuProps={themedMenuProps}>
-                          <MenuItem value="linear">Lin</MenuItem>
-                          <MenuItem value="log">Log</MenuItem>
-
-                        </Select>
+                        <ScaleToggle value={fftScaleMode} onChange={setFftScaleMode} name="FFT" />
                         <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Auto</Typography>
                         <Switch checked={fftAuto} onChange={(event) => toggleFftAuto(event.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "FFT auto contrast" } }} />
                         {fftCropDims && (
@@ -9203,8 +9198,7 @@ function Show4DSTEM() {
                       </Box>
                       {/* Row 2: Color */}
                       <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-                        <Typography component="span" aria-label="Colormap" title="Colormap" sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted }}>Color</Typography>
-                        <Select value={fftColormap} onChange={(event) => setFftColormap(String(event.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
+                        <Select title="Colormap" inputProps={{ "aria-label": "Colormap" }} value={fftColormap} onChange={(event) => setFftColormap(String(event.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
                           {COLORMAP_OPTIONS}
                         </Select>
                       </Box>
