@@ -68,7 +68,7 @@ from quantem.widget.show4dstem.detector import (
 )
 from quantem.widget.show4dstem.preview import static_png_b64
 from quantem.widget.show4dstem.reader import acquisition_name
-from quantem.widget.show4dstem.streaming import _shape_of
+from quantem.widget.show4dstem.streaming import _shape_of, _size_label
 from quantem.widget.show4dstem.session import DetectorSessionSource, SessionSeries
 from quantem.widget.show4dstem.streaming import StreamFollower
 from quantem.widget.show4dstem.live import LiveFolder
@@ -92,13 +92,6 @@ def masked_pixels(metadata) -> list[list[int]]:
     keeps it with every corrected scan, in GPU memory and in .qem); empty when none are recorded."""
     record = (metadata or {}).get("hot_pixel_correction") or {}
     return [[int(row), int(col)] for row, col in record.get("coordinates_row_col") or []]
-
-
-def _size_label(shape, count: int) -> str:
-    """A size group's name: scan rows x columns x detector (one number when square), and how many scans."""
-    rows, cols, det_rows, det_cols = shape
-    detector = f"{det_rows}" if det_rows == det_cols else f"{det_rows}×{det_cols}"
-    return f"{rows}×{cols}×{detector} · {count} scan{'s' if count != 1 else ''}"
 
 
 CALIBRATION_KEYS = ("scan_sampling_A", "detector_sampling_mrad", "detector_sampling_inv_A", "voltage_kV", "semiangle_mrad")

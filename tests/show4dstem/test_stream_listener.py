@@ -1045,10 +1045,23 @@ def test_a_scan_of_another_size_replaces_the_others(recording):
         viewer.refresh_stream()
         assert viewer.stream_error is None and viewer.frame_labels == ["small"]
         assert (viewer.shape_rows, viewer.shape_cols) == (2, 2) and viewer.scan_sampling_A == [0.8, 1.2]
+        # both sizes stay in GPU memory: one tab per size, the newest first and in view (11-18)
+        assert viewer.size_groups == ["2×2×8×10 · 1 scan", "3×4×8×10 · 1 scan"] and viewer.size_group == 0
+        viewer.size_group = 1                       # the tab of the first size
+        viewer.refresh_stream()
+        assert viewer.stream_error is None and viewer.frame_labels == ["big_1"]
+        assert (viewer.shape_rows, viewer.shape_cols) == (3, 4) and viewer.scan_sampling_A == [0.4, 0.6]
+        viewer.size_group = 0
+        viewer.refresh_stream()
+        assert viewer.frame_labels == ["small"] and (viewer.shape_rows, viewer.shape_cols) == (2, 2)
         recording.acquisitions.append(LiveScan("big_2"))
         viewer.refresh_stream()
         assert viewer.stream_error is None and sorted(viewer.frame_labels) == ["big_1", "big_2"]
         assert (viewer.shape_rows, viewer.shape_cols) == (3, 4) and viewer.scan_sampling_A == [0.4, 0.6]
+        assert viewer.size_groups == ["3×4×8×10 · 2 scans", "2×2×8×10 · 1 scan"] and viewer.size_group == 0
+        del recording.acquisitions[1]               # the small scan is cleared: one size, no tabs
+        viewer.refresh_stream()
+        assert viewer.size_groups == [] and viewer.size_group == 0
     finally:
         viewer.close()
 

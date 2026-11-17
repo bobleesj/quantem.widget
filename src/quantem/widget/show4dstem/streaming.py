@@ -28,6 +28,13 @@ def _shape_of(source) -> tuple:
     return tuple(int(side) for side in tuple(shape)[-4:])
 
 
+def _size_label(shape, count: int) -> str:
+    """A size group's name: scan rows x columns x detector (one number when square), and how many scans."""
+    rows, cols, det_rows, det_cols = shape
+    detector = f"{det_rows}" if det_rows == det_cols else f"{det_rows}×{det_cols}"
+    return f"{rows}×{cols}×{detector} · {count} scan{'s' if count != 1 else ''}"
+
+
 class StreamFollower:
     """Follow one recording without taking ownership of its acquisitions."""
 
@@ -47,15 +54,45 @@ class StreamFollower:
         self.title = options.get("title") or "Live acquisition"
         # a live folder shows each scan as it lands; a live recording keeps the scan the user selected
         self.select_newest = getattr(recording, "select_newest", False)
+        # scans of several sizes: one size in view, the others one click away (the size tabs)
+        self.size_shapes, self.shown_shape, self.newest_source = [], None, None
 
     def snapshot(self) -> list:
         return list(self.recording.acquisitions if self.partial else self.recording.datasets)
+
+    def of_shown_size(self, sources: list) -> list:
+        """The scans of the size in view, and the size tabs when the recording holds several sizes.
+
+        One viewer draws one scan and detector shape. A scan that begins brings its size into view; a size tab
+        brings back the scans of another size, which stay in GPU memory all along."""
+        viewer = self.viewer
+        shapes = [_shape_of(source) for source in sources]
+        if sources and (id(sources[-1]) != self.newest_source or self.shown_shape not in shapes):
+            self.shown_shape = shapes[-1]
+        self.newest_source = id(sources[-1]) if sources else None     # its identity only: no scan is kept by this
+        self.size_shapes = list(dict.fromkeys(reversed(shapes)))
+        several = len(self.size_shapes) > 1
+        labels = [_size_label(shape, shapes.count(shape)) for shape in self.size_shapes] if several else []
+        index = self.size_shapes.index(self.shown_shape) if several else 0
+        if list(viewer.size_groups) != labels:
+            viewer.size_groups = labels
+        if viewer.size_group != index:
+            viewer.size_group = index
+        return [source for source, shape in zip(sources, shapes) if shape == self.shown_shape]
+
+    def choose_size(self, change) -> None:
+        """A size tab was clicked: the scans of that size come into view at the next refresh."""
+        index = int(change["new"])
+        if 0 <= index < len(self.size_shapes) and self.size_shapes[index] != self.shown_shape:
+            self.shown_shape = self.size_shapes[index]
+            self.previous = None
 
     def start(self) -> None:
         """Publish independently of blocking cells; register only this viewer's hooks."""
         from IPython import get_ipython
 
         viewer = self.viewer
+        viewer.observe(self.choose_size, names=["size_group"])
         viewer._stream_update = self.update
         viewer._stream_recording = self.recording
         shell = get_ipython()
@@ -89,6 +126,7 @@ class StreamFollower:
             shell.events.unregister("pre_run_cell", before)
             shell.events.unregister("post_run_cell", after)
             viewer._stream_cell_hooks = None
+        viewer.unobserve(self.choose_size, names=["size_group"])
         with viewer._stream_lock:
             viewer._stream_update = None
             viewer._stream_recording = None
@@ -118,13 +156,14 @@ class StreamFollower:
                 return True
             with self.lock, viewer._defer_stream_observers():
                 sources = self.snapshot()
+                if not sources:
+                    self.of_shown_size(sources)         # no scans: no size tabs
                 if sources:
                     # One viewer holds one scan and detector shape: a scan of another size replaces the others and
                     # the scans of its size are shown (2026-11-16: a 256 x 256 scan after 512 x 512 ones stopped the
                     # live page: 'Live sessions must share scan/detector shape')
-                    newest = _shape_of(sources[-1])
-                    kept = [source for source in sources if _shape_of(source) == newest]
-                    if self.shown_sources and _shape_of(self.shown_sources[-1]) != newest:
+                    kept = self.of_shown_size(sources)
+                    if self.shown_sources and _shape_of(self.shown_sources[-1]) != self.shown_shape:
                         viewer._replace_stream_sources(self.shown_sources, [])
                         self.shown_sources, self.previous, self.initialized = [], None, False
                     sources = kept
@@ -257,7 +296,7 @@ class StreamFollower:
                 # browser must not keep retired acquisitions in GPU memory.
                 try:
                     with self.lock:
-                        sources = self.snapshot()
+                        sources = self.of_shown_size(self.snapshot())
                         if any(source not in sources for source in self.shown_sources):
                             if viewer._stream_deferred_snapshot is None:
                                 viewer._stream_deferred_snapshot = viewer.get_state(key=viewer.keys)
