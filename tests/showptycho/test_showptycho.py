@@ -52,6 +52,7 @@ def test_a_phase_array_is_shown_as_given_with_the_session_controls_explained():
     phase = np.angle(_object_wave())
     widget = ShowPtycho(phase, sampling=0.05, units="nm")
     np.testing.assert_array_equal(_shown(widget), phase)
+    assert widget.panel_px == 450
     assert widget.amplitude_bytes == b"" and (widget.phase_height, widget.phase_width) == (96, 80)
     assert widget.object_sampling_A == pytest.approx([0.5, 0.5])            # 0.05 nm drawn in Angstrom
     assert not widget.ptycho_session and "needs a DirectPtycho session" in widget.session_note
@@ -209,7 +210,7 @@ def test_small_scan_calibration_and_region_bounds_exclude_fft_padding(tmp_path, 
         raise AssertionError("Saved regions should reconstruct without another search.")
     monkeypatch.setattr(gpu.DirectPtycho, "aberrations", no_refit)
     with gpu.DirectPtycho.open(str(source), **options) as reopened:
-        viewer = ShowPtycho(reopened, save_dir=tmp_path, local_tilt=True)
+        viewer = ShowPtycho(reopened, calibration=tmp_path / "calibration.json", save_dir=tmp_path, local_tilt=True)
         np.testing.assert_array_equal(viewer.region_images["Region 1 · Direct"], expected)
         viewer.close()
 
@@ -226,6 +227,16 @@ def widget(direct, tmp_path):
     view = ShowPtycho(direct, show_fft=True, save_dir=tmp_path, compute_loss=True)
     view.upsample = 1  # Explicit native-grid comparisons below.
     return view
+
+
+@pytest.mark.parametrize(("size", "width"), [("medium", 450), ("large", 600)])
+def test_session_view_uses_requested_panel_size(direct, size, width):
+    view = direct.show(size=size, ui_mode="interactive")
+    try:
+        assert view.panel_px == width
+        assert view.ui_mode == "interactive"
+    finally:
+        view.close()
 
 
 def test_opens_on_the_session_fit_and_shows_its_preview(widget, direct):
@@ -360,7 +371,7 @@ def test_native_regions_fit_joint_models_without_replacing_the_overview(tmp_path
     monkeypatch.setattr(gpu.DirectPtycho, "aberrations", no_refit)
     with gpu.DirectPtycho.open(str(source), voltage_kV=300, semiangle_mrad=20,
                       scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5, 5)) as reopened:
-        viewer = ShowPtycho(reopened, local_tilt=True, save_dir=tmp_path)
+        viewer = ShowPtycho(reopened, local_tilt=True, calibration=tmp_path / "calibration.json", save_dir=tmp_path)
         assert viewer.region_fits == expected_fits
         for label, expected in expected_images.items():
             np.testing.assert_array_equal(viewer.region_images[label], expected)
@@ -373,7 +384,7 @@ def test_native_regions_fit_joint_models_without_replacing_the_overview(tmp_path
         viewer.close()
     with gpu.DirectPtycho.open(str(source), voltage_kV=300, semiangle_mrad=20,
                       scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5, 5)) as reopened:
-        viewer = ShowPtycho(reopened, local_tilt=True, save_dir=tmp_path)
+        viewer = ShowPtycho(reopened, local_tilt=True, calibration=tmp_path / "calibration.json", save_dir=tmp_path)
         assert viewer.regions == [] and viewer.region_images == {}
         np.testing.assert_array_equal(_shown(viewer), overview)
         viewer.close()
@@ -963,7 +974,7 @@ def test_crop_and_refit_keeps_the_acquisition_and_reopens_as_a_scan_region_sessi
     monkeypatch.setattr(gpu.DirectPtycho, "aberrations", no_search)
     with gpu.io.load(str(source)) as data:
         with gpu.DirectPtycho(data, scan_region=region, **calibration) as reopened:
-            restored = ShowPtycho(reopened, save_dir=tmp_path)
+            restored = ShowPtycho(reopened, calibration=tmp_path / "calibration.json", save_dir=tmp_path)
             assert restored.calibration_status == "Restored saved fit of scan region [16, 112, 8, 104]"
             np.testing.assert_array_equal(_shown(restored), expected)
             result = reopened.run()  # no refit: aberrations() would raise
@@ -1342,21 +1353,15 @@ def test_tilt_drag_and_release_reconstruct_one_complete_state(widget, direct, mo
     assert json.loads(widget.higher_order_aberrations_json) == higher
 
 
-def test_launch_table_is_displayed_once_before_widget(widget, monkeypatch):
-    """Opening ShowPtycho shows calibration without an extra notebook cell."""
+def test_widget_display_leaves_calibration_to_the_notebook(widget, monkeypatch):
+    """Rendering the widget emits only its own MIME bundle."""
     import IPython.display
 
     displayed = []
     monkeypatch.setattr(IPython.display, "display", displayed.append)
     bundle, _ = widget._repr_mimebundle_()
     assert "application/vnd.jupyter.widget-view+json" in bundle
-    assert len(displayed) == 1
-    table = displayed[0].data
-    assert list(table.columns) == ["Value", "Source"]
-    labels = pytest.importorskip("quantem.gpu.io.metadata_display")  # quantem.gpu's one calibration label set
-    assert table.loc[labels.CALIBRATION_LABELS["scan_detector_rotation_deg"], "Source"] == labels.EXPLICIT_OVERRIDE
-    widget._repr_mimebundle_()
-    assert len(displayed) == 1
+    assert displayed == []
 
 
 def test_automatic_detector_sampling_is_retained_in_saved_calibration(tmp_path):
@@ -1368,7 +1373,7 @@ def test_automatic_detector_sampling_is_retained_in_saved_calibration(tmp_path):
         sampling = direct.detector_sampling_mrad
         assert sampling is not None and all(value > 0 for value in sampling)
         labels = pytest.importorskip("quantem.gpu.io.metadata_display")
-        assert viewer._launch_calibration.loc[labels.CALIBRATION_LABELS["detector_sampling_mrad"], "Source"] == labels.ESTIMATED
+        assert direct.calibration().loc[labels.CALIBRATION_LABELS["detector_sampling_mrad"], "Source"] == labels.ESTIMATED
         viewer.save_trigger += 1
         saved = json.loads((tmp_path / "calibration.json").read_text())
         assert tuple(saved["detector_sampling_mrad"]) == sampling
@@ -1410,7 +1415,7 @@ def test_restart_restores_the_complete_saved_full_field_without_refitting(tmp_pa
             return preview(*args, **kwargs)
 
         monkeypatch.setattr(reopened, "preview", record_preview)
-        restored = reopened.show(save_dir=tmp_path, upsample=upsample)
+        restored = reopened.show(calibration=tmp_path / "calibration.json", save_dir=tmp_path, upsample=upsample)
         factor = restored.auto_upsample if upsample == "auto" else (upsample or 2)
         assert factors == [factor]
         if upsample is not None:
@@ -1436,7 +1441,7 @@ def test_restart_restores_the_complete_saved_full_field_without_refitting(tmp_pa
         restored.close()
     # Saving a restored, rotated model must retain its original launch identity.
     with gpu.DirectPtycho.open(str(source), **calibration) as reopened:
-        restored = ShowPtycho(reopened, save_dir=tmp_path)
+        restored = ShowPtycho(reopened, calibration=tmp_path / "calibration.json", save_dir=tmp_path)
         np.testing.assert_array_equal(_shown(restored), expected)
         restored.close()
 
@@ -1499,15 +1504,14 @@ def test_a_saved_fit_restores_after_its_data_folder_moves_and_names_no_absolute_
     moved.parent.mkdir()
     shutil.move(folder, moved)
     with gpu.DirectPtycho.open(str(moved / "scan.npy"), **calibration) as reopened:
-        restored = ShowPtycho(reopened, save_dir=moved)
+        restored = ShowPtycho(reopened, calibration=moved / "calibration.json")
         assert restored.calibration_status == "Restored saved full-field fit"
         np.testing.assert_array_equal(_shown(restored), expected)
         restored.close()
     np.save(moved / "scan.npy", _counts() + 1)
     with gpu.DirectPtycho.open(str(moved / "scan.npy"), **calibration) as other:
-        viewer = ShowPtycho(other, save_dir=moved)
-        assert "acquisition or launch calibration has changed" in viewer.calibration_status
-        viewer.close()
+        with pytest.raises(ValueError, match="acquisition or launch calibration has changed"):
+            ShowPtycho(other, calibration=moved / "calibration.json")
 
 
 def test_a_flipped_session_records_its_flip_in_every_file_and_restores(tmp_path, monkeypatch):
@@ -1543,7 +1547,7 @@ def test_a_flipped_session_records_its_flip_in_every_file_and_restores(tmp_path,
 
     monkeypatch.setattr(gpu.DirectPtycho, "aberrations", no_search)
     with gpu.DirectPtycho.open(str(source), **calibration) as reopened:
-        restored = ShowPtycho(reopened, save_dir=tmp_path)
+        restored = ShowPtycho(reopened, calibration=tmp_path / "calibration.json", save_dir=tmp_path)
         assert restored.calibration_status == "Restored saved full-field fit"
         assert reopened.scan_detector_rotation_flipped and restored.scan_detector_rotation_deg == 12
         assert restored.upsample == 1
@@ -1551,9 +1555,8 @@ def test_a_flipped_session_records_its_flip_in_every_file_and_restores(tmp_path,
         restored.close()
     # The same counts opened unflipped are another geometry: the flipped fit is not reused.
     with gpu.DirectPtycho.open(str(source), **{**calibration, "scan_detector_rotation_flipped": False}) as other:
-        viewer = ShowPtycho(other, save_dir=tmp_path)
-        assert "Saved fit not restored" in viewer.calibration_status
-        viewer.close()
+        with pytest.raises(ValueError, match="Cannot apply calibration"):
+            ShowPtycho(other, calibration=tmp_path / "calibration.json")
 
 
 def test_a_save_made_after_a_180_degree_move_reopens_at_the_launch_rotation(tmp_path, monkeypatch):
@@ -1571,6 +1574,7 @@ def test_a_save_made_after_a_180_degree_move_reopens_at_the_launch_rotation(tmp_
     np.save(source, _counts())
     calibration = dict(voltage_kV=300, semiangle_mrad=20, scan_sampling_A=(0.5, 0.5), detector_sampling_mrad=(5, 5))
     with gpu.DirectPtycho.open(str(source), **calibration) as direct:
+        direct.known_aberrations = START
         launch = direct.scan_detector_rotation_deg  # estimated from the centre-of-mass curl
         moved = opposite_rotation_deg(launch)
         direct.set_rotation(moved)  # where aberrations()' 180-degree check leaves it
@@ -1587,7 +1591,7 @@ def test_a_save_made_after_a_180_degree_move_reopens_at_the_launch_rotation(tmp_
     monkeypatch.setattr(gpu.DirectPtycho, "aberrations", no_search)
     with gpu.DirectPtycho.open(str(source), **calibration) as reopened:
         assert reopened.scan_detector_rotation_deg == launch
-        restored = ShowPtycho(reopened, save_dir=tmp_path)
+        restored = ShowPtycho(reopened, calibration=tmp_path / "calibration.json", save_dir=tmp_path)
         assert restored.calibration_status == "Restored saved full-field fit"
         assert restored.scan_detector_rotation_deg == reopened.scan_detector_rotation_deg == pytest.approx(moved)
         np.testing.assert_array_equal(_shown(restored), expected)
@@ -1597,9 +1601,8 @@ def test_a_save_made_after_a_180_degree_move_reopens_at_the_launch_rotation(tmp_
         restored.close()
     # a launch rotation that differs by anything but 180 degrees is another geometry
     with gpu.DirectPtycho.open(str(source), **calibration, scan_detector_rotation_deg=launch + 1.0) as other:
-        viewer = ShowPtycho(other, save_dir=tmp_path)
-        assert "acquisition or launch calibration has changed" in viewer.calibration_status
-        viewer.close()
+        with pytest.raises(ValueError, match="Cannot apply calibration"):
+            ShowPtycho(other, calibration=tmp_path / "calibration.json")
 
 
 def test_a_scan_region_session_saves_a_calibration_it_reopens(tmp_path, monkeypatch):
@@ -1613,7 +1616,7 @@ def test_a_scan_region_session_saves_a_calibration_it_reopens(tmp_path, monkeypa
                        scan_detector_rotation_deg=10.0)
     region = (16, 112, 8, 104)
     with gpu.io.load(str(source)) as data:
-        with gpu.DirectPtycho(data, scan_region=region, **calibration) as direct:
+        with gpu.DirectPtycho(data, scan_region=region, aberrations=START, **calibration) as direct:
             assert direct.input_scan_shape == (96, 96)
             viewer = ShowPtycho(direct, save_dir=tmp_path)
             viewer.upsample = 1
@@ -1630,7 +1633,7 @@ def test_a_scan_region_session_saves_a_calibration_it_reopens(tmp_path, monkeypa
     monkeypatch.setattr(gpu.DirectPtycho, "aberrations", no_search)
     with gpu.io.load(str(source)) as data:
         with gpu.DirectPtycho(data, scan_region=region, **calibration) as reopened:
-            restored = ShowPtycho(reopened, save_dir=tmp_path)
+            restored = ShowPtycho(reopened, calibration=tmp_path / "calibration.json", save_dir=tmp_path)
             assert restored.calibration_status == "Restored saved fit of scan region [16, 112, 8, 104]"
             assert reopened.known_aberrations == START
             np.testing.assert_array_equal(_shown(restored), expected)
@@ -1638,9 +1641,8 @@ def test_a_scan_region_session_saves_a_calibration_it_reopens(tmp_path, monkeypa
             restored.close()
         # the whole scan, or another region, is another session
         with gpu.DirectPtycho(data, **calibration) as whole:
-            viewer = ShowPtycho(whole, save_dir=tmp_path)
-            assert "Saved fit not restored" in viewer.calibration_status
-            viewer.close()
+            with pytest.raises(ValueError, match="Cannot apply calibration"):
+                ShowPtycho(whole, calibration=tmp_path / "calibration.json")
 
 
 def test_the_propagator_tilt_of_a_flipped_session_follows_the_detector_axes(tmp_path):
@@ -1726,23 +1728,24 @@ def test_the_tutorial_order_reopens_the_save_and_reconstruct_keeps_it(tmp_path, 
         searches = []
         monkeypatch.setattr(gpu.DirectPtycho, "aberrations", lambda *args, **kwargs: searches.append(1))
         capsys.readouterr()
-        viewer = direct.show(save_dir=tmp_path)
+        viewer = direct.show(calibration=tmp_path / "calibration.json")
         assert viewer.calibration_status == "Restored saved full-field fit"
         assert "replacing the session's C10" in capsys.readouterr().out
         np.testing.assert_array_equal(_shown(viewer), expected)
         assert dict(direct.run().aberrations) == restored and not searches
         viewer.close()
     with gpu.io.load(str(source)) as data, gpu.DirectPtycho(data, **calibration) as direct:
-        viewer = direct.show(save_dir=tmp_path)  # no run() first
+        viewer = direct.show(calibration=tmp_path / "calibration.json")  # no run() first
         assert viewer.calibration_status == "Restored saved full-field fit"
         assert dict(direct.run().aberrations) == restored and not searches
         viewer.close()
+    monkeypatch.undo()
     (tmp_path / "calibration.json").unlink()
     with gpu.io.load(str(source)) as data, gpu.DirectPtycho(data, **calibration) as direct:
         viewer = direct.show(save_dir=tmp_path)  # nothing saved yet, nothing fitted
         viewer._on_preview_message(viewer, {"type": "direct-preview", "request": {"id": 2, **reviewed, "committed": True}}, [])
         viewer.save_trigger += 1
-        assert dict(direct.run().aberrations) == reviewed and not searches  # Save stated them as known
+        assert all(direct.run().aberrations[key] == value for key, value in reviewed.items())
         viewer.close()
 
 
@@ -1762,14 +1765,11 @@ def test_changed_acquisition_or_calibration_does_not_restore_an_old_fit(tmp_path
         if not changed:
             np.save(source, _counts() + 1)
         with gpu.DirectPtycho.open(str(source), **settings) as direct:
-            viewer = ShowPtycho(direct, save_dir=tmp_path)
-            assert viewer.fitted_C10_nm == 0
-            assert "acquisition or launch calibration has changed" in viewer.calibration_status
-            assert "Joint fit" in viewer.calibration_status
-            viewer.close()
+            with pytest.raises(ValueError, match="acquisition or launch calibration has changed"):
+                ShowPtycho(direct, calibration=tmp_path / "calibration.json")
 
 
-def test_a_matching_save_replaces_a_supplied_model_unless_restore_is_false(tmp_path, capsys):
+def test_explicit_calibration_overrides_session_while_save_dir_preserves_it(tmp_path, capsys):
     """run() then show() is the documented reopen: the save wins over the fresh fit, and says so.
 
     A fitted or manually initialized session skipped restore, so that order refit and never restored.
@@ -1785,17 +1785,16 @@ def test_a_matching_save_replaces_a_supplied_model_unless_restore_is_false(tmp_p
         viewer.close()
     with gpu.DirectPtycho.open(str(source), aberrations={**START, "C10_nm": 7}, **calibration) as direct:
         capsys.readouterr()
-        viewer = ShowPtycho(direct, save_dir=tmp_path)
+        viewer = ShowPtycho(direct, calibration=tmp_path / "calibration.json")
         assert viewer.fitted_C10_nm == 3 and viewer.calibration_status == "Restored saved full-field fit"
         assert direct.known_aberrations == START
         printed = capsys.readouterr().out.strip().splitlines()
         assert len(printed) == 1 and printed[0].startswith("ShowPtycho: restored calibration.json saved ")
         assert re.search(r"\(C10 3\.00 nm, C12 1\.00 nm, phi12 11\.5°, rotation [0-9.]+°\), "
                          r"replacing the session's C10 7\.00 nm, C12 1\.00 nm", printed[0])
-        assert printed[0].endswith("Pass restore=False to keep the session's values.")
         viewer.close()
     with gpu.DirectPtycho.open(str(source), aberrations={**START, "C10_nm": 7}, **calibration) as direct:
-        viewer = ShowPtycho(direct, save_dir=tmp_path, restore=False)
+        viewer = ShowPtycho(direct, save_dir=tmp_path)
         assert viewer.fitted_C10_nm == 7 and viewer.calibration_status == ""
         viewer.close()
 
@@ -1820,11 +1819,8 @@ def test_full_field_launch_does_not_reinterpret_a_crop_or_unidentified_save(tmp_
         saved.pop("session_identity")
     path.write_text(json.dumps(saved))
     with gpu.DirectPtycho.open(str(source), **calibration) as direct:
-        viewer = ShowPtycho(direct, save_dir=tmp_path)
-        assert "Saved fit not restored" in viewer.calibration_status
-        assert viewer.scan_rows == viewer.scan_cols == SCAN
-        assert viewer.fitted_C10_nm == 0
-        viewer.close()
+        with pytest.raises(ValueError, match="Cannot apply calibration"):
+            ShowPtycho(direct, calibration=path)
 
 
 def test_calibration_snapshot_selects_current_joint_region_independently(direct, tmp_path):
@@ -1913,7 +1909,7 @@ def test_auto_caps_output_and_preserves_saved_joint_fit(tmp_path):
     saved["upsample"] = 8  # A previous version saved Auto at 8×.
     path.write_text(json.dumps(saved))
     viewer.close()
-    restored = ShowPtycho(coarse, save_dir=tmp_path)
+    restored = ShowPtycho(coarse, calibration=tmp_path / "calibration.json")
     assert "Restored saved" in restored.calibration_status
     assert restored._output_factor == 4 and restored.fitted_C10_nm == START["C10_nm"]
     restored.close()
@@ -1921,7 +1917,7 @@ def test_auto_caps_output_and_preserves_saved_joint_fit(tmp_path):
     assert _shown(explicit).shape == (8 * SCAN, 8 * SCAN)
     explicit.save_calibration()
     explicit.close()
-    restored = ShowPtycho(coarse, save_dir=tmp_path)
+    restored = ShowPtycho(coarse, calibration=tmp_path / "calibration.json")
     assert restored.upsample == 8 and restored._output_factor == 8
     restored.close()
     coarse.close()
@@ -2139,15 +2135,15 @@ def test_nested_region_snapshot_uses_acquisition_bounds(tmp_path):
 def test_regularized_review_uses_direct_solver_and_restores_its_method(tmp_path):
     """Compare methods at one fit, drag strengths, and reopen the saved review."""
     gpu = pytest.importorskip("quantem.gpu")
-    if not torch.cuda.is_available():
-        pytest.skip("Regularized direct reconstruction currently requires CUDA")
+    if not (torch.cuda.is_available() or torch.backends.mps.is_available()):
+        pytest.skip("Regularized direct reconstruction needs CUDA or MPS")
     source = tmp_path / "scan.npy"
     np.save(source, _counts())
     options = dict(voltage_kV=300, semiangle_mrad=20, scan_sampling_A=(0.5, 0.5),
                    detector_sampling_mrad=(5, 5), aberrations=START,
                    scan_detector_rotation_deg=10)
     with gpu.DirectPtycho.open(source, **options) as ptycho:
-        viewer = ShowPtycho(ptycho, method="phase", save_dir=tmp_path, restore=False)
+        viewer = ShowPtycho(ptycho, method="phase", save_dir=tmp_path)
         for index, (method, strength, amplitude) in enumerate([
             ("phase", 0.03, 0.03), ("phase", 0.07, 0.03), ("complex", 0.07, 0.15),
         ], start=1):
@@ -2187,7 +2183,7 @@ def test_regularized_review_uses_direct_solver_and_restores_its_method(tmp_path)
             viewer.export(tmp_path / "unsupported-standalone")
         viewer.close()
     with gpu.DirectPtycho.open(source, **options) as reopened:
-        restored = ShowPtycho(reopened, method="complex", save_dir=tmp_path)
+        restored = ShowPtycho(reopened, method="complex", calibration=tmp_path / "calibration.json", save_dir=tmp_path)
         assert restored.phase_damp == 0.07
         assert restored.amplitude_damp == 0.15
         np.testing.assert_array_equal(_shown(restored), saved_phase)
@@ -2198,8 +2194,8 @@ def test_regularized_review_uses_direct_solver_and_restores_its_method(tmp_path)
 def test_direct_result_calibration_reopens_same_reconstruction(tmp_path, method):
     """A saved result reopens without guessing its method or numerical controls."""
     gpu = pytest.importorskip("quantem.gpu")
-    if not torch.cuda.is_available():
-        pytest.skip("Regularized direct reconstruction currently requires CUDA")
+    if not (torch.cuda.is_available() or torch.backends.mps.is_available()):
+        pytest.skip("Regularized direct reconstruction needs CUDA or MPS")
     source = tmp_path / "scan.npy"
     np.save(source, _counts())
     options = dict(voltage_kV=300, semiangle_mrad=20, scan_sampling_A=(0.5, 0.5),
@@ -2211,10 +2207,10 @@ def test_direct_result_calibration_reopens_same_reconstruction(tmp_path, method)
         recipe["amplitude_damp"] = 0.15
     with gpu.DirectPtycho.open(source, **options) as ptycho:
         result = ptycho.run(aberrations=START, **recipe)
-        expected = result.phase.get()
+        expected = result.phase.get() if ptycho.backend == "cuda" else np.asarray(result.phase)
         result.save_calibration(tmp_path / "calibration.json")
     with gpu.DirectPtycho.open(source, **options) as reopened:
-        restored = ShowPtycho(reopened, save_dir=tmp_path)
+        restored = ShowPtycho(reopened, calibration=tmp_path / "calibration.json", save_dir=tmp_path)
         assert restored.method == method
         assert restored.phase_damp == 0.07
         assert restored.smoothness_inv_A == 0.8
@@ -2236,7 +2232,7 @@ def test_direct_result_calibration_reopens_same_reconstruction(tmp_path, method)
                     read_calibration(path, restored._calibration_identity, restored._scan_region, saved["schema"])
         path.write_text(json.dumps(saved))
         restored.close()
-        overridden = ShowPtycho(reopened, save_dir=tmp_path, phase_damp=0.12,
+        overridden = ShowPtycho(reopened, calibration=tmp_path / "calibration.json", save_dir=tmp_path, phase_damp=0.12,
                                 smoothness_inv_A=0, detector_weighting="uniform")
         assert overridden.method == method and overridden.phase_damp == 0.12
         assert overridden.smoothness_inv_A == 0 and overridden.detector_weighting == "uniform"
@@ -2245,17 +2241,15 @@ def test_direct_result_calibration_reopens_same_reconstruction(tmp_path, method)
         overridden_expected, _ = reopened.preview(START, compute_loss=False, **override_recipe)
         np.testing.assert_array_equal(_shown(overridden), overridden_expected)
         overridden.close()
-        conventional = ShowPtycho(reopened, method="phase_of_mean", save_dir=tmp_path)
-        assert conventional.method == "phase_of_mean"
-        assert "requested reconstruction method differs" in conventional.calibration_status
-        conventional.close()
+        with pytest.raises(ValueError, match="requested reconstruction method differs"):
+            ShowPtycho(reopened, method="phase_of_mean", calibration=tmp_path / "calibration.json", save_dir=tmp_path)
 
 
 def test_restored_direct_review_can_select_regularized_method(tmp_path):
     """A saved direct ptychography estimator is a convention, not an explicit algorithm restriction."""
     gpu = pytest.importorskip("quantem.gpu")
-    if not torch.cuda.is_available():
-        pytest.skip("Regularized direct reconstruction currently requires CUDA")
+    if not (torch.cuda.is_available() or torch.backends.mps.is_available()):
+        pytest.skip("Regularized direct reconstruction needs CUDA or MPS")
     source = tmp_path / "scan.npy"
     np.save(source, _counts())
     with gpu.DirectPtycho.open(
@@ -2265,7 +2259,7 @@ def test_restored_direct_review_can_select_regularized_method(tmp_path):
         original = ShowPtycho(ptycho, save_dir=tmp_path)
         original.save_calibration()
         original.close()
-        restored = ShowPtycho(ptycho, save_dir=tmp_path)
+        restored = ShowPtycho(ptycho, calibration=tmp_path / "calibration.json")
         assert restored.method == "phase_of_mean"
         restored._on_request({
             "id": 1, **START, "method": "phase", "committed": False,
@@ -2285,7 +2279,7 @@ def test_interactive_review_scores_only_when_requested(direct, tmp_path, monkeyp
         return preview(*args, **kwargs)
 
     monkeypatch.setattr(direct, "preview", observed_preview)
-    viewer = ShowPtycho(direct, save_dir=tmp_path, restore=False)
+    viewer = ShowPtycho(direct, save_dir=tmp_path)
     viewer._on_preview_message(viewer, {"type": "direct-preview", "request": {"id": 3, **START, "committed": True}}, [])
     unscored = _shown(viewer).copy()
     assert requests and not any(requests)
@@ -2299,4 +2293,44 @@ def test_interactive_review_scores_only_when_requested(direct, tmp_path, monkeyp
     assert requests[-1] is True
     assert json.loads(viewer.result_json)["loss"] is not None
     np.testing.assert_array_equal(_shown(viewer), unscored)
+    viewer.close()
+
+
+def test_session_save_keeps_reviewed_phase_and_full_probe(tmp_path):
+    gpu = pytest.importorskip("quantem.gpu")
+    if not (torch.cuda.is_available() or torch.backends.mps.is_available()):
+        pytest.skip("Regularized phase needs CUDA or MPS")
+    source = tmp_path / "scan.npy"
+    np.save(source, _counts())
+    with gpu.DirectPtycho.open(
+        source, voltage_kV=300, semiangle_mrad=20, scan_sampling_A=(0.5, 0.5),
+        detector_sampling_mrad=(5, 5), aberrations=START, scan_detector_rotation_deg=10,
+    ) as ptycho:
+        viewer = ptycho.show(method="phase", save_dir=tmp_path / "review")
+        viewer.phase_damp = 0.07
+        folder = tmp_path / "saved"
+        result = ptycho.save(save_dir=folder)
+        settings = json.loads((folder / "calibration.json").read_text())
+        assert settings["reconstruction"]["phase_damp"] == 0.07
+        assert (folder / "calibration_phase.png").is_file()
+        from quantem.gpu.direct_ptycho.results import host_array
+
+        loaded = gpu.DirectPtycho.load(folder)
+        np.testing.assert_array_equal(loaded.object_wave, host_array(result.object_wave))
+        np.testing.assert_allclose(loaded.phase, _shown(viewer), atol=1e-6)
+        np.testing.assert_allclose(loaded.phase_limits, np.percentile(_shown(viewer), [1, 99]), atol=1e-6)
+        np.testing.assert_array_equal(loaded.probe(), host_array(result.probe()))
+        np.testing.assert_array_equal(loaded.probe_sampling_A, result.probe_sampling_A)
+        viewer.close()
+
+
+@pytest.mark.parametrize("mode, controls, collapsed, scale_bar", [
+    ("interactive", True, False, True),
+    ("presentation", True, True, True),
+    ("report", False, False, True),
+    ("minimal", False, False, False),
+])
+def test_showptycho_uses_shared_ui_presets(mode, controls, collapsed, scale_bar):
+    viewer = ShowPtycho(_object_wave(), ui_mode=mode)
+    assert (viewer.show_controls, viewer.controls_collapsed, viewer.show_scale_bar) == (controls, collapsed, scale_bar)
     viewer.close()

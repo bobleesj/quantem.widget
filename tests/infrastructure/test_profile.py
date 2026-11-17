@@ -204,3 +204,17 @@ def test_profile_and_viewer_share_ssh_location(monkeypatch, ssh_var):
     assert info._kernel_location() == "remote"
     monkeypatch.setenv("QW_KERNEL_LOCATION", "local")
     assert info._kernel_location() == "local"
+
+def test_profile_does_not_open_idle_cuda_devices(installation, monkeypatch, capsys):
+    cuda = info.torch.cuda
+    monkeypatch.setattr(cuda, "is_available", lambda: True)
+    monkeypatch.setattr(cuda, "device_count", lambda: 4)
+    monkeypatch.setattr(cuda, "is_initialized", lambda: True)
+    monkeypatch.setattr(cuda, "memory_reserved", lambda index: 10**9 if index == 2 else 0)
+    monkeypatch.setattr(cuda, "memory_allocated", lambda index: 10**8)
+    monkeypatch.setattr(cuda, "get_device_name", lambda index: {2: "active GPU"}[index])
+    monkeypatch.setattr(cuda, "mem_get_info", lambda *args: pytest.fail("profile opened a CUDA context"))
+
+    qw.profile()
+    output = capsys.readouterr().out
+    assert "4 visible" in output and "cuda:2 active GPU" in output

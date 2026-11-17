@@ -51,7 +51,7 @@ def _shown(widget) -> np.ndarray:
 
 @pytest.mark.parametrize("method", ["phase", "phase_of_mean"])
 def test_one_slider_drag_uses_its_window_and_a_release_prepares_the_next(ptycho, tmp_path, method):
-    viewer = ShowPtycho(ptycho, method=method, save_dir=tmp_path, restore=False)
+    viewer = ShowPtycho(ptycho, method=method, save_dir=tmp_path)
     viewer.upsample = 3
     viewer.sample_json = json.dumps({"sample_tilt_mrad": list(SAMPLE["sample_tilt_mrad"]),
                                      "depth_spread_nm": SAMPLE["depth_spread_nm"]})
@@ -79,7 +79,7 @@ def test_one_slider_drag_uses_its_window_and_a_release_prepares_the_next(ptycho,
 
 
 def test_a_rotation_drag_never_touches_the_drag_windows(ptycho, tmp_path, monkeypatch):
-    viewer = ShowPtycho(ptycho, save_dir=tmp_path, restore=False)
+    viewer = ShowPtycho(ptycho, save_dir=tmp_path)
     viewer.upsample = 3
 
     def request(index, rotation, C10_nm=12.0, committed=False):

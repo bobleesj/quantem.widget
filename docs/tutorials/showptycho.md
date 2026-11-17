@@ -207,11 +207,10 @@ viewer
 ```
 
 `ptycho.show()` opens ShowPtycho on the session's current fit and shows its phase
-and FFT. The launch table gives the angle and aberrations from your run. Output
+and FFT. Output
 sampling is chosen from the calibration: 4x here, 0.125 A per pixel. Drag C10,
-C12 and phi12 to see the phase update live. The launch table identifies saved
-values, overrides and estimates. **Save** restores a matching full-field joint fit and regional state
-on restart.
+C12 and phi12 to see the phase update live. Use `ptycho.calibration()` to inspect the source of each value. To reuse a saved full-field fit and its regions, pass
+`calibration="direct-results/calibration.json"` when opening the viewer.
 
 The [H5/QEM handoff notebook](showptycho_to_myptycho.ipynb) initializes independent
 myptycho runs from these regional models. `viewer.calibration(region="Upper")`
@@ -231,8 +230,7 @@ fine detail, so compare against direct ptychography and retain the fitted model.
 # complex_result = ptycho.run(method="complex", phase_damp=0.03,
 #                            amplitude_damp=0.03,
 #                            upsample="auto")
-# viewer = ShowPtycho(ptycho, method="phase", phase_damp=0.03,
-#                    restore=False)
+# viewer = ShowPtycho(ptycho, method="phase", phase_damp=0.03)
 # viewer
 ```
 

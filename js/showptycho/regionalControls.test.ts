@@ -96,8 +96,8 @@ test('a running regional fit disables every aberration and sample slider', async
   act(() => { sampleToggle.parentElement!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
   const locked = sliders();
   // C10, C12 and phi12 (rotation is shared, so hidden) plus tilt row, tilt col and depth spread.
-  expect(locked.map(root => root.querySelector('input')!.getAttribute('aria-label') ?? '').filter(Boolean))
-    .toEqual(['tilt row', 'tilt col', 'depth spread']);
+  expect(locked.map(root => (root.querySelector('input[data-index="1"]') ?? root.querySelector('input'))?.getAttribute('aria-label')))
+    .toEqual(['C10', 'C12', 'φ₁₂', 'tilt row', 'tilt col', 'depth spread']);
   expect(locked).toHaveLength(6);
   // MUI ignores pointer and keyboard input only through its own disabled prop.
   expect(locked.every(root => root.classList.contains('Mui-disabled'))).toBe(true);

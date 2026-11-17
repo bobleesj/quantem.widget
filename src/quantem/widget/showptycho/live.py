@@ -164,35 +164,27 @@ class LivePtycho:
             direct.on_park = self.viewer._let_go_of_the_scan
             note = ""
             try:
-                ptycho = self._restored(ShowPtycho, direct, saved, CALIBRATION_FILENAME)
-                if "Regularized direct reconstruction" in ptycho.calibration_status:
-                    # the saved damped method cannot run on this session (the scan is read in batches on a small
-                    # device): the saved aberrations are shown as the phase of the mean wave, and the status says so
-                    ptycho.close()
-                    ptycho = self._restored(ShowPtycho, direct, {**saved, "reconstruction": {"method": "phase_of_mean"}},
-                                            CALIBRATION_FILENAME)
+                try:
+                    ptycho = ShowPtycho(direct, calibration=path)
+                except ValueError as exc:
+                    if "Regularized direct reconstruction" not in str(exc):
+                        raise
+                    # A streamed scan supports the same fitted optics at native direct reconstruction.
+                    conventional = {**saved, "reconstruction": {"method": "phase_of_mean"}}
+                    with tempfile.TemporaryDirectory() as folder:
+                        fallback = pathlib.Path(folder) / CALIBRATION_FILENAME
+                        fallback.write_text(json.dumps(conventional))
+                        ptycho = ShowPtycho(direct, calibration=fallback)
                     note = f" · shown as phase of mean (saved as {saved['reconstruction']['method']}; no room for it here)"
             except BaseException:
                 direct.close()
-                raise
-            if not ptycho.calibration_status.startswith("Restored"):
-                reason = ptycho.calibration_status
-                self._close(ptycho, direct)
                 self.status.value = f"<b>Direct ptycho</b> · {name} · {path.name} not loaded"
-                raise ValueError(f"{path.name}: {reason}")
+                raise
             region = saved.get("fit_region")
             # the regions the file kept, without their phases: listed in the next save, drawn once fitted again
             self.fits = [{**kept, "scan_region": tuple(kept["scan_region"]), "phase": None} for kept in saved.get("fits", [])]
             self._show(ptycho, direct, scan, region, f"<b>Direct ptycho</b> · {name} · loaded {path.name}{note}", keep_display=False)
         return path
-
-    @staticmethod
-    def _restored(ShowPtycho, direct, saved: dict, filename: str):
-        """A ShowPtycho on ``direct`` with the record ``saved`` restored: ShowPtycho restores the calibration file
-        of its save folder, so the record is written under that name in a folder of its own."""
-        with tempfile.TemporaryDirectory() as folder:
-            (pathlib.Path(folder) / filename).write_text(json.dumps(saved))
-            return ShowPtycho(direct, save_dir=folder, restore=True)
 
     def change_fit(self, action: str, scan_region) -> None:
         """Star (``"star"``, a toggle) or drop (``"delete"``) the kept fit of ``scan_region``; the shown fit stays."""
@@ -292,17 +284,17 @@ class LivePtycho:
         still does not fit, the phase is shown at the scan's own sampling and the note says so.
         """
         try:
-            return ShowPtycho(direct, restore=False), ""
+            return ShowPtycho(direct), ""
         except MemoryError:
             self._release_shown(f"<b>Direct ptycho</b> · {name} · fitting…")
             gc.collect()
             gpu_adapter.gpu_release_cached_memory()
         try:
-            return ShowPtycho(direct, restore=False), ""
+            return ShowPtycho(direct), ""
         except MemoryError:
             gc.collect()
             gpu_adapter.gpu_release_cached_memory()
-        return (ShowPtycho(direct, restore=False, upsample=1),
+        return (ShowPtycho(direct, upsample=1),
                 " · shown at the scan's own sampling: no room on this GPU for the upsampled phase")
 
     def _show(self, ptycho, direct, path, region, status: str, *, keep_display: bool) -> None:
@@ -313,7 +305,7 @@ class LivePtycho:
         """
         ptycho._live = self
         # the viewer's panel size, controls beside the image: both fit one screen
-        ptycho.panel_px, ptycho.controls_beside = 450, True
+        ptycho.panel_px = 450
         # the box drawn on the phase: where the aberrations were fitted, dragged to fit elsewhere
         ptycho.fit_region = list(region or ())  # a scan fitted whole has no box to move
         previous = self.ptycho, self._direct

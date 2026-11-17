@@ -235,10 +235,8 @@ type ThumbSize = "S" | "M" | "L";
 const THUMB_SIZE_PX: Record<ThumbSize, number> = { S: 44, M: 72, L: 120 };
 const PANEL_GAP = 0;
 const ACTION_CONTROL_HEIGHT = 26;
-const ABERRATION_SLIDER_WIDTH = 144;
 // Overview slider requests the kernel may hold at once: two keep it computing while a phase is in transit.
 const PREVIEW_REQUESTS_IN_FLIGHT = 2;
-const ROTATION_SLIDER_WIDTH = 170;
 
 // Semantic status colors, used only for loss delta (better/worse) and the play
 // indicator (active sweep).  Kept as constants so there's one place to retune.
@@ -607,13 +605,13 @@ function DampingSlider({ name, value, onDrag, onCommit }: {
   const [dragged, setDragged] = React.useState<number | null>(null);
   const shown = dragged ?? value;
   return (
-    <Box sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 230 }}>
+    <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, maxWidth: "100%", flexWrap: "wrap" }}>
       <Typography sx={{ ...typography.label, whiteSpace: "nowrap" }}>{name} damping {formatNumber(shown, 4)}</Typography>
       <Slider size="small" aria-label={`${name} damping`}
         min={-4} max={0} step={0.01} value={Math.log10(Math.max(1e-4, shown))}
         onChange={(_, next) => { const strength = 10 ** (next as number); setDragged(strength); onDrag(strength); }}
         onChangeCommitted={(_, next) => { setDragged(null); onCommit(10 ** (next as number)); }}
-        sx={{ minWidth: 90, width: 130 }} />
+        sx={{ width: 88, mx: 0.5 }} />
     </Box>
   );
 }
@@ -651,7 +649,7 @@ function AberrationSlider({
   return (
     <>
       <Tooltip title={tip} placement="top" arrow>
-        <Typography sx={{ ...typography.labelSmall, color: tc.textMuted, mb: -0.5, cursor: "help" }}>
+        <Typography sx={{ ...typography.labelSmall, color: tc.textMuted, cursor: "help" }}>
           {label} <b>{shown.toFixed(displayPrec)}</b> {unit}
           {!isAtFull && (
             <span style={{ color: isActiveSweep ? tc.accent : tc.textMuted, opacity: 0.65 }}>
@@ -667,6 +665,7 @@ function AberrationSlider({
         min={min} max={max} step={step}
         disabled={disabled}
         disableSwap
+        getAriaLabel={index => index === 1 ? label : `${label} sweep ${index === 0 ? "minimum" : "maximum"}`}
         onChange={(_, next, activeThumb) => {
           const thumbs = next as number[];
           if (activeThumb === 1) {
@@ -683,7 +682,7 @@ function AberrationSlider({
         }}
         size="small"
         sx={{
-          py: 0.5,
+          display: "block", width: "calc(100% - 12px)", mx: "6px", py: 1,
           "& .MuiSlider-thumb[data-index='0']": { width: 8, height: 8, bgcolor: tc.textMuted, opacity: isActiveSweep ? 1 : 0.7 },
           "& .MuiSlider-thumb[data-index='1']": { width: 12, height: 12 },
           "& .MuiSlider-thumb[data-index='2']": { width: 8, height: 8, bgcolor: tc.textMuted, opacity: isActiveSweep ? 1 : 0.7 },
@@ -704,7 +703,7 @@ const readRawPanelData = (raw: RawPanelData) => (typeof raw === "function" ? raw
 
 function ImagePanel({
   offscreen, label, size, tc, zoom, onZoomChange,
-  showResize, onResizeStart,
+  showResize, showScaleBar = true, showPanelTitle = true, onResizeStart,
   pixelSize, realSpacePixelSize, imageWidth, isFFT, resetZoom = ZOOM_RESET,
   rawData, smooth, inset, cropRegion, cropSelecting, onCropChange, fitRegion, onFitRegionMove, onFitRegionDrop,
 }: {
@@ -715,7 +714,7 @@ function ImagePanel({
   tc: ThemeColors;
   zoom: ZoomState;
   onZoomChange: (z: ZoomState) => void;
-  showResize?: boolean;
+  showResize?: boolean; showScaleBar?: boolean; showPanelTitle?: boolean;
   onResizeStart?: (e: React.PointerEvent) => void;
   pixelSize?: number;
   realSpacePixelSize?: number;
@@ -1016,9 +1015,9 @@ function ImagePanel({
         />
         <canvas ref={gpuCanvasRef} aria-hidden
           style={{ position: "absolute", top: 0, left: 0, width: size, height: size, pointerEvents: "none", visibility: "hidden" }} />
-        <Typography sx={{ position: "absolute", top: 4, left: 5, px: 0.5,
+        {showPanelTitle && <Typography sx={{ position: "absolute", top: 4, left: 5, px: 0.5,
           fontSize: 10, fontFamily: "monospace", color: "#fff",
-          bgcolor: "rgba(0,0,0,0.5)", pointerEvents: "none" }}>{label}</Typography>
+          bgcolor: "rgba(0,0,0,0.5)", pointerEvents: "none" }}>{label}</Typography>}
         {fitOverlay && !cropOverlay && (
           <Box data-showptycho-fit-region onMouseDown={startFitRegionDrag}
             title="The aberrations are fitted on this region. Drag it to fit somewhere else."
@@ -1054,7 +1053,7 @@ function ImagePanel({
           </Box>
         )}
         {/* Scale bar overlay */}
-        {pixelSize != null && pixelSize > 0 && (
+        {showScaleBar && pixelSize != null && pixelSize > 0 && (
           <canvas
             ref={overlayRef}
             style={{
@@ -1406,7 +1405,7 @@ function SamplePanel({
           {open ? "▾" : "▸"} Sample tilt
         </Typography>
         {active && (
-          <Box sx={{ fontSize: 10, px: 0.8, py: 0.1, borderRadius: 0, bgcolor: STATUS_GOOD, color: "#fff", fontFamily: "monospace" }}>
+          <Box sx={{ ...typography.value, color: tc.textMuted }}>
             ({values.tiltRowMrad.toFixed(1)}, {values.tiltColMrad.toFixed(1)}) mrad · {values.depthSpreadNm.toFixed(1)} nm
           </Box>
         )}
@@ -1423,13 +1422,13 @@ function SamplePanel({
         </Tooltip>
       </Box>
       {open && (
-        <Box sx={{ px: 1, py: 0.5, minWidth: 420 }}>
+        <Box sx={{ px: 1, py: 0.5, width: 286, maxWidth: "100%", boxSizing: "border-box" }}>
           {sliders.map(slider => (
             <Box key={slider.key} sx={{ display: "flex", alignItems: "center", gap: `${SPACING.SM}px`, py: 0.25 }}>
               <Tooltip title={slider.tip} placement="right" arrow>
                 <Typography sx={{ ...typography.value, color: active ? tc.accent : tc.textMuted, minWidth: 64 }}>{slider.label}</Typography>
               </Tooltip>
-              <Box sx={{ flex: 1, maxWidth: 200, minWidth: 120 }}>
+              <Box sx={{ flex: 1, minWidth: 36 }}>
                 <Slider
                   aria-label={slider.label} disabled={disabled}
                   value={values[slider.key]} min={slider.min} max={slider.max} step={slider.step}
@@ -1537,7 +1536,7 @@ function HigherOrderPanel({
           </Typography>
         </Tooltip>
         {/* Cap slider width so rows stay compact in the two-column panel. */}
-        <Box sx={{ flex: 1, maxWidth: 140, minWidth: 80 }}>
+        <Box sx={{ flex: 1, maxWidth: 140, minWidth: 36 }}>
           <Slider
             disabled={disabled}
             value={mag} min={-entry.mag_max} max={entry.mag_max} step={entry.step_nm}
@@ -1564,7 +1563,7 @@ function HigherOrderPanel({
         </IconButton>
         {entry.hasAngle && (
           <>
-            <Box sx={{ flex: 1, maxWidth: 110, minWidth: 60 }}>
+            <Box sx={{ flex: 1, maxWidth: 110, minWidth: 36 }}>
               <Slider
                 value={angle} min={-180} max={180} step={1}
                 aria-label={`${entry.name} angle`}
@@ -1604,15 +1603,14 @@ function HigherOrderPanel({
     <Box sx={{
       display: "inline-flex",
       flexDirection: "column",
-      width: open ? "max-content" : "fit-content",
-      maxWidth: open ? "none" : "100%",
+      width: open ? 780 : "fit-content", maxWidth: "100%", boxSizing: "border-box",
       border: `1px solid ${tc.border}`,
       bgcolor: tc.controlBg,
     }}>
       {/* Header row: click to expand/collapse, shows badge when active. */}
       <Box
         sx={{
-          display: "inline-flex", alignItems: "center", flexWrap: "wrap", rowGap: 0, gap: `${SPACING.MD}px`,
+          display: "inline-flex", alignItems: "center", flexWrap: "wrap", rowGap: 0, columnGap: `${SPACING.SM}px`,
           px: 1, py: 0.5, cursor: "pointer", userSelect: "none",
           borderBottom: open ? `1px solid ${tc.border}` : "none",
         }}
@@ -1626,8 +1624,7 @@ function HigherOrderPanel({
         {activeCount > 0 && !/^not measured/.test(note) && (
           <Tooltip title={`${activeCount} higher-order magnitude(s) non-zero. Reconstruction uses all 14 coefficients. Automatic fitting initializes with 200 trials, then jointly refines through fifth order with tilt and depth.`} placement="top" arrow>
             <Box sx={{
-              fontSize: 10, px: 0.8, py: 0.1, borderRadius: 0,
-              bgcolor: STATUS_GOOD, color: "#fff", fontFamily: "monospace", cursor: "help",
+              ...typography.value, color: tc.textMuted, cursor: "help",
             }}>
               {activeCount} active
             </Box>
@@ -1649,19 +1646,18 @@ function HigherOrderPanel({
       </Box>
 
       {open && (
-        <Box sx={{ px: 1, py: 0.5, overflowX: "auto", maxWidth: "calc(100vw - 32px)" }}>
+        <Box sx={{ px: 1, py: 0.5, overflowX: "auto", minWidth: 0 }}>
           <Box
             sx={{
               display: "grid",
-              gridTemplateColumns: "repeat(2, max-content)",
-              columnGap: `${SPACING.LG}px`,
+              gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 350px), 1fr))",
+              columnGap: `${SPACING.SM}px`,
               rowGap: `${SPACING.SM}px`,
               alignItems: "start",
-              width: "fit-content",
             }}
           >
             {orderColumns.map((orders) => (
-              <Box key={orders.join("-")} sx={{ minWidth: 420 }}>
+              <Box key={orders.join("-")} sx={{ minWidth: 0 }}>
                 {orders.map((order, idx) => (
                   <Box key={order} sx={{ mb: 0.5 }}>
                     <Typography sx={{
@@ -2122,7 +2118,13 @@ function Explore() {
   // a live panel (ShowPtycho.live) opens at a fixed image size with its controls beside the image, so the viewer
   // above it and this panel fit one screen; the controls drop below the image when the window is narrow
   const [panelPx] = useModelState<number>("panel_px");
-  const [controlsBeside] = useModelState<boolean>("controls_beside");
+  const controlsBeside = tuning && !localTiltEnabled && !!model.get("ui_mode");
+  const [showScaleBar] = useModelState<boolean>("show_scale_bar");
+  const [showPanelTitle] = useModelState<boolean>("show_panel_titles");
+  const [showControls] = useModelState<boolean>("show_controls");
+  const [controlsCollapsed] = useModelState<boolean>("controls_collapsed");
+  const [showResize] = useModelState<boolean>("show_resize_handles");
+  const [expanded, setExpanded] = React.useState(false);
   React.useEffect(() => { if (controlsBeside) setFFTPlacement("inset"); }, [controlsBeside]);
   React.useEffect(() => { if (panelPx > 0) setPanel(panelPx); }, [panelPx]);
   const shownPanelRef = React.useRef(DEFAULT_PANEL);
@@ -2458,7 +2460,7 @@ function Explore() {
 
   const [defocusRevision] = useModelState<number>("defocus_preview_revision");
   const defocusCache = React.useRef<DefocusPreview | null>(null);
-  const preparing = React.useRef<{token: string; key: string; started: number; solveSeconds: number} | null>(null);
+  const preparing = React.useRef<{token: string; key: string; started: number; solveSeconds: number; readySeconds: number} | null>(null);
   const previewPainted = React.useRef(false);
   const expectedDefocus = React.useRef<number | null>(null);
   const [defocusStatus, setDefocusStatus] = React.useState("");
@@ -2468,6 +2470,7 @@ function Explore() {
   const [kernelLocation] = useModelState<string>("kernel_location");
   const autoPreparedRevision = React.useRef(0);
   const canPreviewDefocus = kernelLocation === "remote" && tuning && defocusRevision > 0 && !webgpuStandalone && !localTiltEnabled && methodModel === "phase" && !showFFT;
+  const acceptDefocusSeed = React.useRef<() => void>(() => {});
   const prepareDefocus = () => {
     if (!currentGPUDevice() || preparing.current || inflightDragRef.current) return;
     // The initial exact frame can arrive before WebGPU finishes initializing.
@@ -2477,13 +2480,20 @@ function Explore() {
     autoPreparedRevision.current = defocusRevision;
     const accepted = JSON.parse(model.get("result_json") || "{}");
     const job = {token: crypto.randomUUID(), key: requestKey(0, accepted.C12_nm, accepted.phi12_deg),
-      started: performance.now(), solveSeconds: 0};
+      started: performance.now(), solveSeconds: 0, readySeconds: 0};
     preparing.current = job;
     defocusCache.current?.destroy();
     defocusCache.current = null;
     setDefocusTiming("");
     setDefocusStatus("Preparing defocus preview");
-    model.send({type: "defocus-planes", token: job.token, index: 0, revision: defocusRevision});
+    const seed = model.get("defocus_seed");
+    if (seed?.revision === defocusRevision && (seed.pending || seed.planes || seed.error)) {
+      acceptDefocusSeed.current();
+      return;
+    }
+    const first = Math.floor(c10Min) - 1;
+    const index = Math.max(1, Math.min(Math.floor(accepted.C10_nm) - first, defocusCount - 3));
+    model.send({type: "defocus-planes", token: job.token, index, length: 2, revision: defocusRevision});
   };
   React.useEffect(() => {
     setDefocusStatus("");
@@ -2498,20 +2508,27 @@ function Explore() {
         let cache = defocusCache.current;
         if (!cache) cache = defocusCache.current = new DefocusPreview(device, msg.first, msg.count,
           model.get("phase_width") * model.get("phase_height"), defocusRevision, job.key);
-        if (cache.loaded !== msg.index || !buffers.length) throw new Error("Incomplete defocus preview.");
-        for (const buffer of buffers) cache.add(buffer);
+        if (!buffers.length) throw new Error("Incomplete defocus preview.");
+        buffers.forEach((buffer, offset) => cache.add(msg.index + offset, buffer));
         job.solveSeconds += msg.solve_seconds;
+        if (!job.readySeconds) {
+          await device.queue.onSubmittedWorkDone();
+          if (preparing.current !== job) return;
+          job.readySeconds = (performance.now() - job.started) / 1000;
+          setDefocusStatus("Defocus preview ready");
+        }
+        const ready = `Near fitted defocus ready in ${job.readySeconds.toFixed(1)} s`;
         if (cache.loaded === cache.count) {
           await device.queue.onSubmittedWorkDone();
           if (preparing.current !== job) return;
           const elapsed = (performance.now() - job.started) / 1000;
-          setDefocusTiming(`${cache.count} full-field solves in ${job.solveSeconds.toFixed(2)} s · ${elapsed.toFixed(1)} s total to browser GPU`);
+          setDefocusTiming(`${ready} · ${cache.count} full-field solves in ${job.solveSeconds.toFixed(2)} s · ${elapsed.toFixed(1)} s total to browser GPU`);
           preparing.current = null;
           setDefocusStatus("Defocus preview ready");
         } else {
-          setDefocusTiming(`${cache.loaded}/${cache.count} full-field solves · ${job.solveSeconds.toFixed(2)} s computing`);
-          setDefocusStatus("Preparing defocus preview");
-          model.send({type: "defocus-planes", token: job.token, index: cache.loaded, revision: defocusRevision});
+          setDefocusTiming(`${ready} · preparing wider range (${cache.loaded}/${cache.count})`);
+          const target = expectedDefocus.current ?? JSON.parse(model.get("result_json")).C10_nm;
+          model.send({type: "defocus-planes", token: job.token, ...cache.nextBatch(target), revision: defocusRevision});
         }
       } catch (error) {
         if (preparing.current !== job) return;
@@ -2521,8 +2538,17 @@ function Explore() {
         setDefocusStatus(error instanceof Error ? error.message : String(error));
       }
     };
+    const acceptSeed = () => {
+      const seed = model.get("defocus_seed"), job = preparing.current;
+      if (!job || seed?.revision !== defocusRevision || (!seed.planes && !seed.error) || defocusCache.current) return;
+      void receive({...seed, token: job.token}, seed.planes ?? []);
+      model.send({type: "defocus-seed-consumed", revision: defocusRevision});
+    };
+    acceptDefocusSeed.current = acceptSeed;
+    model.on("change:defocus_seed", acceptSeed);
     model.on("msg:custom", receive);
     return () => {
+      model.off("change:defocus_seed", acceptSeed);
       model.off("msg:custom", receive); preparing.current = null;
       defocusCache.current?.destroy(); defocusCache.current = null;
     };
@@ -2574,8 +2600,7 @@ function Explore() {
     if (defocusDrag && currentGPUDevice() && cache && cache.revision === model.get("defocus_preview_revision")
       && !regionContextRef.current && !showFFTRef.current && viewPinRef.current === null
       && cache.key === requestKey(0, c12Val, phi12Val) && canvas && gpuPanelSources.has(canvas)
-      && slot && cache.pixels === slot.count && cache.loaded === cache.count
-      && c10Val >= cache.start + 1 && c10Val <= cache.start + cache.count - 2) {
+      && slot && cache.pixels === slot.count && cache.covers(c10Val)) {
       expectedDefocus.current = c10Val;
       if (gpuFrameBusyRef.current) return;  // the previous exact image is still painting
       cache.draw(c10Val, model.get("display_negate_phase") ? -1 : 1, slot.dataBuffer);
@@ -2929,7 +2954,7 @@ function Explore() {
         if (keys.includes("rot")) setRotationDeg(nextRot);
         sendDrag(nextC10, nextC12, nextPhi12, nextRot);
       } else if (sweepParam === "c10") {
-        setC10(value); sendDrag(value, sliderVals.current.c12, sliderVals.current.phi12, rotationDegRef.current, true);
+        setC10(value); sendDrag(value, sliderVals.current.c12, sliderVals.current.phi12);
       } else if (sweepParam === "c12") {
         setC12(value); sendDrag(sliderVals.current.c10, value, sliderVals.current.phi12);
       } else if (sweepParam === "phi12") {
@@ -4203,8 +4228,10 @@ function Explore() {
         alignItems="center"
         spacing={`${SPACING.SM}px`}
         sx={{
+          display: showControls === false ? "none" : "flex",
           mb: `${SPACING.XS}px`, minHeight: 28, height: "auto", width: "100%",
           flexWrap: "wrap", rowGap: `${SPACING.XS}px`,
+          position: "relative", boxSizing: "border-box", paddingRight: "7ch",
         }}
       >
         {shownFitRegion && (
@@ -4418,7 +4445,7 @@ function Explore() {
         </Popover>
         {canPreviewDefocus &&
           <Button size="small" sx={compactButton(tc)} disabled={!gpuCmapRef.current || busy || !!preparing.current || (!!defocusCache.current && defocusCache.current.loaded === defocusCache.current.count)}
-            onClick={prepareDefocus} title="Cache full-field phase samples on the browser GPU at 1 nm defocus intervals. Contrast is held during the drag. Release recomputes the exact phase.">
+            onClick={prepareDefocus} title="Cache full-field phase samples on the browser GPU at 1 nm defocus intervals. Dragging uses linear phase interpolation until neighboring planes arrive for cubic interpolation. Release recomputes the exact phase.">
             {defocusStatus || "Prepare defocus preview"}
           </Button>}
         <Button
@@ -4432,13 +4459,18 @@ function Explore() {
         >
           Reset
         </Button>
+        <Box sx={{ position: "absolute", right: 0, top: 0, height: 28, display: "flex", alignItems: "center" }}>
+          <RenderPathBadge colors={tc} />
+        </Box>
       </Stack>
 
       {canPreviewDefocus && <Typography component="div" sx={{ ...typography.value, color: tc.textMuted }}
         title="Solve time includes reconstruction and GPU-to-host readback. Total time also includes packing, transfer, and upload to the browser GPU.">
-        {defocusTiming || `Preview setup · ${defocusCount} full-field solves at 1 nm intervals · ${defocusMiB.toFixed(1)} MiB`}
+        {defocusTiming || `Preview setup · 2 nearby planes first · full range ${defocusMiB.toFixed(1)} MiB`}
       </Typography>}
-      {localTilt?.toolbar}
+      {showControls !== false && controlsCollapsed &&
+        <Button size="small" onClick={() => setExpanded(!expanded)}>{expanded ? "Hide controls" : "Show controls"}</Button>}
+      {showControls !== false && localTilt?.toolbar}
 
       <Box data-showptycho-body sx={controlsBeside
         ? { display: "flex", flexWrap: "wrap", alignItems: "flex-start", gap: `${SPACING.SM}px`, maxWidth: "100%" }
@@ -4449,7 +4481,7 @@ function Explore() {
         <ImagePanel
           offscreen={phaseOff} label={localTiltEnabled ? "Overview" : "Phase"} size={shownPanel} tc={tc}
           zoom={phaseZoom} onZoomChange={setPhaseZoom}
-          showResize onResizeStart={startResize}
+          showResize={showResize !== false} showScaleBar={showScaleBar !== false} showPanelTitle={showPanelTitle !== false} onResizeStart={startResize}
           pixelSize={pixelSize} imageWidth={rawPhaseRef.current?.w}
           rawData={phaseFrameData}
           smooth={smooth}
@@ -4478,7 +4510,7 @@ function Explore() {
           <ImagePanel
             offscreen={ampOff} label="Amplitude" size={shownPanel} tc={tc}
             zoom={ampZoom} onZoomChange={setAmpZoom}
-            showResize onResizeStart={startResize}
+            showResize={showResize !== false} showScaleBar={showScaleBar !== false} showPanelTitle={showPanelTitle !== false} onResizeStart={startResize}
             pixelSize={pixelSize} imageWidth={rawPhaseRef.current?.w}
             rawData={ampFrameData}
             smooth={smooth}
@@ -4488,7 +4520,7 @@ function Explore() {
           <ImagePanel
             offscreen={complexOff} label="Complex" size={shownPanel} tc={tc}
             zoom={complexZoom} onZoomChange={setComplexZoom}
-            showResize onResizeStart={startResize}
+            showResize={showResize !== false} showScaleBar={showScaleBar !== false} showPanelTitle={showPanelTitle !== false} onResizeStart={startResize}
             pixelSize={pixelSize} imageWidth={rawPhaseRef.current?.w}
             rawData={ampDataRef.current?.data}
             smooth={smooth}
@@ -4499,7 +4531,7 @@ function Explore() {
             offscreen={fftOff} label="FFT" size={shownPanel} tc={tc}
             zoom={fftView} resetZoom={fftReset}
             onZoomChange={view => setFFTZoom({ ...view, zoom: view.zoom / fftAutoZoom })}
-            showResize onResizeStart={startResize}
+            showResize={showResize !== false} showScaleBar={showScaleBar !== false} showPanelTitle={showPanelTitle !== false} onResizeStart={startResize}
             pixelSize={fftPixelSize} realSpacePixelSize={fftRealPixelSize}
             imageWidth={fftMagRef.current?.w} isFFT
             rawData={fftFrameData}
@@ -4510,27 +4542,43 @@ function Explore() {
 
       {/* ---- Controls ---- */}
       <Box component="fieldset" disabled={controlsLocked}
-        sx={{ border:0, p:0, minWidth:0, maxWidth: "100%", display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`,
-          ...(controlsBeside ? { flex: "0 1 520px", m: 0 } : { width: totalW, mt: `${SPACING.XS}px` }) }}>
+        sx={{ border:0, p:0, minWidth:0, maxWidth: "100%", display: showControls === false || (controlsCollapsed && !expanded) ? "none" : "flex", flexDirection: "column", gap: `${SPACING.XS}px`,
+          ...(controlsBeside ? { flex: "1 1 300px", m: 0 } : { width: totalW, mt: `${SPACING.XS}px` }) }}>
         {localTiltEnabled && <Typography sx={typography.label}>
           Controls · {regionalMode ? (activeFit?.label || 'Selected region') : 'Overview'}
           {regionalMode && !regionalReady ? ' · refit this region to edit' : ''}
           {previewError && <Box component="span" role="alert" sx={{ color: "#ef4444" }}> · {previewError}</Box>}
         </Typography>}
 
-        {tuning && <Box sx={controlBand(tc)}>
-          <Typography sx={typography.label}>Reconstruction</Typography>
-          <Select size="small" value={reconstructionControls.method}
-            inputProps={{ "aria-label": "Reconstruction method" }}
-            onChange={event => changeReconstruction({ method: event.target.value }, true)}
-            sx={{ ...typography.label, height: 28 }}>
-            {/* a live panel offers the two damped reconstructions; Phase of mean only where they cannot run */}
-            {!(controlsBeside && regularizationAvailable) && <MenuItem value="phase_of_mean">Phase of mean</MenuItem>}
-            <MenuItem value="phase" disabled={!regularizationAvailable || webgpuStandalone || !!localTiltJson}>Phase</MenuItem>
-            <MenuItem value="complex" disabled={!regularizationAvailable || webgpuStandalone || !!localTiltJson}>{controlsBeside ? "Complex" : "Amplitude + phase"}</MenuItem>
-          </Select>
+        {tuning && <Box sx={{ ...controlBand(tc), columnGap: 1, rowGap: 0.25 }}>
+          <Box sx={{ display: "contents" }}>
+            <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.75 }}>
+              <Typography sx={typography.label}>Reconstruction</Typography>
+              <Select size="small" value={reconstructionControls.method}
+                inputProps={{ "aria-label": "Reconstruction method" }}
+                onChange={event => changeReconstruction({ method: event.target.value }, true)}
+                sx={{ ...typography.label, height: 28 }}>
+                {/* a live panel offers the two damped reconstructions; Phase of mean only where they cannot run */}
+                {!(controlsBeside && regularizationAvailable) && <MenuItem value="phase_of_mean">Phase of mean</MenuItem>}
+                <MenuItem value="phase" disabled={!regularizationAvailable || webgpuStandalone || !!localTiltJson}>Phase</MenuItem>
+                <MenuItem value="complex" disabled={!regularizationAvailable || webgpuStandalone || !!localTiltJson}>{controlsBeside ? "Complex" : "Amplitude + phase"}</MenuItem>
+              </Select>
+            </Box>
+            {reconstructionControls.method !== "phase_of_mean" && <>
+              {(["phase_damp", ...(reconstructionControls.method === "complex" ? ["amplitude_damp"] : [])] as const).map(key => {
+                const name = key as "phase_damp" | "amplitude_damp";
+                const value = reconstructionControls[name];
+                return <DampingSlider key={name} name={name === "phase_damp" ? "Phase" : "Amplitude"} value={value}
+                  onDrag={next => changeReconstruction({ [name]: next }, false, false)}
+                  onCommit={next => changeReconstruction({ [name]: next }, true)} />;
+              })}
+            </>}
+          </Box>
+          <Box sx={{ display: "contents" }}>
+            <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.75 }}>
               <Typography sx={{ ...typography.label, fontSize: 10 }}>Color</Typography>
               <Select
+                inputProps={{ "aria-label": "Color" }}
                 value={cmap} onChange={(e) => setCmap(e.target.value)}
                 size="small" sx={{ ...themedSelect, minWidth: 78, fontSize: 10 }}
                 MenuProps={themedMenuProps}
@@ -4539,227 +4587,177 @@ function Explore() {
                   <MenuItem key={n} value={n}>{n.charAt(0).toUpperCase() + n.slice(1)}</MenuItem>
                 ))}
               </Select>
-              <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, whiteSpace: "nowrap" }}>
+            </Box>
+            <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, whiteSpace: "nowrap" }}>
               <Typography sx={{ ...typography.label, fontSize: 10 }} title="Auto-contrast: snap histogram clip to 1–99 percentile on every new reconstruction. Dragging the histogram slider flips this OFF.">Auto</Typography>
               <Switch
-                checked={autoContrast}
+                slotProps={{ input: { "aria-label": "Auto contrast" } }} checked={autoContrast}
                 onChange={(e) => { const on = e.target.checked; setAutoContrast(on); if (on) setContrastRange([1, 99]); }}
                 size="small" sx={switchStyles.small}
               />
-              </Box>
-              <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, whiteSpace: "nowrap" }}>
+            </Box>
+            <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, whiteSpace: "nowrap" }}>
               <Typography sx={{ ...typography.label, fontSize: 10 }} title="CSS bilinear interpolation on the phase canvas. Same data, browser softens pixel grid. Useful when upscaling small phase images on a large canvas.">Smooth</Typography>
               <Switch
-                checked={smooth}
+                slotProps={{ input: { "aria-label": "Smooth" } }} checked={smooth}
                 onChange={(_, checked) => setSmooth(checked)}
                 size="small" sx={switchStyles.small}
               />
-              </Box>
-              {/* a live panel has no room for a second image: its FFT is an inset on the phase, dragged where wanted */}
-              {controlsBeside && <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, whiteSpace: "nowrap" }}>
-                <Typography sx={{ ...typography.label, fontSize: 10 }} title="Fourier transform of the phase, drawn as an inset on it; drag the inset to move it.">FFT</Typography>
-                <Switch checked={showFFT} onChange={(_, checked) => { setShowFFT(checked); setInitialFftOn(checked); }}
-                  slotProps={{ input: { "aria-label": "FFT inset" } }} size="small" sx={switchStyles.small} />
-              </Box>}
-          {reconstructionControls.method !== "phase_of_mean" && <>
-            {(["phase_damp", ...(reconstructionControls.method === "complex" ? ["amplitude_damp"] : [])] as const).map(key => {
-              const name = key as "phase_damp" | "amplitude_damp";
-              const value = reconstructionControls[name];
-              return <DampingSlider key={name} name={name === "phase_damp" ? "Phase" : "Amplitude"} value={value}
-                onDrag={next => changeReconstruction({ [name]: next }, false, false)}
-                onCommit={next => changeReconstruction({ [name]: next }, true)} />;
-            })}
-            {!controlsBeside && <Typography sx={typography.labelSmall}>Live CUDA reconstruction · phase image</Typography>}
-          </>}
+            </Box>
+            {/* a live panel has no room for a second image: its FFT is an inset on the phase, dragged where wanted */}
+            {controlsBeside && <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, whiteSpace: "nowrap" }}>
+              <Typography sx={{ ...typography.label, fontSize: 10 }} title="Fourier transform of the phase, drawn as an inset on it; drag the inset to move it.">FFT</Typography>
+              <Switch checked={showFFT} onChange={(_, checked) => { setShowFFT(checked); setInitialFftOn(checked); }}
+                slotProps={{ input: { "aria-label": "FFT inset" } }} size="small" sx={switchStyles.small} />
+            </Box>}
+          </Box>
           {previewError && <Typography role="alert" sx={{ ...typography.label, color: "#ef4444" }}>{previewError}</Typography>}
         </Box>}
 
-        {/* Controls + Histogram row */}
-        <Box sx={{ display: "flex", flexWrap: "wrap", gap: `${SPACING.SM}px`, width: "100%" }}>
-          {/* Left: stats + controls */}
-          <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: "1 1 280px", minWidth: 0, justifyContent: "center" }}>
-            {/* Stats row: each readout gets a hover tooltip so new users know what the numbers mean */}
-            <Box sx={controlBand(tc)}>
-              {tuning && <>
-              <Tooltip title="Defocus in nanometers.  Primary aberration: sets the probe's axial focus point relative to the sample.  Usually the first knob to get right." placement="top" arrow>
-                <Typography sx={{ ...typography.label, ...statChip(tc, Math.abs(c10) > 0), cursor: "help" }}>
-                  C10 <HeldStatValue statKey="c10" value={c10} precision={1} listeners={heldStatListeners} color={tc.accent} /> nm
-                </Typography>
-              </Tooltip>
-              <Tooltip title="2-fold astigmatism magnitude in nanometers.  How asymmetric the probe is.  Paired with φ₁₂ (angle)." placement="top" arrow>
-                <Typography sx={{ ...typography.label, ...statChip(tc, Math.abs(c12) > 0), cursor: "help" }}>
-                  C12 <HeldStatValue statKey="c12" value={c12} precision={1} listeners={heldStatListeners} color={tc.accent} /> nm
-                </Typography>
-              </Tooltip>
-              <Tooltip title="Angle of 2-fold astigmatism in degrees.  Only meaningful when C12 ≠ 0." placement="top" arrow>
-                <Typography sx={{ ...typography.label, ...statChip(tc, Math.abs(phi12) > 0), cursor: "help" }}>
-                  φ₁₂ <HeldStatValue statKey="phi12" value={phi12} precision={1} listeners={heldStatListeners} color={tc.accent} />°
-                </Typography>
-              </Tooltip>
-              {loss != null && !regionalMode && (
-                <Tooltip title={reconstructionControls.method === "phase_of_mean" ? "Phase variance across the corrected bright-field pixel images. Lower values indicate closer agreement between those images, not a guarantee of sharper or more accurate phase. The default fit optimizes model agreement; this is a separate diagnostic." : "Measurement disagreement for the selected direct model. Damping trades data agreement against stability. This value is not an independent resolution measurement."} placement="top" arrow>
-                  <Typography sx={{ ...typography.label, ...statChip(tc, true), cursor: "help" }}>
-                    loss <Box component="span" sx={{ color: tc.accent }}>{formatNumber(loss, 8)}</Box>
-                    {delta != null && (
-                      <Box component="span" sx={{ color: delta < 0 ? STATUS_GOOD : STATUS_BAD, ml: 0.5 }}>
-                        {delta > 0 ? "+" : ""}{delta.toFixed(8)}
-                      </Box>
-                    )}
-                    {hoActive && (
-                      <Box component="span" sx={{ color: STATUS_GOOD, ml: 0.5, fontFamily: "monospace" }}>
-                        ({hoActiveCount} HO)
-                      </Box>
-                    )}
-                  </Typography>
-                </Tooltip>
-              )}
-              </>}
-              {busy && <Box component="span" sx={{ color: tc.accent }}>●</Box>}
-              <RenderPathBadge colors={tc} />
-              {!tuning && !localTiltJson && sessionNote && (
-                <Typography sx={{ ...typography.value, color: tc.textMuted }} data-showptycho-session-note>
-                  {sessionNote}
-                </Typography>
-              )}
-              {runtimeStatusLabel && (
-                <Typography
-                  sx={{
-                    ...typography.value,
-                    ...statChip(tc, !!webgpuDirectRef.current && !/failed|unavailable/i.test(webgpuRuntimeStatus)),
-                    maxWidth: 520,
-                    whiteSpace: "nowrap",
-                    overflow: "visible",
-                  }}
-                  title={webgpuRuntimeStatus}
-                >
-                  {runtimeStatusLabel}
-                </Typography>
-              )}
-              <Box sx={{ flex: 1 }} />
-              {tuning && (
-                <Typography sx={{ ...typography.value, color: tc.textMuted, opacity: 0.7 }}>
-                  auto {autoC10?.toFixed(1)} / {autoC12?.toFixed(1)} / {autoPhi12?.toFixed(0)}°{!regionalMode && fitAgreement != null ? ` · agreement ${formatNumber(fitAgreement, 4)}` : ''}
-                </Typography>
-              )}
-            </Box>
-
-            {webgpuPreviewEnabled && !localSourceGranted && (
-              <Box sx={{ border: `1px solid ${tc.border}`, bgcolor: tc.bgAlt, px: 1, py: 0.75, display: "flex", alignItems: "center", gap: 1 }}>
-                <Typography sx={{ ...typography.value, color: tc.text }}>
-                  {localFolderName
-                    ? `No server needed - click Open data folder, then select the folder "${localFolderName}" (the one this page lives in, usually in Downloads).`
-                    : "No server needed - grant this page access to its own folder to load the data."}
-                </Typography>
-                {localSourceError && (
-                  <Typography sx={{ ...typography.value, color: STATUS_BAD }}>
-                    {localSourceError}
-                  </Typography>
-                )}
-                <Typography sx={{ ...typography.value, color: tc.textMuted, fontSize: 11 }}>
-                  Alternative: serve the folder over HTTP (`python -m http.server`) and open index.html.
-                </Typography>
-                <Button size="small" variant="outlined" onClick={grantLocalDirectory} sx={{ textTransform: "none", fontSize: 12 }} data-showptycho-open-folder>
-                  Open data folder
-                </Button>
-                <input
-                  ref={localDirInputRef}
-                  type="file"
-                  style={{ display: "none" }}
-                  onChange={onLocalDirInput}
-                  {...({ webkitdirectory: "", directory: "", multiple: true } as object)}
-                />
-              </Box>
-            )}
-            {webgpuLoadProgress && (
-              <Box
-                sx={{
-                  border: `1px solid ${loadProgressIsError ? STATUS_BAD : tc.border}`,
-                  bgcolor: loadProgressIsError ? `${STATUS_BAD}18` : tc.bgAlt,
-                  px: 1,
-                  py: 0.75,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 0.5,
-                }}
-                title={webgpuProgressLabel(webgpuLoadProgress)}
-              >
-                <Box sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
-                  <Typography sx={{ ...typography.label, color: loadProgressIsError ? STATUS_BAD : tc.accent, fontWeight: 700, whiteSpace: "nowrap" }}>
-                    {loadProgressIsError ? "WebGPU blocked" : "Loading WebGPU"}
-                  </Typography>
-                  <Typography sx={{ ...typography.value, color: tc.text, minWidth: 0, overflowWrap: "anywhere" }}>
-                    {webgpuLoadProgress.message}
-                  </Typography>
-                  {webgpuLoadProgress.activeBf != null && webgpuLoadProgress.totalBf != null && (
-                    <Typography sx={{ ...typography.value, color: tc.textMuted, whiteSpace: "nowrap" }}>
-                      active BF {webgpuLoadProgress.activeBf}/{webgpuLoadProgress.totalBf}
-                    </Typography>
-                  )}
-                  {webgpuLoadProgress.sourceFrames != null && (
-                    <Typography sx={{ ...typography.value, color: tc.textMuted, whiteSpace: "nowrap" }}>
-                      frames {webgpuLoadProgress.sourceFrames}
-                    </Typography>
-                  )}
-                  {webgpuLoadProgress.elapsedMs != null && (
-                    <Typography sx={{ ...typography.value, color: tc.textMuted, whiteSpace: "nowrap" }}>
-                      {(webgpuLoadProgress.elapsedMs / 1000).toFixed(1)} s
-                    </Typography>
-                  )}
-                </Box>
-                {webgpuLoadProgress.detail && (
-                  <Typography sx={{ ...typography.value, color: tc.textMuted, overflowWrap: "anywhere" }}>
-                    {webgpuLoadProgress.detail}
-                  </Typography>
-                )}
-                <LinearProgress
-                  variant={loadProgressPercent == null || loadProgressIsError ? "indeterminate" : "determinate"}
-                  value={loadProgressPercent ?? 0}
-                  sx={{
-                    height: 4,
-                    bgcolor: tc.controlBg,
-                    "& .MuiLinearProgress-bar": { bgcolor: loadProgressIsError ? STATUS_BAD : tc.accent },
-                  }}
-                />
-              </Box>
-            )}
-
-            {/* Display controls: color/contrast controls stay below the stats; primary
-                real-space view mode lives in the top toolbar next to BF. */}
-          </Box>
-
-          {/* Keep contrast for every visible image together, including an inset FFT. */}
-          <Box sx={{ display: "flex", flexDirection: "row", alignItems: "flex-end", gap: 1, flexShrink: 0, ml: "auto" }}>
-            <Box role="group" aria-label="Phase contrast" sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0.25 }}>
-              <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>
-                Phase
+        <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, minWidth: 0 }}>
+          {/* Stats row: each readout gets a hover tooltip so new users know what the numbers mean */}
+          <Box sx={controlBand(tc)}>
+            {tuning && <>
+            <Tooltip title="Defocus in nanometers.  Primary aberration: sets the probe's axial focus point relative to the sample.  Usually the first knob to get right." placement="top" arrow>
+              <Typography sx={{ ...typography.label, ...statChip(tc, Math.abs(c10) > 0), cursor: "help" }}>
+                C10 <HeldStatValue statKey="c10" value={c10} precision={1} listeners={heldStatListeners} color={tc.accent} /> nm
               </Typography>
-              <Histogram
-                frame={panelFrames[0]}
-                vminPct={contrastRange[0]}
-                vmaxPct={contrastRange[1]}
-                onRangeChange={(lo, hi) => { setContrastRange([lo, hi]); setAutoContrast(false); }}
-                width={110}
-                height={48}
-                tc={tc}
+            </Tooltip>
+            <Tooltip title="2-fold astigmatism magnitude in nanometers.  How asymmetric the probe is.  Paired with φ₁₂ (angle)." placement="top" arrow>
+              <Typography sx={{ ...typography.label, ...statChip(tc, Math.abs(c12) > 0), cursor: "help" }}>
+                C12 <HeldStatValue statKey="c12" value={c12} precision={1} listeners={heldStatListeners} color={tc.accent} /> nm
+              </Typography>
+            </Tooltip>
+            <Tooltip title="Angle of 2-fold astigmatism in degrees.  Only meaningful when C12 ≠ 0." placement="top" arrow>
+              <Typography sx={{ ...typography.label, ...statChip(tc, Math.abs(phi12) > 0), cursor: "help" }}>
+                φ₁₂ <HeldStatValue statKey="phi12" value={phi12} precision={1} listeners={heldStatListeners} color={tc.accent} />°
+              </Typography>
+            </Tooltip>
+            {loss != null && !regionalMode && (
+              <Tooltip title={reconstructionControls.method === "phase_of_mean" ? "Phase variance across the corrected bright-field pixel images. Lower values indicate closer agreement between those images, not a guarantee of sharper or more accurate phase. The default fit optimizes model agreement; this is a separate diagnostic." : "Measurement disagreement for the selected direct model. Damping trades data agreement against stability. This value is not an independent resolution measurement."} placement="top" arrow>
+                <Typography sx={{ ...typography.label, ...statChip(tc, true), cursor: "help" }}>
+                  loss <Box component="span" sx={{ color: tc.accent }}>{formatNumber(loss, 8)}</Box>
+                  {delta != null && (
+                    <Box component="span" sx={{ color: delta < 0 ? STATUS_GOOD : STATUS_BAD, ml: 0.5 }}>
+                      {delta > 0 ? "+" : ""}{delta.toFixed(8)}
+                    </Box>
+                  )}
+                  {hoActive && (
+                    <Box component="span" sx={{ color: STATUS_GOOD, ml: 0.5, fontFamily: "monospace" }}>
+                      ({hoActiveCount} HO)
+                    </Box>
+                  )}
+                </Typography>
+              </Tooltip>
+            )}
+            </>}
+            {busy && <Box component="span" sx={{ color: tc.accent }}>●</Box>}
+            {!tuning && !localTiltJson && sessionNote && (
+              <Typography sx={{ ...typography.value, color: tc.textMuted }} data-showptycho-session-note>
+                {sessionNote}
+              </Typography>
+            )}
+            {runtimeStatusLabel && (
+              <Typography
+                sx={{
+                  ...typography.value,
+                  ...statChip(tc, !!webgpuDirectRef.current && !/failed|unavailable/i.test(webgpuRuntimeStatus)),
+                  maxWidth: 520,
+                  whiteSpace: "nowrap",
+                  overflow: "visible",
+                }}
+                title={webgpuRuntimeStatus}
+              >
+                {runtimeStatusLabel}
+              </Typography>
+            )}
+            <Box sx={{ flex: 1 }} />
+            {tuning && (
+              <Typography sx={{ ...typography.value, color: tc.textMuted, opacity: 0.7 }}>
+                auto {autoC10?.toFixed(1)} / {autoC12?.toFixed(1)} / {autoPhi12?.toFixed(0)}°{!regionalMode && fitAgreement != null ? ` · agreement ${formatNumber(fitAgreement, 4)}` : ''}
+              </Typography>
+            )}
+          </Box>
+
+          {webgpuPreviewEnabled && !localSourceGranted && (
+            <Box sx={{ border: `1px solid ${tc.border}`, bgcolor: tc.bgAlt, px: 1, py: 0.75, display: "flex", alignItems: "center", gap: 1 }}>
+              <Typography sx={{ ...typography.value, color: tc.text }}>
+                {localFolderName
+                  ? `No server needed - click Open data folder, then select the folder "${localFolderName}" (the one this page lives in, usually in Downloads).`
+                  : "No server needed - grant this page access to its own folder to load the data."}
+              </Typography>
+              {localSourceError && (
+                <Typography sx={{ ...typography.value, color: STATUS_BAD }}>
+                  {localSourceError}
+                </Typography>
+              )}
+              <Typography sx={{ ...typography.value, color: tc.textMuted, fontSize: 11 }}>
+                Alternative: serve the folder over HTTP (`python -m http.server`) and open index.html.
+              </Typography>
+              <Button size="small" variant="outlined" onClick={grantLocalDirectory} sx={{ textTransform: "none", fontSize: 12 }} data-showptycho-open-folder>
+                Open data folder
+              </Button>
+              <input
+                ref={localDirInputRef}
+                type="file"
+                style={{ display: "none" }}
+                onChange={onLocalDirInput}
+                {...({ webkitdirectory: "", directory: "", multiple: true } as object)}
               />
             </Box>
-            {showFFT && <Box role="group" aria-label="FFT contrast"
-              sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0.25 }}>
-              <Tooltip title="FFT intensity is log(1 + magnitude). Bar heights use log(1 + pixel count) to reveal smaller peaks. Contrast limits are unchanged; double-click the histogram to reset them.">
-                <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>FFT · log counts</Typography>
-              </Tooltip>
-              <Histogram
-                frame={panelFrames[1]}
-                logCounts
-                vminPct={fftContrastRange[0]}
-                vmaxPct={fftContrastRange[1]}
-                onRangeChange={(lo, hi) => { setFftContrastRange([lo, hi]); setFftAutoContrast(false); }}
-                width={110}
-                height={48}
-                tc={tc}
+          )}
+          {webgpuLoadProgress && (
+            <Box
+              sx={{
+                border: `1px solid ${loadProgressIsError ? STATUS_BAD : tc.border}`,
+                bgcolor: loadProgressIsError ? `${STATUS_BAD}18` : tc.bgAlt,
+                px: 1,
+                py: 0.75,
+                display: "flex",
+                flexDirection: "column",
+                gap: 0.5,
+              }}
+              title={webgpuProgressLabel(webgpuLoadProgress)}
+            >
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
+                <Typography sx={{ ...typography.label, color: loadProgressIsError ? STATUS_BAD : tc.accent, fontWeight: 700, whiteSpace: "nowrap" }}>
+                  {loadProgressIsError ? "WebGPU blocked" : "Loading WebGPU"}
+                </Typography>
+                <Typography sx={{ ...typography.value, color: tc.text, minWidth: 0, overflowWrap: "anywhere" }}>
+                  {webgpuLoadProgress.message}
+                </Typography>
+                {webgpuLoadProgress.activeBf != null && webgpuLoadProgress.totalBf != null && (
+                  <Typography sx={{ ...typography.value, color: tc.textMuted, whiteSpace: "nowrap" }}>
+                    active BF {webgpuLoadProgress.activeBf}/{webgpuLoadProgress.totalBf}
+                  </Typography>
+                )}
+                {webgpuLoadProgress.sourceFrames != null && (
+                  <Typography sx={{ ...typography.value, color: tc.textMuted, whiteSpace: "nowrap" }}>
+                    frames {webgpuLoadProgress.sourceFrames}
+                  </Typography>
+                )}
+                {webgpuLoadProgress.elapsedMs != null && (
+                  <Typography sx={{ ...typography.value, color: tc.textMuted, whiteSpace: "nowrap" }}>
+                    {(webgpuLoadProgress.elapsedMs / 1000).toFixed(1)} s
+                  </Typography>
+                )}
+              </Box>
+              {webgpuLoadProgress.detail && (
+                <Typography sx={{ ...typography.value, color: tc.textMuted, overflowWrap: "anywhere" }}>
+                  {webgpuLoadProgress.detail}
+                </Typography>
+              )}
+              <LinearProgress
+                variant={loadProgressPercent == null || loadProgressIsError ? "indeterminate" : "determinate"}
+                value={loadProgressPercent ?? 0}
+                sx={{
+                  height: 4,
+                  bgcolor: tc.controlBg,
+                  "& .MuiLinearProgress-bar": { bgcolor: loadProgressIsError ? STATUS_BAD : tc.accent },
+                }}
               />
-            </Box>}
-          </Box>
+            </Box>
+          )}
         </Box>
 
         {tuning && <>
@@ -4769,16 +4767,9 @@ function Explore() {
             current-value thumb stays visually dominant: the range markers are
             meant to look like brackets, not competing handles. */}
         <Box sx={{
-          display: "flex",
-          alignItems: "center",
-          gap: `${SPACING.MD}px`,
-          px: 1,
-          py: 0.5,
-          border: `1px solid ${tc.border}`,
-          bgcolor: tc.controlBg,
-          width: "fit-content",
-          maxWidth: "100%",
-          flexWrap: "wrap",
+          display: "flex", flexWrap: "wrap", width: "fit-content", maxWidth: "100%", boxSizing: "border-box",
+          alignItems: "center", columnGap: "4px", rowGap: "2px",
+          px: 1, py: 0.5, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg,
         }}>
           {([
             {
@@ -4822,9 +4813,8 @@ function Explore() {
             const range = sweepRanges[aberration.key];
             const isActiveSweep = sweepMainKeys(sweepParam).includes(aberration.key);
             const isAtFull = range[0] === aberration.min && range[1] === aberration.max;
-            const sliderWidth = aberration.key === "rot" ? ROTATION_SLIDER_WIDTH : ABERRATION_SLIDER_WIDTH;
             return (
-              <Box key={aberration.key} sx={{ flex: `0 0 ${sliderWidth}px`, width: sliderWidth, minWidth: 0 }}>
+              <Box key={aberration.key} sx={{ width: "max-content", minWidth: "min(108px, 100%)", maxWidth: "min(160px, 100%)" }}>
                 <AberrationSlider
                   label={aberration.label} unit={aberration.unit} value={aberration.value} displayPrec={aberration.displayPrec}
                   tip={aberration.tipFull} min={aberration.min} max={aberration.max} step={aberration.step}
@@ -4835,28 +4825,30 @@ function Explore() {
               </Box>
             );
           })}
-          <Tooltip title="Negate the displayed phase.  The direct ptychography phase is defined only up to ± (sign-ambiguous).  Use this to match the expected contrast of your sample.  Display only: it does not re-run reconstruction or change any fitted number (display_negate_phase)." placement="top" arrow>
-            <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, cursor: "help" }}>
-              <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>{controlsBeside ? "Invert phase" : "Negate phase (display)"}</Typography>
-              <Switch disabled={regionalMode} checked={!!displayNegatePhase} onChange={(_, checked) => setDisplayNegatePhase(checked)} size="small" />
-            </Box>
-          </Tooltip>
-          <Tooltip title="Reset all aberrations to the automatic fitted result and restore every sweep-stopper to its full range." placement="top" arrow>
-            <IconButton
-              size="small"
-              onClick={() => {
-                doReset();
-                updateSweepRange("c10", [c10UiMin, c10UiMax]);
-                updateSweepRange("c12", [c12UiMin, c12UiMax]);
-                updateSweepRange("phi12", [phi12UiMin, phi12UiMax]);
-                updateSweepRange("rot", [rotationUiMin, rotationUiMax]);
-              }}
-              sx={compactIconButton(tc, tc.textMuted)}
-              aria-label="Reset aberrations"
-            >
-              <RestartAltIcon sx={{ fontSize: 16 }} />
-            </IconButton>
-          </Tooltip>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+            <Tooltip title="Negate the displayed phase.  The direct ptychography phase is defined only up to ± (sign-ambiguous).  Use this to match the expected contrast of your sample.  Display only: it does not re-run reconstruction or change any fitted number (display_negate_phase)." placement="top" arrow>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, cursor: "help" }}>
+                <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>{controlsBeside ? "Invert phase" : "Negate phase (display)"}</Typography>
+                <Switch disabled={regionalMode} checked={!!displayNegatePhase} onChange={(_, checked) => setDisplayNegatePhase(checked)} size="small" />
+              </Box>
+            </Tooltip>
+            <Tooltip title="Reset all aberrations to the automatic fitted result and restore every sweep-stopper to its full range." placement="top" arrow>
+              <IconButton
+                size="small"
+                onClick={() => {
+                  doReset();
+                  updateSweepRange("c10", [c10UiMin, c10UiMax]);
+                  updateSweepRange("c12", [c12UiMin, c12UiMax]);
+                  updateSweepRange("phi12", [phi12UiMin, phi12UiMax]);
+                  updateSweepRange("rot", [rotationUiMin, rotationUiMax]);
+                }}
+                sx={compactIconButton(tc, tc.textMuted)}
+                aria-label="Reset aberrations"
+              >
+                <RestartAltIcon sx={{ fontSize: 16 }} />
+              </IconButton>
+            </Tooltip>
+          </Box>
         </Box>
 
         {/* The order one adjusts in: defocus and astigmatism above, then sample tilt and depth, then the higher orders. */}
@@ -4891,6 +4883,29 @@ function Explore() {
           onCommit={commitSample}
           note={higherOrderNote}
         />}
+
+        <Box component="details" sx={{ px: 1, py: 0.5, border: `1px solid ${tc.border}`, bgcolor: tc.controlBg,
+          "& summary": { ...typography.label, cursor: "pointer", color: tc.accent },
+          "& table": { ...typography.value, borderCollapse: "collapse", fontVariantNumeric: "tabular-nums" },
+          "& th, & td": { textAlign: "right", px: 1, py: 0.25 },
+          "& th:first-of-type, & td:first-of-type": { textAlign: "left" },
+        }}>
+          <summary>Aberrations table</summary>
+          <table aria-label="Current aberrations">
+            <thead><tr><th>Coefficient</th><th>Value (nm)</th><th>Azimuth (°)</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">C10</th><td>{formatNumber(c10, 2)}</td><td>—</td></tr>
+              <tr><th scope="row">C12</th><td>{formatNumber(c12, 2)}</td><td>{formatNumber(phi12, 2)}</td></tr>
+              {Object.values(HO_BY_ORDER).flat().map(entry => (
+                <tr key={entry.name}>
+                  <th scope="row">{entry.name}</th>
+                  <td>{formatNumber(higherOrder[higherOrderMagnitudeKey(entry.name)] ?? 0, 2)}</td>
+                  <td>{entry.hasAngle ? formatNumber(higherOrder[higherOrderAzimuthKey(entry.name)] ?? 0, 2) : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Box>
 
         {/* Single compact action row: PLAY + PIN + SAVE CALIBRATION.
             Dropdowns live inline.  Wraps to a second line only
@@ -5335,6 +5350,39 @@ function Explore() {
             </Stack>
           </Box>
         )}
+        {/* Keep contrast for every visible image together, including an inset FFT. */}
+        <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: 1, px: 1 }}>
+          <Box role="group" aria-label="Phase contrast" sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0.25 }}>
+            <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>
+              Phase
+            </Typography>
+            <Histogram
+              frame={panelFrames[0]}
+              vminPct={contrastRange[0]}
+              vmaxPct={contrastRange[1]}
+              onRangeChange={(lo, hi) => { setContrastRange([lo, hi]); setAutoContrast(false); }}
+              width={110}
+              height={48}
+              tc={tc}
+            />
+          </Box>
+          {showFFT && <Box role="group" aria-label="FFT contrast"
+            sx={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 0.25 }}>
+            <Tooltip title="FFT intensity is log(1 + magnitude). Bar heights use log(1 + pixel count) to reveal smaller peaks. Contrast limits are unchanged; double-click the histogram to reset them.">
+              <Typography sx={{ ...typography.labelSmall, color: tc.textMuted }}>FFT · log counts</Typography>
+            </Tooltip>
+            <Histogram
+              frame={panelFrames[1]}
+              logCounts
+              vminPct={fftContrastRange[0]}
+              vmaxPct={fftContrastRange[1]}
+              onRangeChange={(lo, hi) => { setFftContrastRange([lo, hi]); setFftAutoContrast(false); }}
+              width={110}
+              height={48}
+              tc={tc}
+            />
+          </Box>}
+        </Box>
       </Box>
       </Box>
     </Box>

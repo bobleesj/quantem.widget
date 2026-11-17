@@ -34,8 +34,12 @@ reconstruction enter through the shared `quantem.gpu.DirectPtycho` API and retur
 returned result remains the compact analysis output.
 
 Local kernels update defocus directly. On a remote kernel, the full-field phase
-view prepares defocus samples on the browser GPU automatically. Dragging
-interpolates those samples. Releasing the slider requests the exact phase.
+view first shows the exact phase. Two full-field planes bracket the fitted
+defocus at 1 nm spacing, so nearby dragging can begin while the rest arrive.
+The preview interpolates phase linearly between two planes and uses cubic
+interpolation once both neighboring planes arrive. Outside the loaded range,
+the kernel supplies the phase. Release requests an exact reconstruction.
+The setup time in the toolbar starts when the viewer prepares its browser cache.
 The widget reports preparation progress and timing. Both modes use the same
 notebook call and the kernel location shown by `qw.profile()`. SSH sessions
 are detected automatically. For a remote Jupyter service that does not
@@ -72,18 +76,7 @@ full-field probe disk automatically and retains the estimate for **Save**.
 The known convergence semiangle is required to establish the angular scale.
 An omitted rotation is the recorded one, else estimated from the curl of the
 centre-of-mass field, known modulo 180 degrees; `run()` settles the
-180-degree choice from the sign of the atom columns. The launch table names the
-source of each value.
-
-One compact launch table appears automatically: **Value used**, **Unit**,
-and **Source**. A **File value** column appears only when a recorded value
-or unit differs; unchanged rows stay blank in that column. Equal row and column
-sampling is shown once, while unequal sampling keeps the `(row, col)` pair.
-Sources distinguish **Recorded**, **Overridden**, **Explicit override**,
-**Estimated**, and **Default**. Explicit keywords remain overrides even when
-they equal stored values. These labels show provenance, not confidence.
-The launch table is a snapshot; `ptycho.calibration()` provides the complete
-file/current comparison later. Neither table changes the source QEM.
+180-degree choice from the sign of the atom columns. Call `ptycho.calibration()` to see the calibration values and their sources.
 
 Perform full-field joint fitting and region selection inside the widget.
 **Restore joint fit** restores every fitted aberration, rotation, tilt and depth,
@@ -101,20 +94,11 @@ notebook windows use fewer columns. This display setting does not resample the
 reconstruction and is retained by Save.
 
 **Save** (or `viewer.save_calibration()`, which returns the path) writes
-`calibration.json` in `save_dir`. Restart the kernel and run
-the same cells: ShowPtycho restores the saved optics, tilt, depth and display
-settings before reconstructing, also over a session that `ptycho.run()`
-has just fitted, and prints one line naming the restored values and the
-session values they replaced. The toolbar says **Restored saved full-field
-fit**.
-
-The acquisition identity, scan region and launch calibration must match; a
-launch rotation 180 degrees from the saved one still matches, since the fit's
-rotation check chooses that branch. A changed file, detector calibration or
-crop leaves the supplied session intact and explains why the saved fit was
-not loaded. Older saves without an acquisition identity need to be saved once
-from their fitted session. Use `restore=False` to keep the supplied session.
-In-memory arrays are not matched by filename.
+`calibration.json` in `save_dir`. To apply that calibration in a new session, pass
+`ptycho.show(calibration="results/calibration.json")`. The acquisition identity, scan region
+and launch geometry are checked before reconstructing. Without a calibration file, the
+viewer uses the optics supplied on the session or measures them from the current acquisition.
+The shared `ui_mode` presets are interactive (default), presentation, report and minimal.
 With `local_tilt=True`, saved rectangles and their available joint-fit views
 are restored too. Each view is reconstructed from the full scan using its own
 saved correction; no regional optimization runs on restart. A region without
@@ -163,7 +147,6 @@ viewer = ShowPtycho(
     method="phase",
     phase_damp=0.03,
     smoothness_inv_A=1.0,
-    restore=False,
 )
 viewer
 ```
@@ -187,7 +170,7 @@ image size and the notebook/browser connection; no fixed frame rate is promised.
 Tikhonov damping strengths of the direct least-squares solve. `smoothness_inv_A=1.0` sets the prior's frequency scale in inverse
 angstroms; use `0` for a flat regularizer. Save records the method and all active
 strengths and detector weighting. With the default `method=None`, a compatible
-saved method is restored automatically; without a save, direct ptychography is used. An explicit
+method comes from the supplied calibration file, or defaults to direct ptychography. An explicit
 `method="phase_of_mean"` keeps direct ptychography and does not restore a different saved method.
 A `DirectPtycho.run(...).save_calibration("review/calibration.json")` result can
 be reopened with `ShowPtycho(ptycho, save_dir="review")`, including its sampling,
