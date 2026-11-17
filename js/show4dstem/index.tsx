@@ -8611,8 +8611,9 @@ function Show4DSTEM() {
               {/* no Min: detector counts start at 0, and the row then fits one line beside the image buttons */}
               <Typography sx={statsTextSx}>Max <Box component="span" sx={statsValueSx}>{formatStat(dpStats[2])}</Box></Typography>
               <Typography sx={statsTextSx}>Std <Box component="span" sx={statsValueSx}>{formatStat(dpStats[3])}</Box></Typography>
-              {controlsVisible && <>
-                <Box sx={{ flex: 1, minWidth: 4, "@media (max-width: 700px)": { display: "none" } }} />
+              {/* The image buttons together on a line of their own, under the readings (one of them alone at the end of
+                  the readings' line read as a stray label). */}
+              {controlsVisible && <Box sx={{ display: "flex", flexBasis: "100%", alignItems: "center", columnGap: "12px", flexWrap: "wrap" }}>
                 <Typography component="span" onClick={() => requestViPreset("bf")} sx={viSourceButtonSx("bf", activeViSource === "roi")}>BF</Typography>
                 <Typography component="span" onClick={() => requestViPreset("abf")} sx={viSourceButtonSx("abf")}>ABF</Typography>
                 <Typography component="span" onClick={() => requestViPreset("adf")} sx={viSourceButtonSx("adf")}>ADF</Typography>
@@ -8631,7 +8632,7 @@ function Show4DSTEM() {
                     </Typography>
                   );
                 })}
-              </>}
+              </Box>}
             </Box>
           )}
 
