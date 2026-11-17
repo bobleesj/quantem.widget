@@ -251,6 +251,75 @@ const COMPARE_GRID_DEFAULT_WIDTH = 980;
 
 /** Linear or log display, one small button that says which (11-16: the operator wanted the diffraction pattern
  *  smaller, so its controls had to fit under it; the "Scale" label and its menu took half a row). */
+type FftInsetBox = { x: number; y: number };
+
+/** The FFT drawn as a small draggable square over the image (as Show3D and ShowPtycho do), not as a third panel.
+ *  Drag to move it, scroll to zoom it, double-click to reset its zoom; the corner button docks it as a panel. */
+function FftInset({ offscreen, version, size, panelWidth, panelHeight, box, onBoxChange, onDock, borderColor }: {
+  offscreen: React.MutableRefObject<HTMLCanvasElement | null>; version: number; size: number;
+  panelWidth: number; panelHeight: number; box: FftInsetBox;
+  onBoxChange: (box: FftInsetBox) => void; onDock: () => void; borderColor: string;
+}) {
+  const canvasRef = React.useRef<HTMLCanvasElement>(null);
+  const boxRef = React.useRef<HTMLDivElement>(null);
+  const [zoom, setZoom] = React.useState(1);
+  React.useLayoutEffect(() => {
+    const canvas = canvasRef.current, source = offscreen.current;
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(size * dpr); canvas.height = Math.round(size * dpr);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (!source || !source.width) return;
+    const scale = canvas.width / Math.max(source.width, source.height) * zoom;
+    const w = source.width * scale, h = source.height * scale;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(source, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
+  }, [offscreen, version, size, zoom]);
+  React.useEffect(() => {
+    const node = boxRef.current;
+    if (!node) return;
+    const wheel = (event: WheelEvent) => {
+      if (!event.deltaY) return;
+      event.preventDefault(); event.stopPropagation();
+      const factor = event.deltaY < 0 ? 1.15 : 1 / 1.15;
+      setZoom(value => Math.max(1, Math.min(MAX_ZOOM, value * factor)));
+    };
+    node.addEventListener("wheel", wheel, { passive: false });
+    return () => node.removeEventListener("wheel", wheel);
+  }, []);
+  const fracW = size / Math.max(1, panelWidth), fracH = size / Math.max(1, panelHeight);
+  const onPointerDown = (event: React.PointerEvent) => {
+    if (event.button !== 0) return;
+    event.preventDefault(); event.stopPropagation();
+    const start = { x: event.clientX, y: event.clientY, box };
+    const move = (moveEvent: PointerEvent) => {
+      onBoxChange({
+        x: Math.max(0, Math.min(1 - fracW, start.box.x + (moveEvent.clientX - start.x) / Math.max(1, panelWidth))),
+        y: Math.max(0, Math.min(1 - fracH, start.box.y + (moveEvent.clientY - start.y) / Math.max(1, panelHeight))),
+      });
+    };
+    const up = () => { document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", up); };
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", up);
+  };
+  return (
+    <Box ref={boxRef} data-show4dstem-fft-inset onPointerDown={onPointerDown}
+      onDoubleClick={(event) => { event.stopPropagation(); setZoom(1); }}
+      title="FFT: drag to move, scroll to zoom, double-click to reset"
+      sx={{ position: "absolute", left: `${Math.max(0, Math.min(1 - fracW, box.x)) * 100}%`, top: `${Math.max(0, Math.min(1 - fracH, box.y)) * 100}%`,
+        width: size, height: size, border: `1px solid ${borderColor}`, cursor: "move", touchAction: "none", userSelect: "none", zIndex: 2 }}>
+      <canvas ref={canvasRef} aria-label="FFT inset" data-quantem-scientific-output="show4dstem-fft-inset"
+        style={{ width: size, height: size, display: "block", imageRendering: "pixelated", pointerEvents: "none" }} />
+      <Typography sx={{ position: "absolute", top: 2, left: 4, fontSize: 9, fontFamily: "monospace", color: "#fff", textShadow: "0 1px 2px #000", lineHeight: 1, pointerEvents: "none" }}>FFT</Typography>
+      <Box component="button" aria-label="Dock FFT as a panel" title="Show the FFT as its own panel"
+        onPointerDown={(event: React.PointerEvent) => event.stopPropagation()} onClick={onDock}
+        sx={{ position: "absolute", top: 1, right: 1, p: 0, width: 14, height: 14, lineHeight: "12px", fontSize: 10, border: "none", bgcolor: "rgba(0,0,0,0.5)", color: "#fff", cursor: "pointer" }}>{"⇲"}</Box>
+    </Box>
+  );
+}
+
 function ScaleToggle({ value, onChange, name }: { value: string; onChange: (mode: "linear" | "log") => void; name: string }) {
   const log = value === "log";
   return (
@@ -4489,6 +4558,10 @@ function Show4DSTEM() {
   const setViHistogramData = React.useCallback((histogramData: Float32Array | null) => viDisplayStore.update({ histogramData }), [viDisplayStore]);
   const setViHistogramBins = React.useCallback((histogramBins: Float32Array | null) => viDisplayStore.update({ histogramBins }), [viDisplayStore]);
   const [showFft, setShowFft] = useModelState<boolean>("show_fft");
+  // 11-16: the FFT is an inset over the image by default (drag it around); docking it makes the third panel.
+  const [fftPlacement, setFftPlacement] = React.useState<"inset" | "panel">("inset");
+  const [fftInsetBox, setFftInsetBox] = React.useState<FftInsetBox>({ x: 0.68, y: 0.02 });
+  const fftDocked = showFft && fftPlacement === "panel";
   const [fftWindow, setFftWindow] = useModelState<boolean>("fft_window");
   const [showControls] = useModelState<boolean>("show_controls");
   const [controlsCollapsed] = useModelState<boolean>("controls_collapsed");
@@ -4640,12 +4713,12 @@ function Show4DSTEM() {
   }, [mainRowNode]);
   const sideBySideLimit = React.useMemo(() => {
     if (!mainRowWidth) return Infinity;
-    const panels = showFft ? 3 : 2;
+    const panels = fftDocked ? 3 : 2;
     return Math.max(SIDE_BY_SIDE_MIN, Math.floor((mainRowWidth - PANEL_GAP * (panels - 1)) / panels));
-  }, [mainRowWidth, showFft]);
+  }, [mainRowWidth, fftDocked]);
   const fittedDpWidth = Math.min(dpPanelWidthPx || panelWidthPx || DP_DEFAULT_SIZE, sideBySideLimit);
   const compareGridFit = mainRowWidth > 0
-    ? Math.max(SIDE_BY_SIDE_MIN, mainRowWidth - fittedDpWidth * (showFft ? 2 : 1) - PANEL_GAP * (showFft ? 2 : 1))
+    ? Math.max(SIDE_BY_SIDE_MIN, mainRowWidth - fittedDpWidth * (fftDocked ? 2 : 1) - PANEL_GAP * (fftDocked ? 2 : 1))
     : COMPARE_GRID_DEFAULT_WIDTH;
   const compareGridWidth = compareGridPreviewWidth ?? (compareGridWidthPx > 0 ? compareGridWidthPx : compareGridFit);
   React.useEffect(() => {
@@ -4756,13 +4829,13 @@ function Show4DSTEM() {
   React.useEffect(() => {
     // The image fills what the diffraction pattern leaves (shared with the FFT); a set width caps it.
     const rest = mainRowWidth > 0
-      ? Math.max(SIDE_BY_SIDE_MIN, Math.floor((mainRowWidth - fittedDpWidth - PANEL_GAP * (showFft ? 2 : 1)) / (showFft ? 2 : 1)))
+      ? Math.max(SIDE_BY_SIDE_MIN, Math.floor((mainRowWidth - fittedDpWidth - PANEL_GAP * (fftDocked ? 2 : 1)) / (fftDocked ? 2 : 1)))
       : CANVAS_SIZE;
     const cap = viPanelWidthPx || panelWidthPx;
     // Linked panels share the row; an independent image keeps its own width (up to the row) and wraps below.
     const room = (syncResize || liveStream) ? rest : Math.max(rest, mainRowWidth || CANVAS_SIZE);
     setViCanvasSize(cap ? Math.min(cap, room) : rest);
-  }, [viPanelWidthPx, panelWidthPx, mainRowWidth, fittedDpWidth, showFft, syncResize, liveStream]);
+  }, [viPanelWidthPx, panelWidthPx, mainRowWidth, fittedDpWidth, fftDocked, syncResize, liveStream]);
   const [isResizingCanvas, setIsResizingCanvas] = React.useState(false);
   const [resizeCanvasStart, setResizeCanvasStart] = React.useState<{ x: number; y: number; size: number; panel: "dp" | "vi" } | null>(null);
 
@@ -8875,6 +8948,12 @@ function Show4DSTEM() {
                 }}
               />
               <canvas ref={viUiRef} width={viCanvasWidth * DPR} height={viCanvasHeight * DPR} style={{ position: "absolute", width: "100%", height: "100%", pointerEvents: "none" }} />
+              {showFft && !fftDocked && (
+                <FftInset offscreen={fftOffscreenRef} version={fftOffscreenVersion}
+                  size={Math.max(72, Math.min(180, Math.round(Math.min(viCanvasWidth, viCanvasHeight) * 0.3)))}
+                  panelWidth={viCanvasWidth} panelHeight={viCanvasHeight} box={fftInsetBox} onBoxChange={setFftInsetBox}
+                  onDock={() => setFftPlacement("panel")} borderColor={themeColors.border} />
+              )}
               {(viPanelLoading || offlineBackendError) && renderPanelLoadingOverlay(
                 offlineBackendError === OFFLINE_NEEDS_WEBGPU ? "Needs WebGPU" : offlineBackendError ? "Show4DSTEM load failed" : "Loading virtual image",
               )}
@@ -9113,12 +9192,13 @@ function Show4DSTEM() {
         </Box>
 
         {/* THIRD COLUMN: FFT Panel (conditionally shown) */}
-        {showFft && (
+        {fftDocked && (
           <Box sx={{ width: viPanelWidth, maxWidth: "100%" }}>
             {/* FFT Header */}
             <Stack direction="row" justifyContent="space-between" alignItems="center" sx={panelHeaderSx}>
               <Typography variant="caption" sx={{ ...themedTypography.label, color: roiFftActive && fftCropDims ? accentGreen : themeColors.textMuted }}>{roiFftActive && fftCropDims ? `ROI FFT (${fftCropDims.cropWidth}\u00D7${fftCropDims.cropHeight})` : "FFT"}</Typography>
               {controlsVisible && <Stack direction="row" spacing={`${SPACING.SM}px`} alignItems="center">
+                <Button size="small" sx={compactButton} onClick={() => setFftPlacement("inset")}>Inset</Button>
                 <Button size="small" sx={compactButton} disabled={fftZoom === 1 && fftPanX === 0 && fftPanY === 0} onClick={() => { setFftZoom(1); setFftPanX(0); setFftPanY(0); }}>Reset</Button>
               </Stack>}
             </Stack>
