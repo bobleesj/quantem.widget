@@ -104,6 +104,12 @@ are restored too. Each view is reconstructed from the full scan using its own
 saved correction; no regional optimization runs on restart. A region without
 a saved fit still needs **Fit Regions**.
 
+`viewer.save_calibration(path)` writes the same record to the JSON file named, with its phase image beside it
+(`<name>_phase.png`). The record also says what the session's fit searched (`max_order`,
+`higher_order_limit`), and `quantem.gpu.DirectPtycho.load_calibration(path)` gives it back as a fit for
+`ptycho.series(fit=...)`, with the aberrations as the sliders stood. From the session,
+`ptycho.save_calibration(save_dir)` does this for the viewer `ptycho.show()` opened.
+
 `viewer.export(...)` writes the browser project and exact bright-field evidence;
 the notebook's Save button writes numerical calibration only.
 
@@ -226,7 +232,7 @@ viewer
 The other method is explicit, with quantem.gpu's names:
 `ptycho.aberrations(search="primary", tilt=False)` fits the primary optics model
 with tilt and depth held at zero. Use `search="primary", tilt=True` for a
-comparison at the same aberration order. Joint fit, Refit and Fit Regions
+comparison at the same aberration order. Fit, Refit and Fit Regions
 all run the model-based, tilt-corrected fit.
 
 **Tilt correction** starts on. Switch it off to compare the phase and FFT with
@@ -362,8 +368,15 @@ quantem.gpu's default fit adds the sample to the model, and the
 - **tilt row / tilt col** (mrad, scan frame) and **depth spread** (nm). Depth
   spread 0 is standard direct ptychography, exactly. It is the depth the model averages over,
   not a measured sample thickness.
-- **Joint fit** fits defocus, astigmatism, tilt and depth spread together and
-  moves every slider to the result. The fitted C10 is the defocus at mid-depth.
+- **Fit**, in the Fit row above the panel, fits the aberrations, tilt and depth spread together and
+  moves every slider to the result. The fitted C10 is the defocus at mid-depth. The row holds what the fit
+  searches, under `aberrations()`'s names:
+  - **Max order** (`max_order`, 1 to 5): the highest aberration order refined; the orders above it stay zero.
+  - **Refine rotation** (`refine_rotation`): also refines a rotation the session estimated, a few seconds more.
+  - **Check 180°** (`check_rotation`): fits both rotations 180° apart and keeps the one whose atomic columns
+    are bright.
+  - **Other 180°** turns the rotation half a turn and fits there, for a phase whose columns look dark. It
+    switches Check 180° off, so a later Fit keeps that choice.
 - The status line gives the tilt in the scan frame; Save also records it along
   the detector axes (`propagator_tilt_mrad`, the scan frame turned by the
   scan-detector rotation and swapped when the rotation is flipped), which
@@ -398,7 +411,7 @@ fit), and exported WebGPU folders (sliders; fitting needs Python). The higher-or
 
 Validation: on a simulated 15 nm BaTiO3 crystal tilted (3, -4) mrad the fit
 returns (3.0, -4.1) and ~0 for the untilted control. Speed (a 128 x 128 scan
-crop): Joint fit about 5 s on CUDA and 6 s on MPS; full 512 x 512 field about
+crop): Fit about 5 s on CUDA and 6 s on MPS; full 512 x 512 field about
 45 s on CUDA.
 
 ## Units

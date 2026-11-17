@@ -511,6 +511,102 @@ def test_sample_tilt_panel_uses_the_thick_sample_model(widget, direct):
     assert saved["propagator_tilt_mrad"] == pytest.approx([3.0 * math.cos(rot) + (-4.0) * math.sin(rot), -3.0 * math.sin(rot) + (-4.0) * math.cos(rot)])
 
 
+@pytest.fixture
+def fit_options(direct, monkeypatch):
+    """The keywords each ``aberrations()`` call of the widget's session receives, newest last."""
+    calls, fit = [], type(direct).aberrations
+
+    def recorded(self, **options):
+        calls.append(options)
+        return fit(self, **options)
+
+    monkeypatch.setattr(type(direct), "aberrations", recorded)
+    return calls
+
+
+def test_fit_searches_what_the_fit_row_says(widget, direct, fit_options):
+    assert (widget.max_order, widget.refine_rotation, widget.check_rotation) == (5, False, True)   # aberrations()'s own
+    widget.max_order, widget.refine_rotation, widget.check_rotation = 3, True, False
+    widget.sample_fit_request += 1
+    asked = fit_options[-1]
+    assert (asked["max_order"], asked["refine_rotation"], asked["check_rotation"], asked["tilt"]) == (3, True, False, True)
+    assert direct._aberration_search.optimizer["max_order"] == 3
+    fitted = json.loads(widget.sample_fit_json)
+    assert all(fitted[name] == 0.0 for name in fitted if name[:2] in ("C4", "C5"))   # held at zero above order 3
+    assert any(fitted[name] != 0.0 for name in fitted if name[:2] in ("C2", "C3"))
+    assert widget.sample_fit_status.startswith("Fit through order 3: rotation 10.0° · defocus ")
+    assert widget.scan_detector_rotation_deg == 10.0
+
+
+def test_the_other_180_degree_branch_is_fitted_at_the_turned_rotation_and_kept(widget, direct, fit_options):
+    widget.opposite_rotation_request += 1
+    assert fit_options[-1]["check_rotation"] is False
+    assert direct.scan_detector_rotation_deg == pytest.approx(190.0)
+    assert widget.scan_detector_rotation_deg == pytest.approx(190.0)
+    assert widget.fitted_scan_detector_rotation_deg == pytest.approx(190.0)
+    assert widget.scan_detector_rotation_max_deg >= 190.0          # the slider reaches where the fit went
+    assert "rotation 190.0° (was 10.0°)" in widget.sample_fit_status
+    # the check is off now: a later Fit keeps the branch chosen here
+    assert widget.check_rotation is False
+    widget.sample_fit_request += 1
+    assert fit_options[-1]["check_rotation"] is False
+    assert widget.scan_detector_rotation_deg == pytest.approx(190.0)
+
+
+def test_a_failed_fit_says_so_and_leaves_the_button_usable(widget, direct, monkeypatch):
+    def refused(self, **options):
+        raise RuntimeError("no memory for this fit")
+
+    monkeypatch.setattr(type(direct), "aberrations", refused)
+    widget.sample_fit_request += 1
+    assert widget.sample_fit_status == "Fit failed: no memory for this fit"
+
+
+def test_save_calibration_writes_the_named_file_with_the_sliders_and_the_fits_search(widget, direct, tmp_path):
+    """The file quantem.gpu turns back into a fit: the aberrations as edited, and what the fit searched."""
+    gpu = pytest.importorskip("quantem.gpu")
+    widget.max_order = 3
+    widget.sample_fit_request += 1
+    fitted = json.loads(widget.sample_fit_json)
+    sample = {name: fitted[name] for name in ("sample_tilt_mrad", "depth_spread_nm")}
+    higher = json.loads(widget.higher_order_aberrations_json)
+    # the operator moves the defocus slider by 2 nm and lets go
+    widget._on_preview_message(widget, {"type": "direct-preview", "request": {
+        "id": 40, "C10_nm": fitted["C10_nm"] + 2, "C12_nm": fitted["C12_nm"], "phi12_deg": fitted["phi12_deg"],
+        "sample": sample, "higher_order": higher, "committed": True}}, [])
+    path = widget.save_calibration(tmp_path / "results" / "calibration" / "scan_3.json")
+    assert path == (tmp_path / "results" / "calibration" / "scan_3.json").resolve() and path.is_file()
+    assert (path.parent / "scan_3_phase.png").is_file()
+    assert widget.calibration_path == str(path)
+    record = json.loads(path.read_text())
+    assert record["aberrations"]["C10_nm"] == pytest.approx(fitted["C10_nm"] + 2)
+    assert record["max_order"] == 3 and record["higher_order_limit"] in (2.0, 20.0)
+    fit = gpu.DirectPtycho.load_calibration(path)
+    assert fit.aberrations["C10_nm"] == pytest.approx(fitted["C10_nm"] + 2)
+    assert fit.optimizer["coordinates"][0] == pytest.approx((fitted["C10_nm"] + 2) / 10)
+    assert fit.optimizer["max_order"] == 3 and fit.depth_spread_nm == pytest.approx(sample["depth_spread_nm"])
+    assert fit.scan_detector_rotation_deg == pytest.approx(10.0)
+    with pytest.raises(ValueError, match="JSON filename"):
+        widget.save_calibration(tmp_path / "results" / "calibration")
+    # no path: save_dir's calibration.json, as the Save button
+    assert widget.save_calibration() == (tmp_path / "calibration.json").resolve()
+    assert (tmp_path / "calibration_phase.png").is_file()
+
+
+def test_a_scan_in_gpu_memory_records_its_geometry_without_a_source(direct):
+    """A scan with no file yet (taken a moment ago, held on the GPU) still says where its bright-field disk is."""
+    named = direct.source_path
+    direct.source_path = None
+    try:
+        identity = gpu_adapter.DirectSession(direct).calibration_identity()
+    finally:
+        direct.source_path = named
+    if direct.source_kind == "array":
+        assert identity is None                      # a bare array has no acquisition identity at all
+    else:
+        assert identity["source"] is None and identity["geometry"]["voltage_kV"] == 300.0
+
+
 def test_joint_fit_reference_survives_manual_optics_and_sample_adjustments(widget):
     """Return from manual tuning to the complete fitted model, without zeroing the sample."""
     widget.sample_fit_request += 1
