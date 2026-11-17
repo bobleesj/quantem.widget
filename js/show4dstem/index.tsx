@@ -1,6 +1,8 @@
 /// <reference types="@webgpu/types" />
 import { captureGpuCanvas } from "./captureGpuCanvas";
 import { createLatestFrameQueue } from "./latestFrameQueue";
+import { chosenFrameIndex, createScanChoice } from "./scanChoice";
+import { formatMean, formatStat } from "./statText";
 import { createDpPointerOwner } from "./dpPointerOwner";
 import * as React from "react";
 import { createRender, useModelState, useModel } from "@anywidget/react";
@@ -56,7 +58,7 @@ import type { Uint32ImageView } from "../display/borrowedImage";
 import { latestRegion } from "./latestRegion";
 import { detectorChannel, detectorViewId } from "./detectorChannel";
 import { connectStreamDisplay, initialStreamPanels, streamPanelChanges } from "./streamDisplay";
-import { comparisonImageView, comparisonPanelKey, interactionContext, selectStreamFrame } from "./streamSelection";
+import { comparisonImageView, comparisonPanelKey, interactionContext } from "./streamSelection";
 import { drawScaleBarHiDPI, drawColorbar, roundToNiceValue } from "../figure";
 import { angstromsPerUnit, unitSymbol } from "../units";
 import { findDataRange, sliderRange, computeStats, percentileClip } from "../display/stats";
@@ -480,17 +482,6 @@ function viSourceDisplayColor(source: string, themeName: string): string {
 // Interaction constants
 const RESIZE_HIT_AREA_PX = 10;
 
-/** Format stat value for display (compact scientific notation for small values) */
-function formatStat(value: number): string {
-  if (value === 0) return "0";
-  const abs = Math.abs(value);
-  if (abs < 0.001 || abs >= 10000) {
-    return value.toExponential(2);
-  }
-  if (abs < 0.01) return value.toFixed(4);
-  if (abs < 1) return value.toFixed(3);
-  return value.toFixed(2);
-}
 
 
 /** A d-spacing measured in the scan's unit, as a label in Å or nm, or in the scan's own unit (px) when it is not a length. */
@@ -2366,6 +2357,8 @@ function Show4DSTEM() {
     return images;
   }, [preview, viSource]);
   const liveImage = liveImages?.image ?? null;
+  // A scan is arriving: the view shows it, and the controls that choose another scan wait.
+  const streaming = liveImage !== null;
   const [viDetailState] = useModelState<{
     label?: string; frame?: number; factor?: number; rows?: number; cols?: number; image?: DataView;
   }>("vi_detail");
@@ -2450,10 +2443,28 @@ function Show4DSTEM() {
   // Frame animation state (5D time/tilt series)
   const [frameIdx, setFrameIdxState] = useModelState<number>("frame_idx");
   const [streamSourceIds = []] = useModelState<string[]>("_stream_source_ids");
+  // A scan chosen in a live session is shown once the kernel answers. Until then the slider and the next
+  // step start from the choice, not from the scan still on screen: quick steps each move one scan, and
+  // the kernel is asked for one scan at a time, the newest choice last (scanChoice).
+  const scanChoice = React.useMemo(() => createScanChoice(source => {
+    model.set("_stream_selected_source", source);
+    model.save_changes();
+  }), [model]);
+  const [chosenSource, setChosenSource] = React.useState<string | null>(null);
   const setFrameIdx = React.useCallback((value: React.SetStateAction<number>) => {
-    const index = typeof value === "function" ? value(frameIdx) : value;
-    selectStreamFrame(model, index, streamSourceIds, () => setFrameIdxState(value));
-  }, [frameIdx, model, setFrameIdxState, streamSourceIds]);
+    if (!streamSourceIds.length || model.get("offline")) { setFrameIdxState(value); return; }
+    const shown = Math.round(Number(model.get("frame_idx") || 0));
+    const from = chosenFrameIndex(scanChoice.pending(), streamSourceIds, shown);
+    const source = streamSourceIds[typeof value === "function" ? value(from) : value];
+    if (source === undefined) return;
+    scanChoice.choose(source, streamSourceIds[shown]);
+    setChosenSource(scanChoice.pending());
+  }, [model, scanChoice, setFrameIdxState, streamSourceIds]);
+  React.useEffect(() => {
+    scanChoice.shown(streamSourceIds[frameIdx]);
+    setChosenSource(scanChoice.pending());
+  }, [frameIdx, scanChoice, streamSourceIds]);
+  const chosenFrameIdx = chosenFrameIndex(chosenSource, streamSourceIds, frameIdx);
   const [nFrames] = useModelState<number>("n_frames");
   const [frameDimLabel] = useModelState<string>("frame_dim_label");
   const [frameLabels] = useModelState<string[]>("frame_labels");
@@ -5206,7 +5217,8 @@ function Show4DSTEM() {
       if (framePlaying) setFramePlaying(false);
       return;
     }
-    if (!framePlaying || nFrames <= 1) return;
+    // Playback waits while a scan streams: the view stays on the scan arriving.
+    if (!framePlaying || nFrames <= 1 || streaming) return;
 
     const intervalMs = 1000 / Math.max(0.1, frameFps);
     const timer = setInterval(() => {
@@ -5235,7 +5247,7 @@ function Show4DSTEM() {
     }, intervalMs);
 
     return () => clearInterval(timer);
-  }, [compareMode, framePlaying, nFrames, frameFps, frameLoop, frameReverse, frameBoomerang, setFrameIdx, setFramePlaying]);
+  }, [compareMode, framePlaying, nFrames, frameFps, frameLoop, frameReverse, frameBoomerang, setFrameIdx, setFramePlaying, streaming]);
 
   // Initialize WebGPU FFT on mount
   React.useEffect(() => {
@@ -5337,20 +5349,20 @@ function Show4DSTEM() {
           handled = true;
           break;
         case "[":
-          if (nFrames > 1) {
-            setFrameIdx(Math.max(0, frameIdx - 1));
+          if (nFrames > 1 && !streaming) {
+            setFrameIdx((shown: number) => Math.max(0, shown - 1));
             handled = true;
           }
           break;
         case "]":
-          if (nFrames > 1) {
-            setFrameIdx(Math.min(nFrames - 1, frameIdx + 1));
+          if (nFrames > 1 && !streaming) {
+            setFrameIdx((shown: number) => Math.min(nFrames - 1, shown + 1));
             handled = true;
           }
           break;
         case " ":
           // The multiple view shows every dataset at once and has no playback.
-          if (nFrames > 1 && !compareMode) {
+          if (nFrames > 1 && !compareMode && !streaming) {
             setFramePlaying(!framePlaying);
             handled = true;
           }
@@ -5366,7 +5378,7 @@ function Show4DSTEM() {
       event.stopPropagation();
     }
   }, [
-    compareMode, frameIdx, framePlaying, nFrames,
+    compareMode, framePlaying, nFrames, streaming,
     posCol, posRow, setFrameIdx, setFramePlaying, setPosCol, setPosRow, shapeCols, shapeRows,
   ]);
 
@@ -7873,7 +7885,7 @@ function Show4DSTEM() {
       <span title={title || "4D-STEM Explorer"} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {title || "4D-STEM Explorer"}</span>
       <RenderPathBadge colors={themeColors} />
-      {nFrames > 1 && <span style={{ fontWeight: "normal", fontSize: 13, marginLeft: 8, opacity: 0.7 }}>({frameLabels && frameLabels.length > frameIdx ? frameLabels[frameIdx] : `${frameDimLabel} ${frameIdx + 1}/${nFrames}`})</span>}
+      {nFrames > 1 && !streaming && <span style={{ fontWeight: "normal", fontSize: 13, marginLeft: 8, opacity: 0.7 }}>({frameLabels && frameLabels.length > frameIdx ? frameLabels[frameIdx] : `${frameDimLabel} ${frameIdx + 1}/${nFrames}`})</span>}
       {panelChromeVisible && <InfoTooltip text={<Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
         <MetadataSection rows={[
           ["Scan", `${shapeRows} x ${shapeCols}`],
@@ -7903,7 +7915,7 @@ function Show4DSTEM() {
   ), [
     detCols, detRows, frameDimLabel, frameIdx, frameLabels, kCalibrated, kPixelSize, kPixelUnit,
     keyboardShortcutItems, nFrames, panelChromeVisible, pixelSize, scanUnit, shapeCols, shapeRows,
-    showTitle, themeColors, themeInfo, themedTypography, title
+    showTitle, streaming, themeColors, themeInfo, themedTypography, title
   ]);
   const dpToolbarControls = React.useMemo(() => (
     controlsVisible && <Stack
@@ -8980,7 +8992,7 @@ function Show4DSTEM() {
           {/* VI Stats Bar: stats on left, Auto/Smooth toggles on right edge */}
           {showStats && !viPanelLoading && <Subscribe store={viDisplayStore}>{({ stats: viStats }) => viStats.length === 4 && (
             <Box sx={statsBarSx}>
-              <Typography sx={statsTextSx}>Mean <Box component="span" sx={statsValueSx}>{formatStat(viStats[0])}</Box></Typography>
+              <Typography sx={statsTextSx} title={`Mean ${viStats[0]}`}>Mean <Box component="span" sx={statsValueSx}>{formatMean(viStats[0], viStats[3])}</Box></Typography>
               <Typography sx={statsTextSx}>Min <Box component="span" sx={statsValueSx}>{formatStat(viStats[1])}</Box></Typography>
               <Typography sx={statsTextSx}>Max <Box component="span" sx={statsValueSx}>{formatStat(viStats[2])}</Box></Typography>
               <Typography sx={statsTextSx}>Std <Box component="span" sx={statsValueSx}>{formatStat(viStats[3])}</Box></Typography>
@@ -9315,8 +9327,11 @@ function Show4DSTEM() {
       {/* BOTTOM CONTROLS */}
 
       {/* Frame controls (5D time/tilt series): matches Show3D playback */}
-      {controlsVisible && nFrames > 1 && (<>
-        <Box sx={{ ...controlRow, mt: `${SPACING.SM}px`, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
+      {/* While a scan streams the view stays on the scan arriving: View and the Dataset rows are hidden.
+          They keep their place, so nothing above or below moves when a scan starts or ends. */}
+      {controlsVisible && nFrames > 1 && (<Box data-show4dstem-scan-rows aria-hidden={streaming || undefined}
+        sx={streaming ? { visibility: "hidden", pointerEvents: "none" } : undefined}>
+        <Box sx={{ ...controlRow, ...(compareMode ? {} : { width: "100%" }), mt: `${SPACING.SM}px`, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
           <Typography sx={{ ...themedTypography.label, fontSize: 10, flexShrink: 0 }}>View</Typography>
           <Select
             value={viewMode}
@@ -9393,7 +9408,7 @@ function Show4DSTEM() {
               <StopIcon sx={{ fontSize: 16 }} />
             </IconButton>
           </Stack>
-          <Slider value={frameIdx} onChange={(_, value) => { setFramePlaying(false); setFrameIdx(value as number); }} min={0} max={Math.max(0, nFrames - 1)} size="small" aria-label={frameSliderAriaLabel} sx={{ flex: 1, minWidth: 60, "& .MuiSlider-thumb": { width: 10, height: 10 } }} />
+          <Slider value={chosenFrameIdx} onChange={(_, value) => { setFramePlaying(false); setFrameIdx(value as number); }} min={0} max={Math.max(0, nFrames - 1)} size="small" aria-label={frameSliderAriaLabel} sx={{ flex: 1, minWidth: 60, "& .MuiSlider-thumb": { width: 10, height: 10 } }} />
           <Typography sx={{ ...themedTypography.value, minWidth: 50, textAlign: "right", flexShrink: 0 }}>{frameLabels && frameLabels.length > frameIdx ? frameLabels[frameIdx] : `${frameIdx + 1}/${nFrames}`}</Typography>
           </>}
         </Box>
@@ -9406,7 +9421,7 @@ function Show4DSTEM() {
           <Typography sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted, flexShrink: 0 }}>Bounce</Typography>
           <Switch size="small" checked={frameBoomerang} onChange={() => setFrameBoomerang(!frameBoomerang)} sx={{ ...switchStyles.small, flexShrink: 0 }} slotProps={{ input: { "aria-label": "Bounce frames" } }} />
         </Box>}
-      </>)}
+      </Box>)}
     </Box>
   );
 }
