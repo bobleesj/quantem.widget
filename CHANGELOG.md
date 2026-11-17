@@ -6,6 +6,7 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- ShowPtycho has a Fit row: Max order, Refine rotation and Check 180° set what Fit searches (`aberrations()`'s `max_order`, `refine_rotation`, `check_rotation`), and Other 180° fits the opposite rotation branch and keeps it. Fit replaces the Joint fit button of the Sample tilt panel. `viewer.save_calibration(path)` writes the calibration to a named file; the record says the fit's `max_order` and `higher_order_limit`, and a scan held in GPU memory records its geometry too, so `quantem.gpu.DirectPtycho.load_calibration(path)` gives the fit back.
 - ShowPtycho places the fitted aberrations table and phase contrast in the viewer. Remote sessions prepare nearby defocus values first so dragging can begin while the wider range loads. Pass a saved calibration file with `calibration=path`. The viewer starts from the supplied optics or fits the scan when the argument is omitted.
 - ShowPtycho updates defocus directly on local kernels and automatically prepares full-field browser previews on remote kernels. Releasing the slider requests the exact phase.
 

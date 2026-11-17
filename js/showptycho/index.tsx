@@ -1362,11 +1362,81 @@ function formatHOValue(valueNm: number, maxNm: number, displayScale: number): st
 /* Sample panel: thick-sample direct ptychography.  A crystal tilted by theta changes how strongly each
    bright-field pixel carries each spatial frequency; the kernel averages every pixel's correction
    over a depth spread with the columns leaning by the tilt.  Depth spread 0 = standard direct ptychography.
-   Joint fit solves C10, C12, phi12, tilt and depth spread together in the direct ptychography session. */
+   Fit (the Fit panel above it) solves the aberrations, tilt and depth spread together in the direct ptychography session. */
 const SAMPLE_ZERO: SampleValues = { tiltRowMrad: 0, tiltColMrad: 0, depthSpreadNm: 0 };
 
+/* Fit panel: what the next fit searches, and the button that runs it in the Python session.
+   Max order, Refine rotation and Check 180° are aberrations()'s max_order, refine_rotation and check_rotation.
+   Other 180° turns the rotation half a turn and fits there, for a phase whose atomic columns look dark.
+   A selected region is fitted with the region's own settings: only the button shows then. */
+function FitPanel({
+  tc, maxOrder, setMaxOrder, refineRotation, setRefineRotation, checkRotation, setCheckRotation,
+  onFit, onOpposite, busy, status, regional = false,
+}: {
+  tc: ThemeColors;
+  maxOrder: number;
+  setMaxOrder: (value: number) => void;
+  refineRotation: boolean;
+  setRefineRotation: (value: boolean) => void;
+  checkRotation: boolean;
+  setCheckRotation: (value: boolean) => void;
+  onFit: () => void;
+  onOpposite: () => void;
+  busy: boolean;
+  status: string;
+  regional?: boolean;
+}) {
+  const item = { display: "inline-flex", alignItems: "center", gap: 0.5, whiteSpace: "nowrap" } as const;
+  return (
+    <Box sx={{
+      display: "inline-flex", flexDirection: "column", gap: 0.5, width: "fit-content", maxWidth: "100%",
+      boxSizing: "border-box", border: `1px solid ${tc.border}`, bgcolor: tc.controlBg, px: 1, py: 0.5,
+    }}>
+      <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", columnGap: `${SPACING.MD}px`, rowGap: 0.25 }}>
+        <Typography sx={{ ...typography.label, color: tc.accent }}>Fit</Typography>
+        {!regional && <>
+          <Box sx={item}>
+            <Typography sx={typography.label} title="The highest aberration order the fit refines: 1 is defocus and astigmatism only, 5 goes through C56. The orders above it are held at zero.">Max order</Typography>
+            <Select size="small" value={maxOrder} disabled={busy}
+              inputProps={{ "aria-label": "Max order" }}
+              onChange={event => setMaxOrder(Number(event.target.value))}
+              sx={{ ...typography.label, height: 24, minWidth: 44 }}>
+              {[1, 2, 3, 4, 5].map(order => <MenuItem key={order} value={order}>{order}</MenuItem>)}
+            </Select>
+          </Box>
+          <Box sx={item}>
+            <Typography sx={typography.label} title="Also refine the scan-to-detector rotation within the fit: a few seconds more. Only a rotation the session estimated is refined; one given with the data is kept.">Refine rotation</Typography>
+            <Switch slotProps={{ input: { "aria-label": "Refine rotation" } }} checked={refineRotation} disabled={busy}
+              onChange={(_, checked) => setRefineRotation(checked)} size="small" sx={switchStyles.small} />
+          </Box>
+          <Box sx={item}>
+            <Typography sx={typography.label} title="Fit both rotations 180° apart and keep the one whose atomic columns are bright. Off: fit at the rotation shown.">Check 180°</Typography>
+            <Switch slotProps={{ input: { "aria-label": "Check 180°" } }} checked={checkRotation} disabled={busy}
+              onChange={(_, checked) => setCheckRotation(checked)} size="small" sx={switchStyles.small} />
+          </Box>
+        </>}
+      </Box>
+      <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: `${SPACING.MD}px` }}>
+        <Button size="small" variant="outlined" onClick={onFit} disabled={busy} sx={{ ...compactButton(tc), color: STATUS_GOOD, borderColor: tc.border }}>
+          {busy ? "Fitting…" : "Fit"}
+        </Button>
+        {!regional && <Tooltip title="Turn the rotation by 180° and fit there: for a phase whose atomic columns look dark. Switches Check 180° off, so the choice stays." placement="top" arrow enterDelay={500}>
+          <span>
+            <Button size="small" variant="outlined" onClick={onOpposite} disabled={busy} sx={{ ...compactButton(tc), borderColor: tc.border }}>
+              Other 180°
+            </Button>
+          </span>
+        </Tooltip>}
+      </Box>
+      {!regional && <Typography sx={{ ...typography.labelSmall, color: /failed|ignored/.test(status) ? STATUS_BAD : tc.textMuted, maxWidth: 520 }}>
+        {status || "Fits optics through the chosen order with sample tilt and depth. C10 is the mid-depth defocus."}
+      </Typography>}
+    </Box>
+  );
+}
+
 function SamplePanel({
-  tc, open, onToggle, values, setValues, onCommit, onFit, onReset, fitBusy, fitStatus, fitAvailable = true, disabled = false,
+  tc, open, onToggle, values, setValues, onCommit, onReset, fitBusy, fitAvailable = true, disabled = false,
 }: {
   tc: ThemeColors;
   open: boolean;
@@ -1374,10 +1444,8 @@ function SamplePanel({
   values: SampleValues;
   setValues: React.Dispatch<React.SetStateAction<SampleValues>>;
   onCommit?: () => void;
-  onFit: () => void;
   onReset: () => void;
   fitBusy: boolean;
-  fitStatus: string;
   fitAvailable?: boolean;
   disabled?: boolean;
 }) {
@@ -1443,16 +1511,7 @@ function SamplePanel({
               </Typography>
             </Box>
           ))}
-          {fitAvailable ? (
-            <Box sx={{ display: "flex", alignItems: "center", gap: `${SPACING.MD}px`, mt: 0.5 }}>
-              <Button size="small" variant="outlined" onClick={onFit} disabled={fitBusy} sx={{ ...compactButton(tc), color: STATUS_GOOD, borderColor: tc.border }}>
-                {fitBusy ? "Fitting…" : "Joint fit"}
-              </Button>
-              <Typography sx={{ ...typography.labelSmall, color: /failed|ignored/.test(fitStatus) ? STATUS_BAD : tc.textMuted, maxWidth: 520 }}>
-                {fitStatus || "The default fit refines optics through fifth order with tilt and depth. C10 is the mid-depth defocus."}
-              </Typography>
-            </Box>
-          ) : (
+          {!fitAvailable && (
             <Typography sx={{ ...typography.labelSmall, color: tc.textMuted, mt: 0.5, maxWidth: 520 }}>
               Sliders run in the browser.  Fitting tilt needs the Python session (ShowPtycho in a notebook).
             </Typography>
@@ -1827,6 +1886,10 @@ function Explore() {
   const [sampleFitRequest, setSampleFitRequest] = useModelState<number>("sample_fit_request");
   const [sampleFitStatus] = useModelState<string>("sample_fit_status");
   const [sampleFitJson] = useModelState<string>("sample_fit_json");
+  const [maxOrder, setMaxOrder] = useModelState<number>("max_order");
+  const [refineRotation, setRefineRotation] = useModelState<boolean>("refine_rotation");
+  const [checkRotation, setCheckRotation] = useModelState<boolean>("check_rotation");
+  const [oppositeRotationRequest, setOppositeRotationRequest] = useModelState<number>("opposite_rotation_request");
   const [ptychoSession] = useModelState<boolean>("ptycho_session");
   const [sessionNote] = useModelState<string>("session_note");
   const [amplitudeBytes] = useModelState<DataView>("amplitude_bytes");
@@ -2427,7 +2490,7 @@ function Explore() {
   const [sampleOpen, setSampleOpen] = React.useState(false);
   const [sampleFitBusy, setSampleFitBusy] = React.useState(false);
   React.useEffect(() => {
-    if (/^(Tilt fit(:| failed)|Fifth-order fit:)/.test(sampleFitStatus || "")) setSampleFitBusy(false);
+    if (/^Fit (through order \d:|failed:)/.test(sampleFitStatus || "")) setSampleFitBusy(false);
   }, [sampleFitStatus]);
   const requestSampleFit = React.useCallback(() => {
     if (regionContextRef.current) {
@@ -2440,6 +2503,10 @@ function Explore() {
     setSampleFitBusy(true);
     setSampleFitRequest((sampleFitRequest || 0) + 1);
   }, [sampleFitRequest, setSampleFitRequest]);
+  const requestOppositeRotation = React.useCallback(() => {
+    setSampleFitBusy(true);
+    setOppositeRotationRequest((oppositeRotationRequest || 0) + 1);
+  }, [oppositeRotationRequest, setOppositeRotationRequest]);
 
   /* --- Request plumbing ---
    * Slider events use every available bright-field pixel.
@@ -4862,6 +4929,18 @@ function Explore() {
         </Box>
 
         {/* The order one adjusts in: defocus and astigmatism above, then sample tilt and depth, then the higher orders. */}
+        {sampleAvailable && !webgpuStandalone && (
+          <FitPanel
+            tc={tc}
+            maxOrder={maxOrder ?? 5} setMaxOrder={setMaxOrder}
+            refineRotation={!!refineRotation} setRefineRotation={setRefineRotation}
+            checkRotation={checkRotation !== false} setCheckRotation={setCheckRotation}
+            onFit={requestSampleFit} onOpposite={requestOppositeRotation}
+            busy={regionalMode ? regionFitBusy : sampleFitBusy}
+            status={regionalMode ? '' : (sampleFitStatus || "")}
+            regional={regionalMode}
+          />
+        )}
         {(sampleAvailable || webgpuStandalone) && (
           <SamplePanel
             tc={tc}
@@ -4870,10 +4949,8 @@ function Explore() {
             values={sample}
             setValues={setSample}
             onCommit={commitSample}
-            onFit={requestSampleFit}
             onReset={doReset}
             fitBusy={regionalMode ? regionFitBusy : sampleFitBusy}
-            fitStatus={regionalMode ? '' : (sampleFitStatus || "")}
             fitAvailable={!webgpuStandalone}
             disabled={controlsLocked}
           />

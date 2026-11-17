@@ -369,6 +369,10 @@ class DirectSession:
             "tilt_fit_gain": _finite_or_none(getattr(fit, "tilt_fit_gain", None)),
             # the fit's half-band check of its higher orders (trusted, half_band_rms_rad, max_half_band_rms_rad), or None
             "higher_order_consistency": (getattr(fit, "optimizer", None) or {}).get("higher_order_consistency"),
+            # what the kept fit searched (None before a fifth-order fit): the highest aberration order and the
+            # bound of each higher-order coordinate, in radians of phase at the aperture edge
+            "max_order": (getattr(fit, "optimizer", None) or {}).get("max_order"),
+            "higher_order_limit": (getattr(fit, "optimizer", None) or {}).get("higher_order_limit"),
         }
 
     def trials(self) -> list[dict]:
@@ -402,16 +406,19 @@ class DirectSession:
         flagged pixels were filled), so a saved calibration is restored after
         its data folder is moved or copied and refused for another acquisition.
         Array inputs have no persistent identity: a filename attached to a
-        modified array does not make it the acquisition on disk.
+        modified array does not make it the acquisition on disk. An
+        acquisition held in GPU memory with no file yet names no source
+        (None), as quantem.gpu's own calibration records do: its geometry
+        and data layout are still recorded.
         """
         from quantem.gpu.direct_ptycho.persistence import json_value, source_identity
 
         direct = self.direct
-        if direct.source_kind == "array" or direct.source_path is None:
+        if direct.source_kind == "array":
             return None
         state = self.state()  # Resolve automatic probe calibration first.
         return json_value({
-            "source": source_identity(
+            "source": None if direct.source_path is None else source_identity(
                 direct.source_path, scan_shape=direct.input_scan_shape,
                 hot_pixel_correction=(direct.source_provenance or {}).get("hot_pixel_correction"),
                 storage_path=direct.source_storage_path,

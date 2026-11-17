@@ -19,7 +19,8 @@ const DEFAULTS: Record<string, unknown> = {
   local_tilt_selection_json: '', local_tilt_stale: false, notes: '', num_bright_field_pixels: 0,
   object_sampling_A: [], phase_height: 0, phase_width: 0,
   pin_json: '', request_json: '', result_json: '', sample_available: false, sample_fit_json: '',
-  sample_fit_request: 0, sample_fit_status: '', sample_json: '{}', save_trigger: 0, scan_cols: 0,
+  sample_fit_request: 0, sample_fit_status: '', max_order: 5, refine_rotation: false, check_rotation: true,
+  opposite_rotation_request: 0, sample_json: '{}', save_trigger: 0, scan_cols: 0,
   scan_detector_rotation_deg: 0, scan_detector_rotation_max_deg: 180,
   scan_detector_rotation_min_deg: -180, scan_rows: 0, scan_sampling_A: [], session_note: '',
   ptycho_session: true, stars_path: '', tilt_correction: true, trials_json: '',
@@ -204,17 +205,39 @@ test('trial preview and restore use each complete fitted model, including tilt a
   expect(model.get('tilt_correction')).toBe(true);
 });
 
-test('joint fit becomes available again after fifth-order completion', async () => {
-  const model = session({ local_tilt_enabled: false, local_tilt_active_region: '' });
+test('the fit button becomes available again when the fit completes', async () => {
+  const model = session({ local_tilt_enabled: false, local_tilt_active_region: '', sample_available: true });
   await mount(model);
-  const toggle = Array.from(el.querySelectorAll('p')).find(node => node.textContent?.includes('Sample tilt'))!;
-  act(() => toggle.parentElement!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
-  const button = Array.from(el.querySelectorAll('button')).find(node => node.textContent === 'Joint fit')!;
+  const button = Array.from(el.querySelectorAll('button')).find(node => node.textContent === 'Fit')!;
   act(() => button.click());
+  expect(model.get('sample_fit_request')).toBe(1);
   expect(button.disabled).toBe(true);
-  act(() => model.set('sample_fit_status', 'Fifth-order fit: tilt (1.0, -2.0) mrad · depth spread 10.0 nm.'));
+  act(() => model.set('sample_fit_status', 'Fit through order 5: rotation 171.3° · defocus -12.6 nm · tilt (1.0, -2.0) mrad · depth spread 10.0 nm.'));
   expect(button.disabled).toBe(false);
-  expect(button.textContent).toBe('Joint fit');
+  expect(button.textContent).toBe('Fit');
+});
+
+test('the fit row sets what the next fit searches, and the other 180° branch asks for its own fit', async () => {
+  const model = session({ local_tilt_enabled: false, local_tilt_active_region: '', sample_available: true });
+  await mount(model);
+  const refine = el.querySelector('input[aria-label="Refine rotation"]') as HTMLInputElement;
+  const check = el.querySelector('input[aria-label="Check 180°"]') as HTMLInputElement;
+  expect(refine.checked).toBe(false);
+  expect(check.checked).toBe(true);
+  act(() => refine.click());
+  expect(model.get('refine_rotation')).toBe(true);
+  act(() => check.click());
+  expect(model.get('check_rotation')).toBe(false);
+  act(() => model.set('max_order', 3));
+  expect(el.querySelector('[aria-label="Max order"]')?.parentElement?.textContent).toContain('3');
+  const other = Array.from(el.querySelectorAll('button')).find(node => node.textContent === 'Other 180°')!;
+  const fit = Array.from(el.querySelectorAll('button')).find(node => node.textContent === 'Fit')!;
+  act(() => other.click());
+  expect(model.get('opposite_rotation_request')).toBe(1);
+  expect(model.get('sample_fit_request')).toBe(0);
+  expect(fit.disabled).toBe(true);
+  act(() => model.set('sample_fit_status', 'Fit failed: no fit here.'));
+  expect(fit.disabled).toBe(false);
 });
 
 test('wheel zoom works through region overlays and stays independent of other panels and fits', async () => {

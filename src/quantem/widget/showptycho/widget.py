@@ -144,7 +144,7 @@ class ShowPtycho(anywidget.AnyWidget):
         hidden and one line says what they need. A direct ptychography session, normally after
         ``ptycho.aberrations()`` (quantem's default fit, model-based and tilt-corrected), is
         reused for its resident bright-field evidence and exclusively driven while the widget is
-        open. Joint fit, Refit and Fit Regions use the same default fifth-order fit on both
+        open. Fit, Refit and Fit Regions use the same default fifth-order fit on both
         CUDA and MPS. A supplied broad fit retains its higher-order correction.
     size : {"small", "medium", "large", "xlarge"}, optional
         Initial image-panel width. Panels shrink to fit the notebook and remain resizable.
@@ -339,6 +339,11 @@ class ShowPtycho(anywidget.AnyWidget):
     tilt_correction = traitlets.Bool(True).tag(sync=True)
     sample_available = traitlets.Bool(False).tag(sync=True)
     sample_fit_request = traitlets.Int(0).tag(sync=True)
+    # the Fit row: what the next fit searches, under aberrations()'s names
+    max_order = traitlets.Int(5, min=1, max=5).tag(sync=True)
+    refine_rotation = traitlets.Bool(False).tag(sync=True)
+    check_rotation = traitlets.Bool(True).tag(sync=True)
+    opposite_rotation_request = traitlets.Int(0).tag(sync=True)
     sample_fit_status = traitlets.Unicode("").tag(sync=True)
     sample_fit_json = traitlets.Unicode("").tag(sync=True)
     # an array input has no session: the browser hides the aberration controls and shows session_note
@@ -931,6 +936,7 @@ class ShowPtycho(anywidget.AnyWidget):
         self.observe(self._on_fit_region_request, names=["fit_region_request_json"])
         self.observe(self._on_fits_action, names=["fits_action_json"])
         self.observe(self._on_sample_fit_request, names=["sample_fit_request"])
+        self.observe(self._on_opposite_rotation_request, names=["opposite_rotation_request"])
         self._adopt_session(initial=True)
 
         self._region_fit_parameters = self._region_reference()
@@ -1124,6 +1130,11 @@ class ShowPtycho(anywidget.AnyWidget):
                 if initial:
                     self.C10_min_nm, self.C10_max_nm = min(-30.0, fitted["C10_nm"]), max(30.0, fitted["C10_nm"])
                     self.scan_detector_rotation_min_deg, self.scan_detector_rotation_max_deg = min(-180.0, rotation), max(180.0, rotation)
+                else:
+                    # a fit that checked or refined the rotation, or the other 180-degree branch, moved it
+                    self.C10_min_nm, self.C10_max_nm = min(self.C10_min_nm, fitted["C10_nm"]), max(self.C10_max_nm, fitted["C10_nm"])
+                    self.scan_detector_rotation_min_deg = min(self.scan_detector_rotation_min_deg, rotation)
+                    self.scan_detector_rotation_max_deg = max(self.scan_detector_rotation_max_deg, rotation)
                 self.scan_detector_rotation_deg = rotation
                 self.fitted_scan_detector_rotation_deg = rotation
                 self.fitted_C10_nm, self.fitted_C12_nm, self.fitted_phi12_deg = fitted["C10_nm"], fitted["C12_nm"], fitted["phi12_deg"]
@@ -1453,27 +1464,46 @@ class ShowPtycho(anywidget.AnyWidget):
         self.phase_bytes = self._last_phase.tobytes()
 
     def _on_sample_fit_request(self, change) -> None:
-        """Initialize optics, tilt and depth, then jointly refine through fifth order.
+        """The Fit button: fit with the Fit row's settings and show the result."""
+        if change["new"]:
+            self._fit(check_rotation=self.check_rotation)
 
-        Publish initial and final Auto phase without a duplicate browser request.
-        C10 is the fitted mid-depth defocus.
+    def _on_opposite_rotation_request(self, change) -> None:
+        """The other 180-degree branch: turn the session half a turn and fit it there.
+
+        The check is switched off, so a later Fit keeps the branch chosen here until it is switched on again.
         """
         if not change["new"]:
             return
         if not self.sample_available:
-            self.sample_fit_status = "Tilt fit failed: needs a CUDA or MPS direct ptychography session."
+            self.sample_fit_status = "Fit failed: needs a CUDA or MPS direct ptychography session."
             return
+        self._direct.set_scan_detector_rotation(self.scan_detector_rotation_deg + 180.0)
+        self.check_rotation = False
+        self._fit(check_rotation=False)
+
+    def _fit(self, *, check_rotation: bool) -> None:
+        """Fit optics, sample tilt and depth through ``max_order``, then show the fitted phase.
+
+        ``aberrations(tilt=True, max_order=, refine_rotation=, check_rotation=)`` on the session: the initial
+        low-order fit is shown as soon as it exists, the final one replaces it. C10 is the fitted mid-depth defocus.
+        """
+        if not self.sample_available:
+            self.sample_fit_status = "Fit failed: needs a CUDA or MPS direct ptychography session."
+            return
+        before = wrap_degrees(self.scan_detector_rotation_deg)
         self.sample_fit_status = "Fitting initial optics, tilt and depth..."
         def show_initial(result):
             self._adopt_session(initial=False, compute_loss=False, restore_tilt=True)
-            self.sample_fit_status = "Initial phase ready · refining through fifth order..."
+            self.sample_fit_status = f"Initial phase ready · refining through order {self.max_order}..."
         try:
             result = self._direct.aberrations(
                 search="standard",
-                tilt=True, check_rotation=False, compare_standard=False, verbose=False,
+                tilt=True, max_order=self.max_order, refine_rotation=self.refine_rotation,
+                check_rotation=check_rotation, compare_standard=False, verbose=False,
                 on_initial_fit=show_initial)
         except (RuntimeError, ValueError, NotImplementedError, MemoryError) as exc:
-            self.sample_fit_status = f"Tilt fit failed: {exc}"
+            self.sample_fit_status = f"Fit failed: {exc}"
             return
         tilt_row, tilt_col = result["sample_tilt_mrad"]
         self._adopt_session(initial=False, compute_loss=False, restore_tilt=True)
@@ -1490,10 +1520,14 @@ class ShowPtycho(anywidget.AnyWidget):
         self.sample_fit_json = json.dumps({
             **result["aberrations"], "sample_tilt_mrad": [tilt_row, tilt_col], "propagator_tilt_mrad": propagator_tilt,
             "depth_spread_nm": result["depth_spread_nm"], "tilt_fit_gain": result["tilt_fit_gain"],
+            "scan_detector_rotation_deg": self.scan_detector_rotation_deg,
             "phase_ready": True,
         })
+        rotation = wrap_degrees(self.scan_detector_rotation_deg)
+        moved = "" if abs(rotation - before) < 0.05 else f" (was {before:.1f}°)"
         self.sample_fit_status = (
-            f"Fifth-order fit: tilt ({tilt_row:+.1f}, {tilt_col:+.1f}) mrad · "
+            f"Fit through order {self.max_order}: rotation {rotation:.1f}°{moved} · "
+            f"defocus {result['aberrations']['C10_nm']:.1f} nm · tilt ({tilt_row:+.1f}, {tilt_col:+.1f}) mrad · "
             f"depth spread {result['depth_spread_nm']:.1f} nm."
         )
 
@@ -1554,7 +1588,7 @@ class ShowPtycho(anywidget.AnyWidget):
                 (row_start, row_stop, col_start, col_stop), aberrations=self._current(),
                 scan_detector_rotation_deg=self.scan_detector_rotation_deg)
             try:
-                rebuilt.aberrations(search="standard",
+                rebuilt.aberrations(search="standard", max_order=self.max_order,
                                     tilt=True, check_rotation=False, trials=trials, verbose=False)
             except BaseException:
                 rebuilt.direct.close()
@@ -1676,6 +1710,8 @@ class ShowPtycho(anywidget.AnyWidget):
             "display": {"tilt_correction": self.tilt_correction, "max_columns": self.local_tilt_max_columns},
             "scan_shape": list(state["input_scan_shape"]),
             "bright_field_radius_px": state["bright_field_radius_px"],
+            # what the session's fit searched: quantem.gpu's load_calibration rebuilds the search bounds from them
+            "max_order": state["max_order"], "higher_order_limit": state["higher_order_limit"],
             "session_identity": self._calibration_identity,
             "local_tilt": local_tilt,
         }
@@ -1712,9 +1748,12 @@ class ShowPtycho(anywidget.AnyWidget):
             return
         self.save_calibration()
 
-    def save_calibration(self) -> pathlib.Path:
-        """Write the reviewed model to ``calibration.json`` and the displayed phase to
-        ``calibration_phase.png`` in ``save_dir``, as the Save button does.
+    def save_calibration(self, path: str | pathlib.Path | None = None) -> pathlib.Path:
+        """Write the reviewed model to a calibration file and the displayed phase to a PNG beside it, as the
+        Save button does.
+
+        ``path`` is the JSON file to write; omitted, ``calibration.json`` in ``save_dir``. The phase image takes the
+        file's name with ``_phase.png`` (``calibration_phase.png``).
 
         The file is the record ``calibration()`` returns, with its ``id`` and
         ``generated_at_utc``: the displayed aberrations, the Sample panel, the
@@ -1722,36 +1761,42 @@ class ShowPtycho(anywidget.AnyWidget):
         acquisition identity a later session restores from. The session's
         aberrations are set to the saved ones, as known values, so
         ``ptycho.run()`` applies them. Display state (``state_dict``) is
-        not written here.
+        not written here. ``quantem.gpu.DirectPtycho.load_calibration(path)``
+        gives the saved model back as a fit.
 
         Returns
         -------
         pathlib.Path
-            The written ``calibration.json``.
+            The written calibration file.
 
         Examples
         --------
         >>> path = viewer.save_calibration()
+        >>> path = viewer.save_calibration("results/calibration/scan_3.json")
         """
-        self._save_review()
-        return self._calibration_path.resolve()
+        return self._save_review(None if path is None else pathlib.Path(path).expanduser())
 
     def _reviewed_result(self, folder: pathlib.Path):
         """Reconstruct the accepted settings on the scan currently open in the viewer."""
-        review = self._save_review(folder)
+        self._save_review(folder / CALIBRATION_FILENAME)
+        review = json.loads((folder / CALIBRATION_FILENAME).read_text(encoding="utf-8"))
         return self._direct.direct.run(
             aberrations=review["aberrations"], upsample=review["upsample"],
             compute_loss=False, **review["reconstruction"],
         )
 
-    def _save_review(self, folder: pathlib.Path | None = None) -> dict:
-        """Persist one reviewed calibration and return the exact reconstruction settings."""
+    def _save_review(self, path: pathlib.Path | None = None) -> pathlib.Path:
+        """Persist one reviewed calibration at ``path`` (``save_dir``'s ``calibration.json`` when None)."""
         from quantem.gpu.direct_ptycho.persistence import portable_source
 
         if self._direct is None:
             raise ValueError("save_calibration() writes a direct ptychography session's model; open ShowPtycho on a direct ptychography session.")
         if self._region_busy:
             raise RuntimeError("Regional fitting is running. Wait for completion before saving.")
+        if path is None:
+            path = self._calibration_path
+        if path.suffix.lower() != ".json":
+            raise ValueError("Use a JSON filename, for example viewer.save_calibration('calibration.json').")
         aberrations = self._current()
         sample = self._sample() if self.sample_available else None
         higher_order = json.loads(self.higher_order_aberrations_json or "{}")
@@ -1759,17 +1804,14 @@ class ShowPtycho(anywidget.AnyWidget):
         self._direct.store({**higher_order, **aberrations}, loss, sample=sample)
         payload = {**self._calibration_record({**higher_order, **aberrations}, sample, loss),
                    "id": uuid.uuid4().hex[:12], "generated_at_utc": utc_now()}
-        if folder is None:
-            folder = self._calibration_path.parent
-        folder.mkdir(parents=True, exist_ok=True)
-        path = folder / CALIBRATION_FILENAME
-        payload["source"] = portable_source(self._source_path, folder)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload["source"] = portable_source(self._source_path, path.parent)
         write_json(path, payload)
         self.calibration_path = str(path.resolve())
         self.calibration_saved_at = payload["generated_at_utc"]
-        self._write_phase_image(folder / CALIBRATION_IMAGE_FILENAME)
+        self._write_phase_image(path.with_name(f"{path.stem}_phase.png"))
         self.calibration_status = "Saved calibration and phase PNG"
-        return payload
+        return path.resolve()
 
     def _write_phase_image(self, path: pathlib.Path) -> None:
         """Write the displayed phase as ``calibration_phase.png``, the reviewed image beside its calibration.
