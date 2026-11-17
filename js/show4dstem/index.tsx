@@ -8599,7 +8599,7 @@ function Show4DSTEM() {
             onChange={(event) => setViewMode(String(event.target.value))}
             size="small"
             inputProps={{ "aria-label": "Show4DSTEM view mode" }}
-            sx={{ ...themedSelect, minWidth: 82, fontSize: 10 }}
+            sx={{ ...themedSelect, minWidth: 72, fontSize: 10 }}
             MenuProps={themedMenuProps}
           >
             <MenuItem value="single">Single</MenuItem>
@@ -8669,8 +8669,8 @@ function Show4DSTEM() {
               <StopIcon sx={{ fontSize: 16 }} />
             </IconButton>
           </Stack>
-          <Slider value={chosenFrameIdx} onChange={(_, value) => { setFramePlaying(false); setFrameIdx(value as number); }} min={0} max={Math.max(0, nFrames - 1)} size="small" aria-label={frameSliderAriaLabel} sx={{ flex: "0 1 220px", minWidth: 60, "& .MuiSlider-thumb": { width: 10, height: 10 } }} />
-          <Typography sx={{ ...themedTypography.value, minWidth: 24, textAlign: "right", flexShrink: 0, whiteSpace: "nowrap" }}>{frameLabels && frameLabels.length > frameIdx ? frameLabels[frameIdx] : `${frameIdx + 1}/${nFrames}`}</Typography>
+          <Slider value={chosenFrameIdx} onChange={(_, value) => { setFramePlaying(false); setFrameIdx(value as number); }} min={0} max={Math.max(0, nFrames - 1)} size="small" aria-label={frameSliderAriaLabel} sx={{ flex: "0 1 auto", width: 200, minWidth: 60, "& .MuiSlider-thumb": { width: 10, height: 10 } }} />
+          <Typography sx={{ ...themedTypography.value, minWidth: 16, textAlign: "right", flexShrink: 0, whiteSpace: "nowrap" }}>{frameLabels && frameLabels.length > frameIdx ? frameLabels[frameIdx] : `${frameIdx + 1}/${nFrames}`}</Typography>
           <Typography sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted, flexShrink: 0 }}>fps</Typography>
           <Slider value={frameFps} min={1} max={30} step={1} onChange={(_, value) => setFrameFps(value as number)} size="small" sx={{ ...sliderStyles.small, width: 35, flexShrink: 0 }} />
           <Typography sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted, minWidth: 14, flexShrink: 0 }}>{Math.round(frameFps)}</Typography>
