@@ -180,10 +180,7 @@ def profile() -> None:
     else:
         print("webgpu kernels  (frontend not built)")
     if torch.cuda.is_available():
-        # the model family names the card; the edition suffix only lengthens the line
-        cuda_name = torch.cuda.get_device_name(0).strip()
-        model_family = re.match(r"^(NVIDIA RTX PRO \d+)", cuda_name)
-        device = f"cuda ({model_family.group(1) if model_family else cuda_name})"
+        device = "cuda"
     elif torch.backends.mps.is_available():
         device = "mps (Apple)"
     else:
@@ -193,16 +190,14 @@ def profile() -> None:
         count = torch.cuda.device_count()
         visible = os.environ.get("CUDA_VISIBLE_DEVICES", "all")
         print(f"GPUs            {count} visible (CUDA_VISIBLE_DEVICES={visible})")
-        for index in range(count):
-            free, total = torch.cuda.mem_get_info(index)
-            print(
-                f"  GPU{index}          {(total - free) / 1e9:5.1f} used / "
-                f"{total / 1e9:.0f} GB  ({free / 1e9:.0f} free)"
-            )
-        print(
-            f"  torch pool    {torch.cuda.memory_allocated() / 1e9:.1f} live / "
-            f"{torch.cuda.memory_reserved() / 1e9:.1f} reserved GB"
-        )
+        # Allocator statistics are process-local and do not open a CUDA context on idle GPUs.
+        if torch.cuda.is_initialized():
+            for index in range(count):
+                reserved = torch.cuda.memory_reserved(index)
+                if reserved:
+                    live = torch.cuda.memory_allocated(index)
+                    name = torch.cuda.get_device_name(index)
+                    print(f"  cuda:{index} {name}    {live / 1e9:.1f} live / {reserved / 1e9:.1f} reserved GB")
     elif torch.backends.mps.is_available():
         current = torch.mps.current_allocated_memory() / 1e9
         driver = torch.mps.driver_allocated_memory() / 1e9
