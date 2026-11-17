@@ -3,6 +3,7 @@ import { captureGpuCanvas } from "./captureGpuCanvas";
 import { createLatestFrameQueue } from "./latestFrameQueue";
 import { chosenFrameIndex, createScanChoice } from "./scanChoice";
 import { formatMean, formatStat } from "./statText";
+import { createLiveImage, positionValues, type PositionsMessage } from "./liveImagePositions";
 import {
   CONTRAST_PERCENTILES, chosenPercentiles, contrastRangeChoice, handlePositions, percentilesLabel,
   percentilesOfChoice, type Percentiles,
@@ -2370,7 +2371,53 @@ function Show4DSTEM() {
                                         full: images.upsampled?.data ?? null };
     return images;
   }, [preview, viSource]);
-  const liveImage = liveImages?.image ?? null;
+  // The detector image (BF, ABF, ADF, a dragged area) of the scan arriving also comes position by position,
+  // about 60 batches a second, as `live_image_positions` messages. Every message is written into one array
+  // as it arrives (not through React state, which keeps only the newest) and drawn once per animation
+  // frame; stats, histogram and the rest of the view follow a few times a second (liveImageTick).
+  const liveImagePositions = React.useMemo(() => createLiveImage(), []);
+  const [liveImageTick, setLiveImageTick] = React.useState(0);
+  const drawLiveImageRef = React.useRef<(() => void) | null>(null);
+  const liveImageUnderRef = React.useRef<Float32Array | null>(null);
+  liveImageUnderRef.current = liveImages && !liveImages.upsampled ? liveImages.grid : null;
+  React.useEffect(() => {
+    let frame = 0, drawn = -1, ticked = 0, settle = 0;
+    const draw = () => {
+      frame = 0;
+      if (liveImagePositions.version() === drawn) return;
+      drawn = liveImagePositions.version();
+      drawLiveImageRef.current?.();
+      const now = performance.now();
+      if (now - ticked >= 250) { ticked = now; setLiveImageTick(tick => tick + 1); }
+    };
+    const receive = (content: PositionsMessage, buffers?: DataView[]) => {
+      if (content?.type !== "live_image_positions") return;
+      const values = positionValues(buffers?.[0], content.count);
+      if (!values || !liveImagePositions.write(content, values, () => liveImageUnderRef.current)) return;
+      if (!frame) frame = requestAnimationFrame(draw);
+      // The last batch of a scan also reaches the stats and the histogram.
+      window.clearTimeout(settle);
+      settle = window.setTimeout(() => setLiveImageTick(tick => tick + 1), 300);
+    };
+    model.on("msg:custom", receive);
+    return () => {
+      model.off("msg:custom", receive);
+      if (frame) cancelAnimationFrame(frame);
+      window.clearTimeout(settle);
+    };
+  }, [liveImagePositions, model]);
+  const liveScan = preview?.scan;
+  const liveScanPositions = (preview?.total ?? 0) * (preview?.cols ?? 0);
+  const liveDetectorImage = React.useMemo(() => {
+    const data = liveImagePositions.data();
+    return liveScan && liveImagePositions.scan() === liveScan && data && data.length === liveScanPositions
+      ? new DataView(data.buffer) : null;
+    // liveImageTick: a new view of the same array, so what reads the image (stats, histogram) reads it again
+  }, [liveImagePositions, liveImageTick, liveScan, liveScanPositions]);
+  // Direct ptycho keeps coming with the preview's rows; every detector image takes the positions.
+  const liveImagePositionsShown = Boolean(liveImages && !liveImages.upsampled && liveDetectorImage
+    && !(viSource === "Direct" && preview?.mode === "Direct"));
+  const liveImage = liveImagePositionsShown ? liveDetectorImage : liveImages?.image ?? null;
   // A scan is arriving: the view shows it, and the controls that choose another scan wait.
   const streaming = liveImage !== null;
   const [viDetailState] = useModelState<{
@@ -5873,8 +5920,9 @@ function Show4DSTEM() {
   // useLayoutEffect prevents black flash when canvas dimensions change (resize)
   React.useLayoutEffect(() => paintDpCanvas(), [dpZoom, dpPanX, dpPanY]);
 
-  // Expensive: VI colormap + data processing → cached offscreen canvas
-  React.useEffect(() => {
+  // Expensive: VI colormap + data processing → cached offscreen canvas. `paintNow`: the positions of the
+  // scan arriving are drawn from their animation frame, without a render in between.
+  const drawViOffscreen = (paintNow: boolean) => {
     if (!rawVirtualImageRef.current) return;
     // The GPU canvas is hidden while a live row preview is shown (viGpuVisible), so the preview is drawn here:
     // skipping it left BF, ABF and ADF black for the whole of every streamed scan.
@@ -5900,7 +5948,12 @@ function Show4DSTEM() {
     // to apply the WRONG normalization range and produce a uniform white/black
     // VI panel until comm catches up. findDataRange on a scan-shape buffer
     // (~64K-256K floats) is sub-millisecond.
-    const range = findDataRange(scaled);
+    // After the detector area moved during a scan, the positions not yet summed over the new area are on
+    // another scale: the contrast is that of the positions already summed.
+    const summed = liveImagePositionsShown && liveImagePositions.moved() && !viDetail
+      ? liveImagePositions.received() : 0;
+    const ranged = summed > 0 && summed < scaled.length ? scaled.subarray(0, summed) : scaled;
+    const range = findDataRange(ranged);
     let dataMin = range.min;
     let dataMax = range.max;
     if (isDpcGpuSource(activeViSource)) {
@@ -5920,7 +5973,7 @@ function Show4DSTEM() {
         vmax = traitViVmax;
       }
     } else if (viPercentiles) {
-      ({ vmin, vmax } = percentileClip(scaled, viPercentiles[0], viPercentiles[1]));
+      ({ vmin, vmax } = percentileClip(ranged, viPercentiles[0], viPercentiles[1]));
       const span = dataMax - dataMin;
       if (span > 0) {
         const lo = Math.max(0, Math.min(100, ((vmin - dataMin) / span) * 100));
@@ -5954,8 +6007,10 @@ function Show4DSTEM() {
     }
     applyColormap(scaled, imageData.data, lut, vmin, vmax);
     offCtx.putImageData(imageData, 0, 0);
-    setViOffscreenVersion(version => version + 1);
-  }, [activeViSource, liveImage, compareMode, displayedVirtualImageBytes, shapeRows, shapeCols, viDetail, viGpuVersion, viColormap, viVminPct, viVmaxPct, viScaleMode, traitViVmin, traitViVmax, viPercentiles]);
+    if (paintNow) paintViCanvas(); else setViOffscreenVersion(version => version + 1);
+  };
+  React.useEffect(() => drawViOffscreen(false),
+    [activeViSource, liveImage, compareMode, displayedVirtualImageBytes, shapeRows, shapeCols, viDetail, viGpuVersion, viColormap, viVminPct, viVmaxPct, viScaleMode, traitViVmin, traitViVmax, viPercentiles]);
 
   // Present resident reductions directly, including while the pointer is held.
   // Offscreen bitmap snapshots can be black and can lag the latest detector. The
@@ -6085,7 +6140,7 @@ function Show4DSTEM() {
   ]);
 
   // Cheap: VI zoom/pan redraw is one drawImage from the cached offscreen canvas
-  React.useLayoutEffect(() => {
+  const paintViCanvas = () => {
     if (!liveImage && !compareMode && !viDetail && viGpuImageRef.current?.source === activeViSource && viGpuRetainedReady) return;
     const offscreen = viOffscreenRef.current;
     if (!offscreen || !virtualCanvasRef.current) return;
@@ -6102,7 +6157,11 @@ function Show4DSTEM() {
     ctx.scale(transform.scale, transform.scale);
     ctx.drawImage(offscreen, 0, 0);
     ctx.restore();
-  }, [activeViSource, liveImage, compareMode, viDetail, viFactor, viGpuRetainedReady, viOffscreenVersion, viZoom, viPanX, viPanY, viSmooth]);
+  };
+  React.useLayoutEffect(paintViCanvas,
+    [activeViSource, liveImage, compareMode, viDetail, viFactor, viGpuRetainedReady, viOffscreenVersion, viZoom, viPanX, viPanY, viSmooth]);
+  // What one animation frame draws while positions arrive: the detector image as it is now.
+  drawLiveImageRef.current = liveImagePositionsShown && !compareMode ? () => drawViOffscreen(true) : null;
 
   // Compute FFT (expensive and async: only re-run on data/GPU changes)
   const fftRealRef = React.useRef<Float32Array | null>(null);
