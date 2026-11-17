@@ -4864,16 +4864,37 @@ function Show4DSTEM() {
   ]);
   // The image in view at full resolution when it is k x the scan grid: the live Direct preview, or attach()'s
   // image of the shown scan. Hover, profile and FFT keep reading the scan-grid image above.
+  // Details already received, by source and scan name, so playback and the dataset slider go straight to a scan's
+  // full-resolution image. A scan not received yet keeps the last image until the kernel answers (it always does:
+  // that scan's image or an empty detail), so a step never flashes the scan-grid image at 1x first.
+  const viDetailCacheRef = React.useRef<Map<string, UpsampledImage>>(new Map());
+  const viDetailHeldRef = React.useRef<{ shape: string; image: UpsampledImage } | null>(null);
   const viDetail = React.useMemo<UpsampledImage | null>(() => {
     if (compareMode) return null;
     if (streaming) return liveDetail;
+    const cache = viDetailCacheRef.current;
     const detail = viDetailState;
-    if (!detail?.image || !detail.factor || detail.factor < 2 || detail.label !== activeViSource
-        || detail.frame !== frameIdx || detail.rows !== shapeRows * detail.factor || detail.cols !== shapeCols * detail.factor
-        || detail.image.byteLength !== detail.rows * detail.cols * 4) return null;
-    return { data: new Float32Array(detail.image.buffer, detail.image.byteOffset, detail.rows * detail.cols),
-             factor: detail.factor, rows: detail.rows, cols: detail.cols };
-  }, [activeViSource, compareMode, frameIdx, liveDetail, shapeCols, shapeRows, streaming, viDetailState]);
+    const shape = `${activeViSource}|${shapeRows}x${shapeCols}`;
+    const scanKey = (frame: number) => `${shape}|${frame}|${frameNames?.[frame] ?? ""}`;
+    const valid = Boolean(detail?.image && detail.factor && detail.factor >= 2 && detail.label === activeViSource
+      && detail.rows === shapeRows * detail.factor && detail.cols === shapeCols * detail.factor
+      && detail.image.byteLength === detail.rows * detail.cols * 4);
+    if (valid && detail?.image && detail.frame !== undefined && !cache.has(scanKey(detail.frame))) {
+      cache.set(scanKey(detail.frame), {
+        data: new Float32Array(detail.image.buffer.slice(detail.image.byteOffset,
+                                                         detail.image.byteOffset + detail.image.byteLength)),
+        factor: detail.factor!, rows: detail.rows!, cols: detail.cols! });
+      while (cache.size > 12) cache.delete(cache.keys().next().value as string);
+    }
+    if (!valid) viDetailHeldRef.current = null;                // no full-resolution image for this scan
+    const wanted = cache.get(scanKey(frameIdx));
+    if (wanted) {
+      viDetailHeldRef.current = { shape, image: wanted };
+      return wanted;
+    }
+    const held = viDetailHeldRef.current;
+    return held && held.shape === shape && valid ? held.image : null;
+  }, [activeViSource, compareMode, frameIdx, frameNames, liveDetail, shapeCols, shapeRows, streaming, viDetailState]);
   const viFactor = viDetail?.factor ?? 1;
   const comparePageButtonItems = React.useMemo<(number | "gap")[]>(() => {
     if (activeComparePageCount <= 8) {
@@ -8827,10 +8848,10 @@ function Show4DSTEM() {
             </IconButton>
           </Stack>
           <Slider value={chosenFrameIdx} onChange={(_, value) => { setFramePlaying(false); setFrameIdx(value as number); }} min={0} max={Math.max(0, nFrames - 1)} size="small" aria-label={frameSliderAriaLabel} sx={{ flex: "0 1 auto", width: 200, minWidth: 60, "& .MuiSlider-thumb": { width: 10, height: 10 } }} />
-          <Typography sx={{ ...themedTypography.value, minWidth: 16, textAlign: "right", flexShrink: 0, whiteSpace: "nowrap" }}>{frameLabels && frameLabels.length > frameIdx ? frameLabels[frameIdx] : `${frameIdx + 1}/${nFrames}`}</Typography>
-          <Typography sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted, flexShrink: 0 }}>fps</Typography>
-          <Slider value={frameFps} min={1} max={30} step={1} onChange={(_, value) => setFrameFps(value as number)} size="small" sx={{ ...sliderStyles.small, width: 35, flexShrink: 0 }} />
-          <Typography sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted, minWidth: 14, flexShrink: 0 }}>{Math.round(frameFps)}</Typography>
+          <Typography sx={{ ...themedTypography.value, minWidth: 16, textAlign: "right", flexShrink: 0, whiteSpace: "nowrap", mr: "10px" }}>{frameLabels && frameLabels.length > frameIdx ? frameLabels[frameIdx] : `${frameIdx + 1}/${nFrames}`}</Typography>
+          {/* The rate reads "5 fps" after its slider: with "fps" right after the dataset's label, "11 fps" read as the rate */}
+          <Slider value={frameFps} min={1} max={30} step={1} onChange={(_, value) => setFrameFps(value as number)} size="small" aria-label="Frames per second" sx={{ ...sliderStyles.small, width: 35, flexShrink: 0 }} />
+          <Typography sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted, minWidth: 34, flexShrink: 0, whiteSpace: "nowrap" }}>{Math.round(frameFps)} fps</Typography>
           <Typography sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted, flexShrink: 0 }}>Loop</Typography>
           <Switch size="small" checked={frameLoop} onChange={() => setFrameLoop(!frameLoop)} sx={{ ...switchStyles.small, flexShrink: 0 }} slotProps={{ input: { "aria-label": "Loop frames" } }} />
           <Typography sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted, flexShrink: 0 }}>Bounce</Typography>
