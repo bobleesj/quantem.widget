@@ -3,6 +3,7 @@ import { captureGpuCanvas } from "./captureGpuCanvas";
 import { createLatestFrameQueue } from "./latestFrameQueue";
 import { chosenFrameIndex, createScanChoice } from "./scanChoice";
 import { formatMean, formatStat } from "./statText";
+import { positionLabelAnchor, shortScanName } from "./viewLabels";
 import { createLiveImage, positionValues, type PositionsMessage } from "./liveImagePositions";
 import {
   CONTRAST_PERCENTILES, chosenPercentiles, contrastRangeChoice, handlePositions, percentilesLabel,
@@ -577,8 +578,7 @@ function drawViPositionMarker(
     ctx.font = "11px monospace";
     ctx.textBaseline = "bottom";
     const textWidth = ctx.measureText(label).width;
-    const labelX = Math.min(cssWidth - textWidth - 4, screenX + crosshairSize + 4);
-    const labelY = Math.max(13, screenY - 4);
+    const { x: labelX, y: labelY } = positionLabelAnchor(screenX, screenY, textWidth, cssWidth, cssHeight, crosshairSize + 4);
     ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
     ctx.fillRect(labelX - 2, labelY - 12, textWidth + 4, 13);
     ctx.fillStyle = isDragging ? "rgba(255, 255, 0, 0.95)" : "rgba(255, 160, 160, 0.95)";
@@ -2528,7 +2528,9 @@ function Show4DSTEM() {
   const chosenFrameIdx = chosenFrameIndex(chosenSource, streamSourceIds, frameIdx);
   const [nFrames] = useModelState<number>("n_frames");
   const [frameDimLabel] = useModelState<string>("frame_dim_label");
-  const [frameLabels] = useModelState<string[]>("frame_labels");
+  // Printed by number ("41" for "series_41"); the scan's identity is `_stream_source_ids`, not its label.
+  const [frameNames] = useModelState<string[]>("frame_labels");
+  const frameLabels = React.useMemo(() => frameNames?.map(shortScanName), [frameNames]);
   // Scans of different sizes: one group per size, one button each (11-16)
   const [sizeGroups] = useModelState<string[]>("size_groups");
   const [sizeGroup, setSizeGroup] = useModelState<number>("size_group");
@@ -7738,7 +7740,7 @@ function Show4DSTEM() {
       size="small"
       title="Contrast range: all of the data, or the data between two percentiles. The two handles on the histogram set any other range."
       inputProps={{ "aria-label": `${what} contrast range` }}
-      sx={{ ...themedSelect, width: 110, fontSize: 10 }}
+      sx={{ ...themedSelect, minWidth: 0, width: 96, fontSize: 10 }}
       MenuProps={themedMenuProps}
     >
       <MenuItem value="full">Full range</MenuItem>
@@ -7829,7 +7831,7 @@ function Show4DSTEM() {
     textAlign: "right",
   };
   const mobileOptionsPanelSx = (open: boolean) => ({
-    mt: `${SPACING.SM}px`,
+    mt: `${SPACING.XS}px`,
     display: "grid",
     gridTemplateRows: "1fr",
     opacity: 1,
@@ -7841,11 +7843,16 @@ function Show4DSTEM() {
       pointerEvents: open ? "auto" : "none",
     },
   });
+  // The Range menu and its histogram sit side by side, beside the panel's other controls.
+  const histogramBesideSx = {
+    display: "flex", flexDirection: "row", alignItems: "center", gap: `${SPACING.XS}px`, flex: "0 0 auto", maxWidth: "100%",
+  } as const;
   const mobileOptionsContentSx = {
     minHeight: 0,
     overflow: "hidden",
     display: "flex",
-    gap: `${SPACING.SM}px`,
+    gap: `${SPACING.XS}px`,
+    alignItems: "center",
     width: "100%",
     maxWidth: "100%",
     boxSizing: "border-box",
@@ -8522,7 +8529,7 @@ function Show4DSTEM() {
     themedMenuProps, themedSelect, themedTypography, title, viPanX, viPanY, viProfileActive, viZoom
   ]);
   const viControlRows = React.useMemo(() => (
-    <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: "1 1 220px", minWidth: 0, justifyContent: "center" }}>
+    <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: "0 1 auto", minWidth: 0, justifyContent: "center" }}>
       {/* Row 1: ROI selector */}
       <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
         <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>ROI</Typography>
@@ -8568,6 +8575,99 @@ function Show4DSTEM() {
     themeColors, themedMenuProps, themedSelect, themedTypography, viColormap, viRoiMode, viRoiRadius,
     viRoiReduce, viScaleMode
   ]);
+  // View and the Dataset controls: one row under the image, no wider than it. While a scan streams the
+  // view stays on the scan arriving: the row is hidden in place, so nothing moves when a scan starts or ends.
+  const scanChoiceRows = controlsVisible && nFrames > 1 && (<Box data-show4dstem-scan-rows aria-hidden={streaming || undefined}
+        sx={streaming ? { visibility: "hidden", pointerEvents: "none" } : undefined}>
+        <Box sx={{ ...controlRow, columnGap: `${SPACING.XS}px`, rowGap: "2px", mt: `${SPACING.XS}px`, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
+          <Typography sx={{ ...themedTypography.label, fontSize: 10, flexShrink: 0 }}>View</Typography>
+          <Select
+            value={viewMode}
+            onChange={(event) => setViewMode(String(event.target.value))}
+            size="small"
+            inputProps={{ "aria-label": "Show4DSTEM view mode" }}
+            sx={{ ...themedSelect, minWidth: 82, fontSize: 10 }}
+            MenuProps={themedMenuProps}
+          >
+            <MenuItem value="single">Single</MenuItem>
+            <MenuItem value="multiple">Multiple</MenuItem>
+          </Select>
+          {compareMode && (
+            <>
+              <Typography sx={{ ...themedTypography.label, fontSize: 10, flexShrink: 0 }}>DP</Typography>
+              <Select
+                value={compareDpMode || "average"}
+                onChange={(event) => setCompareDpMode(String(event.target.value))}
+                size="small"
+                inputProps={{ "aria-label": "Show4DSTEM multiple DP source" }}
+                sx={{ ...themedSelect, minWidth: 82, fontSize: 10 }}
+                MenuProps={themedMenuProps}
+              >
+                <MenuItem value="average">Average</MenuItem>
+                <MenuItem value="selected">Selected</MenuItem>
+                <MenuItem value="all">All (live)</MenuItem>
+              </Select>
+              <Tooltip title={compareAllGroups ? "Switch to Paged to reorder panels" : compareReorderMode ? "Finish reordering" : "Reorder multiple panels"}>
+                <IconButton
+                  size="small"
+                  aria-label="Show4DSTEM multiple reorder"
+                  className="show4dstem-compare-reorder"
+                  disabled={compareAllGroups}
+                  onClick={() => {
+                    setCompareReorderMode((value) => !value);
+                    setComparePendingMoveFrame(null);
+                    setCompareDraggingFrame(null);
+                  }}
+                  sx={{ color: compareAllGroups ? themeColors.textMuted : compareReorderMode ? themeColors.accent : themeColors.textMuted, p: 0.25 }}
+                >
+                  <DragIndicatorIcon sx={{ fontSize: 17 }} />
+                </IconButton>
+              </Tooltip>
+              <Button
+                size="small"
+                sx={compactButton}
+                className="show4dstem-compare-reset"
+                disabled={
+                  !(comparePanelOrder || []).length
+                  && !(compareHiddenPanels || []).length
+                  && !(compareStarredPanels || []).length
+                  && !compareAllGroups
+                  && activeComparePageIdx === 0
+                }
+                onClick={resetComparePanelState}
+              >
+                Reset
+              </Button>
+            </>
+          )}
+          {!compareMode && <>
+          <Typography sx={{ ...themedTypography.label, fontSize: 10, flexShrink: 0 }}>{frameDimLabel}:</Typography>
+          <Stack direction="row" spacing={0} sx={{ flexShrink: 0 }}>
+            <IconButton size="small" aria-label="Show4DSTEM play frames backward" onClick={() => { setFrameReverse(true); setFramePlaying(true); }} sx={{ color: frameReverse && framePlaying ? themeColors.accent : themeColors.textMuted, p: 0.25 }}>
+              <FastRewindIcon sx={{ fontSize: 18 }} />
+            </IconButton>
+            <IconButton size="small" aria-label={framePlaying ? "Show4DSTEM pause frames" : "Show4DSTEM play frames"} onClick={() => setFramePlaying(!framePlaying)} sx={{ color: themeColors.accent, p: 0.25 }}>
+              {framePlaying ? <PauseIcon sx={{ fontSize: 18 }} /> : <PlayArrowIcon sx={{ fontSize: 18 }} />}
+            </IconButton>
+            <IconButton size="small" aria-label="Show4DSTEM play frames forward" onClick={() => { setFrameReverse(false); setFramePlaying(true); }} sx={{ color: !frameReverse && framePlaying ? themeColors.accent : themeColors.textMuted, p: 0.25 }}>
+              <FastForwardIcon sx={{ fontSize: 18 }} />
+            </IconButton>
+            <IconButton size="small" aria-label="Show4DSTEM stop frames" onClick={() => { setFramePlaying(false); setFrameIdx(0); }} sx={{ color: themeColors.textMuted, p: 0.25 }}>
+              <StopIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          </Stack>
+          <Slider value={chosenFrameIdx} onChange={(_, value) => { setFramePlaying(false); setFrameIdx(value as number); }} min={0} max={Math.max(0, nFrames - 1)} size="small" aria-label={frameSliderAriaLabel} sx={{ flex: "1 1 100px", maxWidth: 220, minWidth: 60, "& .MuiSlider-thumb": { width: 10, height: 10 } }} />
+          <Typography sx={{ ...themedTypography.value, minWidth: 24, textAlign: "right", flexShrink: 0, whiteSpace: "nowrap" }}>{frameLabels && frameLabels.length > frameIdx ? frameLabels[frameIdx] : `${frameIdx + 1}/${nFrames}`}</Typography>
+          <Typography sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted, flexShrink: 0 }}>fps</Typography>
+          <Slider value={frameFps} min={1} max={30} step={1} onChange={(_, value) => setFrameFps(value as number)} size="small" sx={{ ...sliderStyles.small, width: 35, flexShrink: 0 }} />
+          <Typography sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted, minWidth: 14, flexShrink: 0 }}>{Math.round(frameFps)}</Typography>
+          <Typography sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted, flexShrink: 0 }}>Loop</Typography>
+          <Switch size="small" checked={frameLoop} onChange={() => setFrameLoop(!frameLoop)} sx={{ ...switchStyles.small, flexShrink: 0 }} slotProps={{ input: { "aria-label": "Loop frames" } }} />
+          <Typography sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted, flexShrink: 0 }}>Bounce</Typography>
+          <Switch size="small" checked={frameBoomerang} onChange={() => setFrameBoomerang(!frameBoomerang)} sx={{ ...switchStyles.small, flexShrink: 0 }} slotProps={{ input: { "aria-label": "Bounce frames" } }} />
+          </>}
+        </Box>
+      </Box>);
   if (nFrames === 0 && !liveImage) {
     return (
       <Box ref={rootRef} className="show4dstem-root" sx={{ p: "4px", bgcolor: themeColors.bg, color: themeColors.text }}>
@@ -8824,7 +8924,7 @@ function Show4DSTEM() {
                   {/* Left: two rows of controls */}
                   {dpControlRows}
                   {/* Right: Histogram spanning both rows */}
-                  <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", flex: "0 0 auto", maxWidth: "100%" }}>
+                  <Box sx={histogramBesideSx}>
                     {contrastRangeMenu("Pattern", contrastRangeChoice(dpPercentiles, dpVminPct, dpVmaxPct), chooseDpContrastRange)}
                     <Histogram data={dpHistogramData} vminPct={dpVminPct} vmaxPct={dpVmaxPct} onRangeChange={moveDpContrastHandles} width={110} height={40} sliderInset={6} theme={themeInfo.theme} dataMin={dpStats[1]} dataMax={dpStats[2]}
                       fixedRange={traitDpVmin != null && traitDpVmax != null ? [traitDpVmin, traitDpVmax] : undefined} />
@@ -9180,7 +9280,7 @@ function Show4DSTEM() {
                   {/* Left: Two rows of controls */}
                   {viControlRows}
                   {/* Right: Histogram spanning both rows */}
-                  <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", flex: "0 0 auto", maxWidth: "100%" }}>
+                  <Box sx={histogramBesideSx}>
                     {contrastRangeMenu("Image", contrastRangeChoice(viPercentiles, viVminPct, viVmaxPct), chooseViContrastRange)}
                     <Subscribe store={viDisplayStore}>{(vi) => (
                     <Histogram data={vi.histogramData} bins={vi.histogramBins} vminPct={viVminPct} vmaxPct={viVmaxPct} onRangeChange={moveViContrastHandles} width={110} height={40} sliderInset={6} theme={themeInfo.theme} dataMin={vi.dataMin} dataMax={vi.dataMax}
@@ -9189,6 +9289,7 @@ function Show4DSTEM() {
                   </Box>
                 </Box>
               </Box>
+              {scanChoiceRows}
               {showDirectCalibrationPanel && (
                 <Box sx={{ mt: `${SPACING.XS}px`, width: "100%", maxWidth: viCanvasWidth, boxSizing: "border-box" }}>
                   <Button
@@ -9463,104 +9564,6 @@ function Show4DSTEM() {
         )}
       </Stack>
 
-      {/* BOTTOM CONTROLS */}
-
-      {/* Frame controls (5D time/tilt series): matches Show3D playback */}
-      {/* While a scan streams the view stays on the scan arriving: View and the Dataset rows are hidden.
-          They keep their place, so nothing above or below moves when a scan starts or ends. */}
-      {controlsVisible && nFrames > 1 && (<Box data-show4dstem-scan-rows aria-hidden={streaming || undefined}
-        sx={streaming ? { visibility: "hidden", pointerEvents: "none" } : undefined}>
-        <Box sx={{ ...controlRow, ...(compareMode ? {} : { width: "100%" }), mt: `${SPACING.SM}px`, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-          <Typography sx={{ ...themedTypography.label, fontSize: 10, flexShrink: 0 }}>View</Typography>
-          <Select
-            value={viewMode}
-            onChange={(event) => setViewMode(String(event.target.value))}
-            size="small"
-            inputProps={{ "aria-label": "Show4DSTEM view mode" }}
-            sx={{ ...themedSelect, minWidth: 82, fontSize: 10 }}
-            MenuProps={themedMenuProps}
-          >
-            <MenuItem value="single">Single</MenuItem>
-            <MenuItem value="multiple">Multiple</MenuItem>
-          </Select>
-          {compareMode && (
-            <>
-              <Typography sx={{ ...themedTypography.label, fontSize: 10, flexShrink: 0 }}>DP</Typography>
-              <Select
-                value={compareDpMode || "average"}
-                onChange={(event) => setCompareDpMode(String(event.target.value))}
-                size="small"
-                inputProps={{ "aria-label": "Show4DSTEM multiple DP source" }}
-                sx={{ ...themedSelect, minWidth: 82, fontSize: 10 }}
-                MenuProps={themedMenuProps}
-              >
-                <MenuItem value="average">Average</MenuItem>
-                <MenuItem value="selected">Selected</MenuItem>
-                <MenuItem value="all">All (live)</MenuItem>
-              </Select>
-              <Tooltip title={compareAllGroups ? "Switch to Paged to reorder panels" : compareReorderMode ? "Finish reordering" : "Reorder multiple panels"}>
-                <IconButton
-                  size="small"
-                  aria-label="Show4DSTEM multiple reorder"
-                  className="show4dstem-compare-reorder"
-                  disabled={compareAllGroups}
-                  onClick={() => {
-                    setCompareReorderMode((value) => !value);
-                    setComparePendingMoveFrame(null);
-                    setCompareDraggingFrame(null);
-                  }}
-                  sx={{ color: compareAllGroups ? themeColors.textMuted : compareReorderMode ? themeColors.accent : themeColors.textMuted, p: 0.25 }}
-                >
-                  <DragIndicatorIcon sx={{ fontSize: 17 }} />
-                </IconButton>
-              </Tooltip>
-              <Button
-                size="small"
-                sx={compactButton}
-                className="show4dstem-compare-reset"
-                disabled={
-                  !(comparePanelOrder || []).length
-                  && !(compareHiddenPanels || []).length
-                  && !(compareStarredPanels || []).length
-                  && !compareAllGroups
-                  && activeComparePageIdx === 0
-                }
-                onClick={resetComparePanelState}
-              >
-                Reset
-              </Button>
-            </>
-          )}
-          {!compareMode && <>
-          <Typography sx={{ ...themedTypography.label, fontSize: 10, flexShrink: 0 }}>{frameDimLabel}:</Typography>
-          <Stack direction="row" spacing={0} sx={{ flexShrink: 0 }}>
-            <IconButton size="small" aria-label="Show4DSTEM play frames backward" onClick={() => { setFrameReverse(true); setFramePlaying(true); }} sx={{ color: frameReverse && framePlaying ? themeColors.accent : themeColors.textMuted, p: 0.25 }}>
-              <FastRewindIcon sx={{ fontSize: 18 }} />
-            </IconButton>
-            <IconButton size="small" aria-label={framePlaying ? "Show4DSTEM pause frames" : "Show4DSTEM play frames"} onClick={() => setFramePlaying(!framePlaying)} sx={{ color: themeColors.accent, p: 0.25 }}>
-              {framePlaying ? <PauseIcon sx={{ fontSize: 18 }} /> : <PlayArrowIcon sx={{ fontSize: 18 }} />}
-            </IconButton>
-            <IconButton size="small" aria-label="Show4DSTEM play frames forward" onClick={() => { setFrameReverse(false); setFramePlaying(true); }} sx={{ color: !frameReverse && framePlaying ? themeColors.accent : themeColors.textMuted, p: 0.25 }}>
-              <FastForwardIcon sx={{ fontSize: 18 }} />
-            </IconButton>
-            <IconButton size="small" aria-label="Show4DSTEM stop frames" onClick={() => { setFramePlaying(false); setFrameIdx(0); }} sx={{ color: themeColors.textMuted, p: 0.25 }}>
-              <StopIcon sx={{ fontSize: 16 }} />
-            </IconButton>
-          </Stack>
-          <Slider value={chosenFrameIdx} onChange={(_, value) => { setFramePlaying(false); setFrameIdx(value as number); }} min={0} max={Math.max(0, nFrames - 1)} size="small" aria-label={frameSliderAriaLabel} sx={{ flex: 1, minWidth: 60, "& .MuiSlider-thumb": { width: 10, height: 10 } }} />
-          <Typography sx={{ ...themedTypography.value, minWidth: 50, textAlign: "right", flexShrink: 0 }}>{frameLabels && frameLabels.length > frameIdx ? frameLabels[frameIdx] : `${frameIdx + 1}/${nFrames}`}</Typography>
-          </>}
-        </Box>
-        {!compareMode && <Box sx={{ ...controlRow, mt: `${SPACING.XS}px`, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-          <Typography sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted, flexShrink: 0 }}>fps</Typography>
-          <Slider value={frameFps} min={1} max={30} step={1} onChange={(_, value) => setFrameFps(value as number)} size="small" sx={{ ...sliderStyles.small, width: 35, flexShrink: 0 }} />
-          <Typography sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted, minWidth: 14, flexShrink: 0 }}>{Math.round(frameFps)}</Typography>
-          <Typography sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted, flexShrink: 0 }}>Loop</Typography>
-          <Switch size="small" checked={frameLoop} onChange={() => setFrameLoop(!frameLoop)} sx={{ ...switchStyles.small, flexShrink: 0 }} slotProps={{ input: { "aria-label": "Loop frames" } }} />
-          <Typography sx={{ ...themedTypography.label, fontSize: 10, color: themeColors.textMuted, flexShrink: 0 }}>Bounce</Typography>
-          <Switch size="small" checked={frameBoomerang} onChange={() => setFrameBoomerang(!frameBoomerang)} sx={{ ...switchStyles.small, flexShrink: 0 }} slotProps={{ input: { "aria-label": "Bounce frames" } }} />
-        </Box>}
-      </Box>)}
     </Box>
   );
 }
