@@ -85,7 +85,7 @@ import {
   type DetectorResizeStart,
   type DetectorRoiMode,
 } from "./detectorInteraction";
-import { livePreviewImages, upsampledTransform, type UpsampledImage } from "./upsampledImage";
+import { livePreviewImages, upsampledTransform, type LiveUnder, type UpsampledImage } from "./upsampledImage";
 
 // A .qem viewer URL ends in the exported file name, which also names a granted local file.
 const qemFileName = (url: string): string => url.slice(url.lastIndexOf("/") + 1);
@@ -2279,13 +2279,21 @@ function Show4DSTEM() {
   const [liveStream] = useModelState<boolean>("live_phase_stream");
   const [preview] = useModelState<{
     rows?: number; cols?: number; total?: number; detRows?: number; detCols?: number;
-    mode?: string; upsample?: number; phase?: DataView; dp?: DataView; roi?: DataView;
+    mode?: string; upsample?: number; phase?: DataView; dp?: DataView; roi?: DataView; scan?: string;
   }>("live_phase_preview");
   const [viSource, setViSource] = useModelState<string>("vi_source");
   // The row preview on the scan grid; a Direct phase sent k x the grid is also kept at full resolution to draw.
+  // A new scan paints over the last scan's image, as Velox does, not over black (11-16).
+  const liveLastRef = React.useRef<(LiveUnder & { scan?: string }) | null>(null);
+  const liveUnderRef = React.useRef<LiveUnder | null>(null);
   const liveImages = React.useMemo(() => {
     if (!preview?.detRows || !preview.detCols || preview.dp?.byteLength !== preview.detRows * preview.detCols * 4) return null;
-    return livePreviewImages(preview, viSource === "Direct");
+    const last = liveLastRef.current;
+    if (last && last.scan !== preview.scan) liveUnderRef.current = last;
+    const images = livePreviewImages(preview, viSource === "Direct", liveUnderRef.current);
+    if (images) liveLastRef.current = { scan: preview.scan, key: images.key, image: images.grid,
+                                        full: images.upsampled?.data ?? null };
+    return images;
   }, [preview, viSource]);
   const liveImage = liveImages?.image ?? null;
   const [viDetailState] = useModelState<{
@@ -8316,9 +8324,7 @@ function Show4DSTEM() {
             </Select>
           </>
         )}
-      </Box>
-      {/* Row 2: Color + Scale */}
-      <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
+        {/* the same line: colormap and scale (11-16: one row saves height under the image) */}
         <Select title="Colormap" inputProps={{ "aria-label": "Colormap" }} value={viColormap} onChange={(event) => setViColormap(String(event.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
           {COLORMAP_OPTIONS}
         </Select>
@@ -8586,7 +8592,7 @@ function Show4DSTEM() {
                   {dpControlRows}
                   {/* Right: Histogram spanning both rows */}
                   <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", flex: "0 0 auto", maxWidth: "100%" }}>
-                    <Histogram data={dpHistogramData} vminPct={dpVminPct} vmaxPct={dpVmaxPct} onRangeChange={(min, max) => { setDpVminPct(min); setDpVmaxPct(max); }} width={110} height={58} sliderInset={6} theme={themeInfo.theme} dataMin={dpStats[1]} dataMax={dpStats[2]}
+                    <Histogram data={dpHistogramData} vminPct={dpVminPct} vmaxPct={dpVmaxPct} onRangeChange={(min, max) => { setDpVminPct(min); setDpVmaxPct(max); }} width={110} height={40} sliderInset={6} theme={themeInfo.theme} dataMin={dpStats[1]} dataMax={dpStats[2]}
                       fixedRange={traitDpVmin != null && traitDpVmax != null ? [traitDpVmin, traitDpVmax] : undefined} />
                   </Box>
                 </Box>
@@ -8938,7 +8944,7 @@ function Show4DSTEM() {
                   {/* Right: Histogram spanning both rows */}
                   <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", flex: "0 0 auto", maxWidth: "100%" }}>
                     <Subscribe store={viDisplayStore}>{(vi) => (
-                    <Histogram data={vi.histogramData} bins={vi.histogramBins} vminPct={viVminPct} vmaxPct={viVmaxPct} onRangeChange={(min, max) => { if (viAutoContrast) { viPreAutoPctRef.current = null; setViAutoContrast(false); } setViVminPct(min); setViVmaxPct(max); }} width={110} height={58} sliderInset={6} theme={themeInfo.theme} dataMin={vi.dataMin} dataMax={vi.dataMax}
+                    <Histogram data={vi.histogramData} bins={vi.histogramBins} vminPct={viVminPct} vmaxPct={viVmaxPct} onRangeChange={(min, max) => { if (viAutoContrast) { viPreAutoPctRef.current = null; setViAutoContrast(false); } setViVminPct(min); setViVmaxPct(max); }} width={110} height={40} sliderInset={6} theme={themeInfo.theme} dataMin={vi.dataMin} dataMax={vi.dataMax}
                       fixedRange={traitViVmin != null && traitViVmax != null ? [traitViVmin, traitViVmax] : undefined} />)}
                     </Subscribe>
                   </Box>
@@ -9206,7 +9212,7 @@ function Show4DSTEM() {
                     {/* Right: Histogram spanning both rows */}
                     <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", justifyContent: "center", flex: "0 0 auto", maxWidth: "100%" }}>
                       {fftHistogramData && (
-                        <Histogram data={fftHistogramData} vminPct={fftVminPct} vmaxPct={fftVmaxPct} onRangeChange={(min, max) => { setFftVminPct(min); setFftVmaxPct(max); }} width={110} height={58} sliderInset={6} theme={themeInfo.theme} dataMin={fftDataMin} dataMax={fftDataMax} />
+                        <Histogram data={fftHistogramData} vminPct={fftVminPct} vmaxPct={fftVmaxPct} onRangeChange={(min, max) => { setFftVminPct(min); setFftVmaxPct(max); }} width={110} height={40} sliderInset={6} theme={themeInfo.theme} dataMin={fftDataMin} dataMax={fftDataMax} />
                       )}
                     </Box>
                   </Box>

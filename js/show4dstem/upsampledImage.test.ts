@@ -43,3 +43,18 @@ test("the live Direct preview at 3x keeps full resolution and a scan-grid copy, 
   expect(livePreviewImages(preview, false)!.upsampled).toBeNull();     // the virtual detector stays on the grid
   expect(livePreviewImages({ ...preview, upsample: 2 }, true)).toBeNull();  // the bytes do not match 2x
 });
+
+test("a new scan paints over the last scan's image, as Velox does, not over black", () => {
+  const rows = 1, cols = 2, total = 3;
+  const first = { rows: total, cols, total, mode: "Direct", upsample: 1, scan: "series_1",
+                  phase: new DataView(new Float32Array([1, 2, 3, 4, 5, 6]).buffer),
+                  roi: new DataView(new Float32Array(total * cols).buffer) };
+  const done = livePreviewImages(first, true)!;
+  const under = { key: done.key, image: done.grid, full: null };
+  const next = { rows, cols, total, mode: "Direct", upsample: 1, scan: "series_2",
+                 phase: new DataView(new Float32Array([9, 9]).buffer), roi: new DataView(new Float32Array(rows * cols).buffer) };
+  expect([...livePreviewImages(next, true, under)!.grid]).toEqual([9, 9, 3, 4, 5, 6]);
+  expect([...done.grid]).toEqual([1, 2, 3, 4, 5, 6]);                              // the last image is not changed
+  const other = { ...under, key: "Direct:1:4x2" };                                  // another size: NaN below
+  expect(Number.isNaN(livePreviewImages(next, true, other)!.grid[2])).toBe(true);
+});
