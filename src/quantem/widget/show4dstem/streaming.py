@@ -28,6 +28,23 @@ def _shape_of(source) -> tuple:
     return tuple(int(side) for side in tuple(shape)[-4:])
 
 
+def stopped_title(error) -> str:
+    """The live view's title when the stream stops: one short line, never a traceback (a 2048 x 2048 pair that ran
+    the GPU out of memory put the whole CUDA traceback in the title).
+
+    Examples
+    --------
+    >>> stopped_title(RuntimeError("replay failed: Traceback (most recent call last): ... OutOfMemoryError: ..."))
+    'Live acquisition stopped: the GPU ran out of memory'
+    """
+    text = str(error).replace("\\x0a", "\n")
+    if "OutOfMemoryError" in text or "out of memory" in text.lower():
+        return "Live acquisition stopped: the GPU ran out of memory"
+    first = next((line.strip() for line in text.splitlines() if line.strip()), type(error).__name__)
+    first = first.split("Traceback (most recent call last)")[0].strip(" :")
+    return f"Live acquisition stopped: {first[:160]}"
+
+
 def _size_label(shape, count: int) -> str:
     """A size group's name: scan rows x columns x detector (one number when square), and how many scans."""
     rows, cols, det_rows, det_cols = shape
@@ -246,7 +263,7 @@ class StreamFollower:
             if previous is not None and previous is not error:
                 _release_error_frames(previous)     # a retried failure: the earlier one must not hold scans
             viewer.stream_error = error
-            viewer.title = f"Live acquisition stopped: {error}"
+            viewer.title = stopped_title(error)
             if force:
                 raise
             return False
@@ -307,7 +324,7 @@ class StreamFollower:
                             self.shown_sources, self.previous = sources, None
                 except Exception as error:
                     viewer.stream_error = error
-                    viewer.title = f"Live acquisition stopped: {error}"
+                    viewer.title = stopped_title(error)
                     return False
                 return True
             before = self.last_refresh
@@ -363,7 +380,7 @@ class StreamFollower:
                 alive = self.update()
             except Exception as error:
                 viewer.stream_error = error
-                viewer.title = f"Live acquisition stopped: {error}"
+                viewer.title = stopped_title(error)
                 alive = False
             if not alive:
                 if not self.retrying():

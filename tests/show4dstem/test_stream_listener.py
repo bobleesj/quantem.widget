@@ -1103,3 +1103,13 @@ def test_a_size_group_is_named_by_its_scan_and_detector_size():
 
     assert _size_label((512, 512, 192, 192), 6) == "512×512×192 · 6 scans"
     assert _size_label((256, 128, 96, 80), 1) == "256×128×96×80 · 1 scan"
+
+
+def test_a_stopped_stream_titles_one_short_line():
+    from quantem.widget.show4dstem.streaming import stopped_title
+
+    memory = RuntimeError("GPU replay failed: error RUNTIME\\x0aTraceback (most recent call last):\\x0a "
+                          "cupy.cuda.memory.OutOfMemoryError: Out of memory allocating 303,169,536 bytes")
+    assert stopped_title(memory) == "Live acquisition stopped: the GPU ran out of memory"
+    other = RuntimeError("receiver closed\nTraceback (most recent call last):\n  File x")
+    assert stopped_title(other) == "Live acquisition stopped: receiver closed"
