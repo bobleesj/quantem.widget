@@ -248,6 +248,9 @@ const CANVAS_SIZE = 480;  // Both DP and VI canvases
 const DP_DEFAULT_SIZE = 300;  // the diffraction pattern unless sized; the image or scan grid fills the rest of the row
 const MIN_CANVAS_SIZE = 240;
 const SIDE_BY_SIDE_MIN = 160;  // panels shrink this far to stay side by side in a narrow notebook
+/** A wheel event over a zooming canvas stays there: the page behind it does not scroll. */
+function keepWheelFromPage(event: WheelEvent) { event.preventDefault(); }
+
 const PANEL_GAP = 4;  // between the diffraction pattern, the image or scan grid and the FFT
 const COMPARE_GRID_DEFAULT_WIDTH = 980;
 
@@ -5470,14 +5473,30 @@ function Show4DSTEM() {
   // Effects: Canvas Rendering & Animation
   // ─────────────────────────────────────────────────────────────────────────
 
-  // Prevent page scroll when scrolling on canvases
-  // Re-run when showFft or the compare grid changes: both remount the overlays
+  // The wheel over a canvas zooms it and must not scroll the page. React attaches onWheel as a passive
+  // listener, where preventDefault does nothing, so each overlay gets a native non-passive one. The overlays
+  // mount after the first patterns arrive (a streaming viewer starts on "No acquired patterns") and remount
+  // with the FFT and the scan grid, so every render checks which canvases are mounted.
+  const wheelLockedRef = React.useRef(new Set<HTMLCanvasElement>());
   React.useEffect(() => {
-    const preventDefault = (event: WheelEvent) => event.preventDefault();
-    const overlays = [dpOverlayRef.current, virtualOverlayRef.current, fftOverlayRef.current];
-    overlays.forEach(el => el?.addEventListener("wheel", preventDefault, { passive: false }));
-    return () => overlays.forEach(el => el?.removeEventListener("wheel", preventDefault));
-  }, [showFft, compareMode]);
+    const locked = wheelLockedRef.current;
+    const mounted = [dpOverlayRef.current, virtualOverlayRef.current, fftOverlayRef.current]
+      .filter((canvas): canvas is HTMLCanvasElement => canvas !== null);
+    locked.forEach(canvas => {
+      if (mounted.includes(canvas)) return;
+      canvas.removeEventListener("wheel", keepWheelFromPage);
+      locked.delete(canvas);
+    });
+    mounted.forEach(canvas => {
+      if (locked.has(canvas)) return;
+      canvas.addEventListener("wheel", keepWheelFromPage, { passive: false });
+      locked.add(canvas);
+    });
+  });
+  React.useEffect(() => () => {
+    wheelLockedRef.current.forEach(canvas => canvas.removeEventListener("wheel", keepWheelFromPage));
+    wheelLockedRef.current.clear();
+  }, []);
 
   // Store raw data for filtering/FFT
   const rawVirtualImageRef = React.useRef<Float32Array | null>(null);
