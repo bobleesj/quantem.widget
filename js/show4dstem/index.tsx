@@ -5942,7 +5942,7 @@ function Show4DSTEM() {
       ctx.save();
       ctx.translate(dpPanX, dpPanY);
       ctx.scale(dpZoom, dpZoom);
-      ctx.drawImage(offscreen, 0, 0);
+      ctx.drawImage(offscreen, 0, 0, canvas.width, canvas.height);   // fills it, also for a frame at another detector size
       ctx.restore();
     }
   };
@@ -6323,7 +6323,10 @@ function Show4DSTEM() {
     const transform = upsampledTransform(viPanX, viPanY, viZoom, viFactor);
     ctx.translate(transform.translateX, transform.translateY);
     ctx.scale(transform.scale, transform.scale);
-    ctx.drawImage(offscreen, 0, 0);
+    // The image always fills the canvas: when the upsample factor changes (Direct 3x to BF 1x at a scan start) the
+    // cached image can be at the other size for a frame, and drawn at its own size a 512 image sat in a third of a
+    // 1536 canvas, then jumped to full size.
+    ctx.drawImage(offscreen, 0, 0, canvas.width, canvas.height);
     ctx.restore();
   };
   React.useLayoutEffect(paintViCanvas,
