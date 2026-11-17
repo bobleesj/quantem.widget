@@ -63,7 +63,7 @@ import { WebGPUDirectBackend, deleteDirectFolderFile, readDirectFolderBytes, rea
 const widgetTheme = createTheme({ typography: { fontFamily: WIDGET_UI_FONT } });
 
 const container = {
-  root: { p: 2, bgcolor: "transparent", color: "inherit", fontFamily: WIDGET_UI_FONT, overflow: "visible" },
+  root: { p: "4px", bgcolor: "transparent", color: "inherit", fontFamily: WIDGET_UI_FONT, overflow: "visible" },
   imageBox: { overflow: "hidden", position: "relative" as const },
 };
 
@@ -222,6 +222,7 @@ const MAX_ZOOM = 20;
 const ZOOM_FACTOR = 1.15;
 const MIN_PANEL = 200;
 const DEFAULT_PANEL = 800;
+const CONTROLS_BESIDE_MIN = 300;  // the narrowest the controls go beside the image before they wrap below it
 // C12 (nm) and phi12 (degrees) slider spans: the direct ptychography fit's default search range
 const C12_RANGE: [number, number] = [-10, 10];
 const PHI12_RANGE: [number, number] = [-90, 90];
@@ -2115,6 +2116,7 @@ function Explore() {
   const ampDataRef = React.useRef<{ data: Float32Array; w: number; h: number } | null>(null);
 
   const [panel, setPanel] = React.useState<number>(DEFAULT_PANEL);
+  const [panelDragged, setPanelDragged] = React.useState(false);
   // a live panel (ShowPtycho.live) opens at a fixed image size with its controls beside the image, so the viewer
   // above it and this panel fit one screen; the controls drop below the image when the window is narrow
   const [panelPx] = useModelState<number>("panel_px");
@@ -4061,6 +4063,7 @@ function Explore() {
   const startResize = React.useCallback((e: React.PointerEvent) => {
     e.preventDefault();
     resizeDrag.current = { on: true, startY: e.clientY, startSize: shownPanelRef.current };
+    setPanelDragged(true);
   }, []);
 
   /* --- Frame the full FFT by physical frequency, independently of the phase zoom. --- */
@@ -4096,7 +4099,13 @@ function Explore() {
   const columns = localTiltEnabled ? Math.max(1,Math.min(maxColumns||3,visiblePanelCount,
     Math.floor((fitWidth+PANEL_GAP)/(MIN_PANEL+2+PANEL_GAP)))) : visiblePanelCount;
   const perPanel = Math.floor((fitWidth - PANEL_GAP * Math.max(0, columns - 1)) / columns) - 2;
-  const shownPanel = Math.max(Math.min(MIN_PANEL, fitWidth), Math.min(panel, perPanel));
+  // Beside its controls the image keeps its size. In a column too narrow for both (a notebook on a third
+  // of the window) the controls go below it and the image takes the column's width, until its corner is dragged.
+  const controlsBelow = controlsBeside && showControls !== false && !panelDragged
+    && fitWidth < panel + 2 + SPACING.SM + CONTROLS_BESIDE_MIN;
+  const shownPanel = controlsBelow && Number.isFinite(perPanel)
+    ? Math.max(Math.min(MIN_PANEL, fitWidth), perPanel)
+    : Math.max(Math.min(MIN_PANEL, fitWidth), Math.min(panel, perPanel));
   shownPanelRef.current = shownPanel;
   const totalW = (shownPanel+2) * columns + PANEL_GAP * Math.max(0, columns - 1);
   const fftInsetSize = Math.max(96, Math.min(180, Math.round(shownPanel * 0.28)));
@@ -4543,7 +4552,7 @@ function Explore() {
       {/* ---- Controls ---- */}
       <Box component="fieldset" disabled={controlsLocked}
         sx={{ border:0, p:0, minWidth:0, maxWidth: "100%", display: showControls === false || (controlsCollapsed && !expanded) ? "none" : "flex", flexDirection: "column", gap: `${SPACING.XS}px`,
-          ...(controlsBeside ? { flex: "1 1 300px", m: 0 } : { width: totalW, mt: `${SPACING.XS}px` }) }}>
+          ...(controlsBeside ? { flex: `1 1 ${CONTROLS_BESIDE_MIN}px`, m: 0 } : { width: totalW, mt: `${SPACING.XS}px` }) }}>
         {localTiltEnabled && <Typography sx={typography.label}>
           Controls · {regionalMode ? (activeFit?.label || 'Selected region') : 'Overview'}
           {regionalMode && !regionalReady ? ' · refit this region to edit' : ''}
@@ -4559,7 +4568,8 @@ function Explore() {
                 onChange={event => changeReconstruction({ method: event.target.value }, true)}
                 sx={{ ...typography.label, height: 28 }}>
                 {/* a live panel offers the two damped reconstructions; Phase of mean only where they cannot run */}
-                {!(controlsBeside && regularizationAvailable) && <MenuItem value="phase_of_mean">Phase of mean</MenuItem>}
+                {(!(controlsBeside && regularizationAvailable) || reconstructionControls.method === "phase_of_mean")
+                  && <MenuItem value="phase_of_mean">Phase of mean</MenuItem>}
                 <MenuItem value="phase" disabled={!regularizationAvailable || webgpuStandalone || !!localTiltJson}>Phase</MenuItem>
                 <MenuItem value="complex" disabled={!regularizationAvailable || webgpuStandalone || !!localTiltJson}>{controlsBeside ? "Complex" : "Amplitude + phase"}</MenuItem>
               </Select>
