@@ -1117,15 +1117,33 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         if nbytes:
             print(f"freed {nbytes / 1e9:.2f} GB ({self._device})")
 
-    def close(self) -> None:
-        """Stop background work, release sessions and close the widget comm."""
+    def close(self, keep_picture: bool = False) -> None:
+        """Stop background work, release sessions and close the widget comm.
+
+        ``keep_picture=True`` frees the scan and its GPU memory but keeps the widget open, so the images it shows stay
+        in the notebook: its Python reactions are unhooked (a click or a drag changes nothing) and the title says
+        "scan released: picture only" (2026-11-17: a GPU-memory release blanked every viewer above it).
+
+        Examples
+        --------
+        >>> viewer.close(keep_picture=True)  # doctest: +SKIP
+        """
         self._stop_stream()
         self._release_owned_acquisitions()
         with self._stream_lock:
             self._close_sessions()
             self._data = None
             self._preset_images.clear()
-            super().close()
+            if not keep_picture:
+                super().close()
+                return
+        self.unobserve_all()                        # nothing answers the front end: the last images stay as they are
+        for handler in (self._handle_frontend_ready_msg, self._handle_detector_request,
+                        self._handle_detector_radius_request, self._handle_position_request):
+            self.on_msg(handler, remove=True)
+        note = "scan released: picture only"
+        self.title = f"{self.title} · {note}" if self.title and note not in self.title else (self.title or note)
+        self.show_title = True
 
     def _stop_stream(self) -> None:
         watched, self._live_folder = self._live_folder, None
