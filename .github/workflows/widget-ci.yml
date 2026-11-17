@@ -43,6 +43,18 @@ jobs:
       QUANTEM_GPU_SRC: ${{ github.workspace }}/quantem-gpu-src/src
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      # The frontend unit tests run when the frontend or its quantem.gpu sources changed.
+      - name: Find what changed
+        id: changes
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: bash scripts/ci_changed_areas.sh
 
       - uses: actions/setup-python@v6
         with:
@@ -58,6 +70,9 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
+          # The CPU wheel: the CUDA one adds 3 GB of NVIDIA libraries no test uses.
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install pytest-xdist==3.8.0
           python -m pip install --extra-index-url https://test.pypi.org/simple/ -e ".[test]"
 
       # quantem.gpu is optional for the widget at run time, but the bundles compile
@@ -81,6 +96,7 @@ jobs:
           npm run build:web  # the quantem.diffsim bundle, for tests/diffsim
 
       - name: Typecheck and unit-test the frontend
+        if: steps.changes.outputs.frontend == 'true'
         run: |
           npx tsc --noEmit  # the build synced the quantem.gpu kernels; `npm run typecheck` would sync them again
           # Keep the multi-widget DOM mounts in a fresh process on small runners.
@@ -94,4 +110,4 @@ jobs:
           python scripts/check_notebook_sizes.py
 
       - name: Test
-        run: PYTHONPATH=src python -m pytest -q
+        run: PYTHONPATH=src python -m pytest -q -n 4 --dist worksteal
