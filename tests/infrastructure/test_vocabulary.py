@@ -63,7 +63,11 @@ EXCEPTIONS = {
 RETIRED_FRAGMENTS = ("ssb",)
 
 
-def _banned(name: str) -> bool:
+def _banned(name: str, owner: str = "") -> bool:
+    # DirectPtycho.show consumes mode for static/interactive dispatch; the live
+    # ShowPtycho viewer accepts ui_mode for its independent presentation preset.
+    if name == "ui_mode" and owner in {"ShowPtycho", "ShowPtycho<ShowPtycho>.__init__(ui_mode=)"}:
+        return False
     return name not in EXCEPTIONS and (name in BANNED or any(part in name.lower() for part in RETIRED_FRAGMENTS))
 
 
@@ -112,7 +116,7 @@ def test_public_signatures_use_the_vocabulary():
             for cls in obj.__mro__:
                 if cls.__module__.startswith("quantem.widget"):
                     hits.update(f"{where}: {item}" for item, where in _public_names(cls, f"{name}<{cls.__name__}>")
-                                if _banned(item))
+                                if _banned(item, where))
         elif callable(obj):
             hits.update(f"{where}: {item}" for item, where in _public_names(obj, name) if _banned(item))
     assert not hits, "\n".join(sorted(hits))
@@ -122,7 +126,7 @@ def test_public_signatures_use_the_vocabulary():
 def test_synced_traits_use_the_vocabulary(name):
     """A synced trait's name is also the JavaScript model key and the key of the notebook's saved widget state."""
     traits = _widgets()[name].class_traits(sync=True)
-    hits = sorted(trait for trait in traits if _banned(trait.lstrip("_")))
+    hits = sorted(trait for trait in traits if _banned(trait.lstrip("_"), name))
     assert not hits, hits
 
 

@@ -6,6 +6,7 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- ShowPtycho places the fitted aberrations table and phase contrast in the viewer. Remote sessions prepare nearby defocus values first so dragging can begin while the wider range loads. Pass a saved calibration file with `calibration=path`. The viewer starts from the supplied optics or fits the scan when the argument is omitted.
 - ShowPtycho updates defocus directly on local kernels and automatically prepares full-field browser previews on remote kernels. Releasing the slider requests the exact phase.
 
 - `Show4DSTEM.live(path)` takes one scan file: that scan alone is shown, and `ShowPtycho.live(viewer)` below fits

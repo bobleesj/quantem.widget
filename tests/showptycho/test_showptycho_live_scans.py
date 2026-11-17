@@ -64,7 +64,7 @@ def test_each_new_scan_is_fitted_and_its_panel_closes_before_the_scan_goes(tmp_p
         regularization_available = False
         cmap, initial_fft_on, method, phase_damp, amplitude_damp = "inferno", False, "phase_of_mean", 0.03, 0.03
 
-        def __init__(self, direct, restore):
+        def __init__(self, direct):
             super().__init__()
             self.direct = direct
 
@@ -130,7 +130,7 @@ def test_a_refit_without_room_beside_the_shown_session_closes_it_and_fits_again(
         regularization_available = False
         cmap, initial_fft_on, method, phase_damp, amplitude_damp = "inferno", False, "phase_of_mean", 0.03, 0.03
 
-        def __init__(self, direct, restore):
+        def __init__(self, direct):
             super().__init__()
 
     def fitted(self, dataset, region, rotation=None):

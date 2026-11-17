@@ -46,7 +46,7 @@ from quantem.widget.info import _kernel_location
 from quantem.widget.showptycho.export import write_showptycho_folder
 from quantem.widget.units import axis_pair, image_axes, per_axis, stated, wrap_degrees
 from quantem.widget.utils.array import device_array
-from quantem.widget.utils.ui import ViewerSize, resolve_panel_width
+from quantem.widget.utils.ui import DisplayMode, ViewerSize, resolve_mode, resolve_panel_width
 
 STARS_FILENAME = "showptycho_stars.json"
 CALIBRATION_FILENAME = "calibration.json"
@@ -146,6 +146,10 @@ class ShowPtycho(anywidget.AnyWidget):
         reused for its resident bright-field evidence and exclusively driven while the widget is
         open. Joint fit, Refit and Fit Regions use the same default fifth-order fit on both
         CUDA and MPS. A supplied broad fit retains its higher-order correction.
+    size : {"small", "medium", "large", "xlarge"}, optional
+        Initial image-panel width. Panels shrink to fit the notebook and remain resizable.
+    ui_mode : {"interactive", "presentation", "report", "minimal"}, optional
+        QuantEM widget display preset. Interactive controls wrap to fit the notebook.
     sampling : float or (row, col), optional
         Pixel size of an array in ``units``; it draws the scale bar and calibrates the FFT. A direct ptychography
         session carries its own scan sampling.
@@ -154,15 +158,10 @@ class ShowPtycho(anywidget.AnyWidget):
         (``"angstrom"``, ``"Å"``, ``"A"``, ``"nm"``, ``"pm"``, ...); angstrom when omitted.
     save_dir : str or Path, optional
         Direct ptychography session: where ``calibration.json`` and ``showptycho_stars.json`` are written; the
-        working directory by default. A saved correction of the same
-        acquisition, scan region and launch calibration is restored before the
-        first preview.
-    restore : bool, default True
-        Restore the complete saved optics, tilt, depth and display settings
-        when the acquisition and launch calibration match, also over a
-        session that is already fitted (``ptycho.run()`` before
-        ``ptycho.show()``); one line says what was restored and what it replaced.
-        False keeps the supplied session even when a saved correction exists.
+        working directory by default.
+    calibration : str or Path, optional
+        Reviewed calibration file to apply. Otherwise use the session's explicit optics or
+        measure aberrations on this acquisition before displaying the first preview.
     compute_loss : bool, default False
         Calculate the optional reconstruction diagnostic when controls settle
         or calibration is saved. False keeps interactive review free of this
@@ -265,6 +264,7 @@ class ShowPtycho(anywidget.AnyWidget):
     fitted_sample_json = traitlets.Unicode("{}").tag(sync=True)
     fitted_higher_order_aberrations_json = traitlets.Unicode("{}").tag(sync=True)
     kernel_location = traitlets.Enum(["local", "remote"], default_value="local").tag(sync=True)
+    defocus_seed = traitlets.Dict().tag(sync=True)
     defocus_preview_revision = traitlets.Int(0).tag(sync=True)
     phase_bytes = traitlets.Bytes(b"").tag(sync=True)
     phase_width = traitlets.Int(0).tag(sync=True)
@@ -320,7 +320,12 @@ class ShowPtycho(anywidget.AnyWidget):
     # letting the box go sends the region back
     # a live panel opens at a fixed image size with its controls beside the image (0 and False: the usual layout)
     panel_px = traitlets.Int(0).tag(sync=True)
-    controls_beside = traitlets.Bool(False).tag(sync=True)
+    ui_mode = traitlets.Enum(["interactive", "presentation", "report", "minimal"], default_value="interactive").tag(sync=True)
+    show_scale_bar = traitlets.Bool(True).tag(sync=True)
+    show_panel_titles = traitlets.Bool(True).tag(sync=True)
+    show_controls = traitlets.Bool(True).tag(sync=True)
+    controls_collapsed = traitlets.Bool(False).tag(sync=True)
+    show_resize_handles = traitlets.Bool(True).tag(sync=True)
     fit_region = traitlets.List(traitlets.Int(), []).tag(sync=True)
     # the regions already fitted on a live scan, drawn as a strip of thumbnails: a click fits there again
     fits_json = traitlets.Unicode("[]").tag(sync=True)
@@ -708,11 +713,12 @@ class ShowPtycho(anywidget.AnyWidget):
         self,
         data,
         *,
+        size: ViewerSize = "medium",
+        ui_mode: DisplayMode = "interactive",
         sampling: float | tuple[float, float] | None = None,
         units: str | None = None,
         save_dir: str | pathlib.Path | None = None,
-        restore: bool = True,
-        size: ViewerSize = "medium",
+        calibration: str | pathlib.Path | None = None,
         show_fft: bool = False,
         compute_loss: bool = False,
         upsample: str | int | None = None,
@@ -773,7 +779,13 @@ class ShowPtycho(anywidget.AnyWidget):
             data = device_array(data)  # a tensor or CuPy array stays on its GPU until the 2D result is drawn
         if not is_array and sampling is not None:
             raise ValueError("sampling describes an array; a direct ptychography session carries its own scan_sampling_A.")
-        super().__init__(kernel_location=_kernel_location(), panel_px=resolve_panel_width(size))
+        preset = resolve_mode(ui_mode, defaults={
+            "show_controls": True, "controls_collapsed": False, "show_resize_handles": True,
+            "show_scale_bar": True, "show_panel_titles": True,
+        }, overrides={})
+        if calibration is not None and is_array:
+            raise ValueError("Pass calibration with a DirectPtycho session.")
+        super().__init__(panel_px=resolve_panel_width(size), ui_mode=ui_mode, kernel_location=_kernel_location(), **preset)
         self.method = method
         self.compute_loss = compute_loss
         self._explicit_reconstruction_options = {
@@ -788,8 +800,6 @@ class ShowPtycho(anywidget.AnyWidget):
         self.amplitude_damp = 0.03 if amplitude_damp is None else amplitude_damp
         self.smoothness_inv_A = 1.0 if smoothness_inv_A is None else smoothness_inv_A
         self.detector_weighting = "uniform" if detector_weighting is None else detector_weighting
-        self._launch_calibration = None
-        self._launch_calibration_shown = False
         self._direct = None if is_array else data
         self._region_fit_parameters: dict = {}
         self._region_fit_options: dict = {"trials": 200}
@@ -896,8 +906,10 @@ class ShowPtycho(anywidget.AnyWidget):
         self.sample_available = True  # CUDA and MPS, the direct ptychography backends, both fit the thick-sample model
         self.scan_sampling_A = state["scan_sampling_A"]
         restored = None
-        if restore and self._calibration_path.is_file():
-            restored = self._restore_calibration(state)
+        if calibration is not None:
+            restored = self._restore_calibration(state, pathlib.Path(calibration))
+        elif not data._aberrations_explicit and data._aberration_search is None:
+            data.aberrations(show=False)
         if upsample is not None:
             # Override output density before the first preview, retaining the saved fit.
             self.upsample = upsample if isinstance(upsample, str) else int(upsample)
@@ -920,7 +932,6 @@ class ShowPtycho(anywidget.AnyWidget):
         self.observe(self._on_fits_action, names=["fits_action_json"])
         self.observe(self._on_sample_fit_request, names=["sample_fit_request"])
         self._adopt_session(initial=True)
-        self._launch_calibration = data.calibration()
 
         self._region_fit_parameters = self._region_reference()
         if restore_regions and restored and restored.get("local_tilt"):
@@ -929,7 +940,7 @@ class ShowPtycho(anywidget.AnyWidget):
             "result_json", "scan_detector_rotation_deg", "higher_order_aberrations_json",
             "upsample"])
 
-    def _restore_calibration(self, state: dict) -> dict | None:
+    def _restore_calibration(self, state: dict, path: pathlib.Path) -> dict | None:
         """Restore one matching correction of the session's scan before registering observers."""
         from quantem.widget.showptycho.calibration import read_calibration
 
@@ -946,7 +957,7 @@ class ShowPtycho(anywidget.AnyWidget):
                        state["sample_tilt_mrad"], state["depth_spread_nm"])
         try:
             saved = read_calibration(
-                self._calibration_path, self._calibration_identity,
+                path, self._calibration_identity,
                 self._scan_region, CALIBRATION_SCHEMA,
             )
             if saved["upsample_mode"] == "auto" and self.auto_sampling_note:
@@ -960,8 +971,7 @@ class ShowPtycho(anywidget.AnyWidget):
             self._check_method(saved_method)
             self._direct.restore_calibration(saved)
         except (OSError, ValueError, KeyError, TypeError) as exc:
-            self.calibration_status = f"Saved fit not restored: {exc}. Use Joint fit, then Save."
-            return
+            raise ValueError(f"Cannot apply calibration {path}: {exc}") from exc
         self.method = saved_method
         for name in ("phase_damp", "amplitude_damp", "smoothness_inv_A", "detector_weighting"):
             if name in reconstruction:
@@ -973,7 +983,7 @@ class ShowPtycho(anywidget.AnyWidget):
         self.tilt_correction = saved["display"]["tilt_correction"]
         self.local_tilt_max_columns = saved["display"].get("max_columns", 3)
         self.notes = saved.get("notes", "")
-        self.calibration_path = str(self._calibration_path.resolve())
+        self.calibration_path = str(path.resolve())
         self.calibration_saved_at = saved.get("generated_at_utc", "")
         rows, cols = self._source_scan_shape
         self.calibration_status = ("Restored saved full-field fit" if self._scan_region == (0, rows, 0, cols)
@@ -981,9 +991,8 @@ class ShowPtycho(anywidget.AnyWidget):
         self.sample_fit_status = self.calibration_status
         restored = model(saved["aberrations"], saved["scan_detector_rotation_deg"],
                          saved["sample_tilt_mrad"], saved["depth_spread_nm"])
-        print(f"ShowPtycho: restored {self._calibration_path.name} saved {self.calibration_saved_at or 'earlier'} "
-              f"({restored})" + (f", replacing the session's {before}" if supplied else "")
-              + ". Pass restore=False to keep the session's values.")
+        print(f"ShowPtycho: restored {path.name} saved {self.calibration_saved_at or 'earlier'} "
+              f"({restored})" + (f", replacing the session's {before}" if supplied else "") + ".")
         return saved
 
     def _restore_regions(self, saved: dict) -> None:
@@ -1270,22 +1279,48 @@ class ShowPtycho(anywidget.AnyWidget):
         self._redraw_id -= 1
         return self._redraw_id
 
+    def _repr_mimebundle_(self, **kwargs):
+        """Start the nearby remote preview while Jupyter opens the live view."""
+        bundle = super()._repr_mimebundle_(**kwargs)
+        if (self.kernel_location == "remote" and self.method == "phase" and self.ptycho_session
+                and not self.initial_fft_on and not self.local_tilt_enabled
+                and self.defocus_preview_revision and not getattr(self, "_seed_scheduled", False)):
+            from tornado.ioloop import IOLoop
+
+            revision = self.defocus_preview_revision
+            first = math.floor(self.C10_min_nm) - 1
+            count = math.ceil(self.C10_max_nm) - first + 2
+            if count >= 4 and self._last_phase.size * count * 2 <= 384 * 1024**2:
+                self._seed_scheduled = True
+                self.defocus_seed = {"revision": revision, "pending": True}
+                index = min(max(0, math.floor(self._last_result["C10_nm"]) - first), count - 3)
+                IOLoop.current().add_callback(self._send_defocus_planes, {
+                    "token": "initial", "revision": revision, "index": index, "length": 2}, seed=True)
+        return bundle
+
     def _on_preview_message(self, widget, content: dict, buffers) -> None:
         """Receive a bounded preview command without the generic trait throttle."""
         if content.get("type") == "direct-preview":
             self._on_request(content["request"])
 
+        elif content.get("type") == "defocus-seed-consumed":
+            if self.defocus_seed.get("revision") == content.get("revision"):
+                self.defocus_seed = {}
         elif content.get("type") == "defocus-planes":
             self._send_defocus_planes(content)
 
-    def _send_defocus_planes(self, request: dict) -> None:
+    def _send_defocus_planes(self, request: dict, *, seed: bool = False) -> None:
         """Send a bounded batch of full-grid phase samples for the browser's C10 preview."""
         reply = {"type": "defocus-planes", "token": request["token"], "revision": self.defocus_preview_revision}
         first = math.floor(self.C10_min_nm) - 1
         count = math.ceil(self.C10_max_nm) - first + 2
         index = int(request["index"])
+        length = int(request.get("length", 3))
+        if seed and (self.comm is None or self.defocus_preview_revision != request["revision"]):
+            self.defocus_seed = {}
+            return
         if (self._direct is None or self.method != "phase" or self._last_phase is None
-                or self.defocus_preview_revision != request["revision"] or not 0 <= index < count
+                or self.defocus_preview_revision != request["revision"] or not 0 <= index < count or not 1 <= length <= 4
                 or count * self._last_phase.size * 2 > 384 * 1024**2):
             self.send({**reply, "error": "Defocus preview unavailable for these settings."})
             return
@@ -1295,7 +1330,7 @@ class ShowPtycho(anywidget.AnyWidget):
         buffers = []
         solve_seconds = 0.0
         try:
-            for j in range(index, min(index + 3, count)):
+            for j in range(index, min(index + length, count)):
                 start = time.perf_counter()
                 phase, _ = self._direct.preview({**self._drag_model, "C10_nm": float(first + j)},
                     upsample=self._output_factor, **self._reconstruction_options(), **sample, compute_loss=False)
@@ -1305,9 +1340,16 @@ class ShowPtycho(anywidget.AnyWidget):
                 if packed.size % 2:
                     packed = np.pad(packed, (0, 1))
                 buffers.append(memoryview(packed).cast("B"))
-            self.send({**reply, "first": first, "index": index, "count": count, "solve_seconds": solve_seconds}, buffers=buffers)
+            batch = {**reply, "first": first, "index": index, "count": count, "solve_seconds": solve_seconds}
+            if seed:
+                self.defocus_seed = {**batch, "planes": buffers}
+            else:
+                self.send(batch, buffers=buffers)
         except (ValueError, RuntimeError, MemoryError) as exc:
-            self.send({**reply, "error": str(exc)})
+            if seed:
+                self.defocus_seed = {**reply, "error": str(exc)}
+            else:
+                self.send({**reply, "error": str(exc)})
 
     def _on_request(self, request: dict) -> None:
         """A slider request from the browser {"id", "C10_nm", "C12_nm", "phi12_deg", "committed", ...}: reconstruct at
@@ -1691,6 +1733,21 @@ class ShowPtycho(anywidget.AnyWidget):
         --------
         >>> path = viewer.save_calibration()
         """
+        self._save_review()
+        return self._calibration_path.resolve()
+
+    def _reviewed_result(self, folder: pathlib.Path):
+        """Reconstruct the accepted settings on the scan currently open in the viewer."""
+        review = self._save_review(folder)
+        return self._direct.direct.run(
+            aberrations=review["aberrations"], upsample=review["upsample"],
+            compute_loss=False, **review["reconstruction"],
+        )
+
+    def _save_review(self, folder: pathlib.Path | None = None) -> dict:
+        """Persist one reviewed calibration and return the exact reconstruction settings."""
+        from quantem.gpu.direct_ptycho.persistence import portable_source
+
         if self._direct is None:
             raise ValueError("save_calibration() writes a direct ptychography session's model; open ShowPtycho on a direct ptychography session.")
         if self._region_busy:
@@ -1702,14 +1759,19 @@ class ShowPtycho(anywidget.AnyWidget):
         self._direct.store({**higher_order, **aberrations}, loss, sample=sample)
         payload = {**self._calibration_record({**higher_order, **aberrations}, sample, loss),
                    "id": uuid.uuid4().hex[:12], "generated_at_utc": utc_now()}
-        write_json(self._calibration_path, payload)
-        self.calibration_path = str(self._calibration_path.resolve())
+        if folder is None:
+            folder = self._calibration_path.parent
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / CALIBRATION_FILENAME
+        payload["source"] = portable_source(self._source_path, folder)
+        write_json(path, payload)
+        self.calibration_path = str(path.resolve())
         self.calibration_saved_at = payload["generated_at_utc"]
-        self._write_phase_image()
+        self._write_phase_image(folder / CALIBRATION_IMAGE_FILENAME)
         self.calibration_status = "Saved calibration and phase PNG"
-        return self._calibration_path.resolve()
+        return payload
 
-    def _write_phase_image(self) -> None:
+    def _write_phase_image(self, path: pathlib.Path) -> None:
         """Write the displayed phase as ``calibration_phase.png``, the reviewed image beside its calibration.
 
         ``rgb = colorize(contrast_uint8(phase, vmin, vmax) / 255, cmap)`` at the phase's native
@@ -1725,8 +1787,8 @@ class ShowPtycho(anywidget.AnyWidget):
         else:
             low, high = (float(value) for value in np.percentile(phase[np.isfinite(phase)], (1, 99)))
         pixels = colorize(contrast_uint8(phase, low, high) / 255.0, self.cmap)
-        Image.fromarray(pixels, mode="RGB").save(self._calibration_image_path)
-        self.calibration_image_path = str(self._calibration_image_path.resolve())
+        Image.fromarray(pixels, mode="RGB").save(path)
+        self.calibration_image_path = str(path.resolve())
 
     def freeze(self):
         """Keep the displayed phase visible while detaching its live direct ptychography controls.
@@ -1820,17 +1882,6 @@ class ShowPtycho(anywidget.AnyWidget):
         if self.method != "phase_of_mean":
             raise ValueError("Regularized reconstruction needs a live CUDA session. Use save_calibration() to save its method and strengths; standalone browser export supports method='phase_of_mean' only.")
         return write_showptycho_folder(self, path, title)
-
-    def _repr_mimebundle_(self, **kwargs):
-        """Show the launch calibration once, immediately before the live widget."""
-        if self._launch_calibration is not None and not self._launch_calibration_shown:
-            from IPython.display import display
-
-            table = self._launch_calibration[["Value", "Source"]].copy()
-            display(table.rename_axis("Parameter").style.set_caption("DirectPtycho calibration"))
-
-            self._launch_calibration_shown = True
-        return super()._repr_mimebundle_(**kwargs)
 
     def __repr__(self) -> str:
         """What the widget shows (array kind, size, sampling) or, for a session, the pins and full BF count."""
