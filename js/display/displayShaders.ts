@@ -69,7 +69,21 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 // numerator >= 0 and denominator > 0 (quotient below 2^128): the significands
 // (hidden bit included; a subnormal has none and the smallest normal exponent)
 // go through rounded_quotient and the exponent difference is applied exactly.
-export const DISPLAY_NORMALIZE_WGSL = ROUNDED_QUOTIENT_WGSL + /* wgsl */ `
+// Nearest source texel min(floor(pos * src_n / out_n), src_n - 1) of an output position. When twice
+// the position is an integer (a pixel centre or corner at zoom 1 or an integer pan), the floor is
+// taken in exact integer arithmetic: WGSL division may be approximate (NVIDIA), so float division
+// picked either side of a pixel centre lying exactly on a texel edge, unlike the CPU path.
+const NEAREST_TEXEL_WGSL = /* wgsl */ `
+fn nearest_texel(pos: f32, src_n: u32, out_n: f32) -> u32 {
+  let twice = 2.0 * pos;
+  if (twice >= 0.0 && twice == floor(twice) && out_n == floor(out_n) && twice * f32(src_n) < 4.0e9) {
+    return min((u32(twice) * src_n) / (2u * u32(out_n)), src_n - 1u);
+  }
+  return min(u32(pos * f32(src_n) / out_n), src_n - 1u);
+}
+`;
+
+export const DISPLAY_NORMALIZE_WGSL = ROUNDED_QUOTIENT_WGSL + NEAREST_TEXEL_WGSL + /* wgsl */ `
 fn display_is_finite(value: f32) -> bool {
   return (bitcast<u32>(value) & 0x7f800000u) != 0x7f800000u;
 }
@@ -200,8 +214,8 @@ struct Params {
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
   if (gid.x >= params.out_width || gid.y >= params.out_height) { return; }
-  let src_x = min(u32((f32(gid.x) + 0.5) * f32(params.src_width) / f32(params.out_width)), params.src_width - 1u);
-  let src_y = min(u32((f32(gid.y) + 0.5) * f32(params.src_height) / f32(params.out_height)), params.src_height - 1u);
+  let src_x = nearest_texel(f32(gid.x) + 0.5, params.src_width, f32(params.out_width));
+  let src_y = nearest_texel(f32(gid.y) + 0.5, params.src_height, f32(params.out_height));
   let src_idx = src_y * params.src_width + src_x;
   let out_idx = gid.y * params.out_width + gid.x;
   var val = data[src_idx];
@@ -246,8 +260,8 @@ fn read_u8(index: u32) -> f32 {
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
   if (gid.x >= params.out_width || gid.y >= params.out_height) { return; }
-  let src_x = min(u32((f32(gid.x) + 0.5) * f32(params.src_width) / f32(params.out_width)), params.src_width - 1u);
-  let src_y = min(u32((f32(gid.y) + 0.5) * f32(params.src_height) / f32(params.out_height)), params.src_height - 1u);
+  let src_x = nearest_texel(f32(gid.x) + 0.5, params.src_width, f32(params.out_width));
+  let src_y = nearest_texel(f32(gid.y) + 0.5, params.src_height, f32(params.out_height));
   let src_idx = src_y * params.src_width + src_x;
   let out_idx = gid.y * params.out_width + gid.x;
   var val = read_u8(src_idx);
@@ -420,9 +434,9 @@ ${FULLSCREEN_VERTEX_WGSL}
     let v1 = v01 + (v11 - v01) * tx;
     val = v0 + (v1 - v0) * ty;
   } else {
-    let src_local_x = min(u32(image_x * f32(region_w) / out_w), region_w - 1u);
+    let src_local_x = nearest_texel(image_x, region_w, out_w);
     let src_x = min(region_x0 + src_local_x, params.src_width - 1u);
-    let src_y = min(u32(image_y * f32(params.src_height) / out_h), params.src_height - 1u);
+    let src_y = nearest_texel(image_y, params.src_height, out_h);
     let src_idx = src_y * params.src_width + src_x;
     val = data[src_idx];
   }
@@ -502,9 +516,9 @@ ${FULLSCREEN_VERTEX_WGSL}
     let v1 = v01 + (v11 - v01) * tx;
     val = v0 + (v1 - v0) * ty;
   } else {
-    let src_local_x = min(u32(image_x * f32(region_w) / out_w), region_w - 1u);
+    let src_local_x = nearest_texel(image_x, region_w, out_w);
     let src_x = min(region_x0 + src_local_x, params.src_width - 1u);
-    let src_y = min(u32(image_y * f32(params.src_height) / out_h), params.src_height - 1u);
+    let src_y = nearest_texel(image_y, params.src_height, out_h);
     val = display_value(src_y * params.src_width + src_x);
   }
   if (params.log_scale == 1u) {
@@ -561,9 +575,9 @@ fn sample_value(src_x0: u32, region_w: u32, image_x: f32, image_y: f32, out_w: f
     let v1 = v01 + (v11 - v01) * tx;
     return v0 + (v1 - v0) * ty;
   }
-  let src_local_x = min(u32(image_x * f32(region_w) / out_w), region_w - 1u);
+  let src_local_x = nearest_texel(image_x, region_w, out_w);
   let src_x = min(src_x0 + src_local_x, params.dims0.x - 1u);
-  let src_y = min(u32(image_y * f32(params.dims0.y) / out_h), params.dims0.y - 1u);
+  let src_y = nearest_texel(image_y, params.dims0.y, out_h);
   return data[src_y * params.dims0.x + src_x];
 }
 
@@ -684,7 +698,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 // struct places one panel of a column-region grid with its zoom and pan.
 // Channels quantize as round(clamp(v, 0, 1) * 255), the CPU pack's
 // Math.round, so a readback of either path gives the same bytes.
-export const DIRECT_SLOT_RGB_SHADER = /* wgsl */ `
+export const DIRECT_SLOT_RGB_SHADER = NEAREST_TEXEL_WGSL + /* wgsl */ `
 struct Params {
   src_width: u32,
   src_height: u32,
@@ -744,9 +758,9 @@ fn texel(x: u32, y: u32) -> vec3f {
     let c1 = mix(texel(x0, y1), texel(x1, y1), tx);
     color = mix(c0, c1, ty);
   } else {
-    let src_local_x = min(u32(image_x * f32(region_w) / out_w), region_w - 1u);
+    let src_local_x = nearest_texel(image_x, region_w, out_w);
     let src_x = min(region_x0 + src_local_x, params.src_width - 1u);
-    let src_y = min(u32(image_y * f32(params.src_height) / out_h), params.src_height - 1u);
+    let src_y = nearest_texel(image_y, params.src_height, out_h);
     color = texel(src_x, src_y);
   }
   // NaN fails both comparisons in clamp's min/max on some drivers; map it to 0 like the CPU pack.

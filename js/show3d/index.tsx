@@ -117,6 +117,7 @@ import { applyDisplayFilterBrowser, browserFilterSupported, filterKnobsActive } 
 import { COLORMAPS, COLORMAP_NAMES, applyColormap, displayNormalize, renderToOffscreen, renderToOffscreenReuse, createGPUColormapEngine, GPUColormapEngine } from "../display/colormaps";
 import type { IntegerFrame } from "../display/colormapEngine";
 import { histogramBins } from "../display/cpuColormap";
+import { drawNearestExact } from "../display/nearestBlit";
 import { getGPUInfo, getHardwareGPUDevice, onGPULost, webGPULostReason } from "../display/device";
 import { findDrift } from "./drift";
 import type { DriftReadout } from "./DriftChart";
@@ -6032,7 +6033,13 @@ function Show3D() {
       }
       if (pastEnd) ctx.filter = "blur(4px)";
       const srcX = sharedPanelSource ? 0 : i * srcPanelW;
-      ctx.drawImage(offscreen as CanvasImageSource, srcX, 0, srcPanelW, srcH, 0, 0, w, h);
+      // CPU pages only: with WebGPU the shaders already pick texels this way, and a page copy here would
+      // put a CPU pass into every WebGPU draw.
+      const plain = !gpuCmapReadyRef.current && !smooth && !pastEnd && !flipCols && !flipRows && imageRotation % 4 === 0
+        && panelState.zoom === 1 && panelState.panX === 0 && panelState.panY === 0;
+      if (!(plain && drawNearestExact(ctx, offscreen, srcX, 0, srcPanelW, srcH, 0, 0, w, h))) {
+        ctx.drawImage(offscreen as CanvasImageSource, srcX, 0, srcPanelW, srcH, 0, 0, w, h);
+      }
       ctx.restore();
     }
   };

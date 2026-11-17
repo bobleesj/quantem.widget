@@ -6,6 +6,8 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- Show3D without WebGPU shows the same pixels as with it at every display size. At a zoom that puts a pixel centre exactly on a source-pixel edge (256 px drawn at 450), whole rows and columns showed the neighbouring pixel. The WebGPU shaders now pick that pixel in exact integer arithmetic too.
+
 - Report visible GPUs and process memory without opening CUDA contexts on idle devices.
 
 - In calibrated standalone QEM viewers, open Direct Ptycho beside iDPC. Pinch to inspect the full-field phase and tap Fit to restore the whole image.
