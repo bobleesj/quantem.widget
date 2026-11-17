@@ -304,6 +304,11 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     vi_product_labels = traitlets.List(traitlets.Unicode(), default_value=[]).tag(sync=True)
     vi_product_map_frames = traitlets.Int(0).tag(sync=True)
     vi_product_maps_bytes = traitlets.Bytes(b"").tag(sync=True)
+    # In a streaming viewer the images attach() gives a scan are sent one at a time, as they change, never as the
+    # whole stack (it was 19 MB for five 512 x 512 scans, resent at every attach; 11-17): these labels come as
+    # {"type": "vi_product_image", "label", "source", "rows", "cols"} messages with the float32 scan-grid image as
+    # their one buffer, keyed by the scan's identity in _stream_source_ids. vi_product_maps_bytes holds the others.
+    vi_product_streamed = traitlets.List(traitlets.Unicode(), default_value=[]).tag(sync=True)
     offline = traitlets.Bool(False).tag(sync=True)
     _offline_stack = traitlets.Bytes(b"").tag(sync=True)
     _h5_urls = traitlets.Unicode("").tag(sync=True)
@@ -821,6 +826,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self.observe(self._on_roi_change, names=["roi_center_col", "roi_center_row", "roi_radius", "roi_radius_inner",
                                                  "roi_active", "roi_mode", "roi_width", "roi_height"])
         self.observe(self._on_roi_center_change, names=["roi_center"])
+        self.observe(self._on_live_scan_end, names=["live_phase_preview"])
         self.observe(self._on_vi_source_change, names=["vi_source"])
         self.observe(self._publish_detail, names=["vi_source", "frame_idx"])
         self.observe(self._on_calibration_change, names=["bright_field_center_row_px", "bright_field_center_col_px", "bright_field_radius_px"])
@@ -1180,10 +1186,17 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             return
         self._preset_images.clear()
         with self.hold_sync():
-            if not self._multiple_view_active():
+            if not self._multiple_view_active() and not self.live_phase_preview:
                 self._compute_virtual_image_from_roi()
             self._refresh_compare_virtual_images()
             self._update_frame()
+
+    def _on_live_scan_end(self, change) -> None:
+        """While a scan arrives (``live_phase_preview`` names it) the page draws it from its rows and positions, so
+        refresh() does not send the whole image: at 2048 x 2048 that was 17 MB four times a second, 70 MB/s the page
+        decoded for nothing (11-17). When the scan is no longer drawn live, its whole image goes once."""
+        if change["old"] and not change["new"] and self._data is not None and not self._multiple_view_active():
+            self._compute_virtual_image_from_roi()
 
     @classmethod
     def stream(cls, recording, *, refresh_s: float = 1 / 60, labels=None, first_timeout_s: float = 0.0,
@@ -1864,14 +1877,23 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         maps[label] = np.ascontiguousarray(product, dtype=np.float32)
         self._publish_product_maps(maps, label)
 
+    def _streams_products(self) -> bool:
+        """True in a streaming viewer: attach()'s images go to the page one scan at a time."""
+        return hasattr(self, "_stream_stop")
+
     def _publish_product_maps(self, maps: dict[str, np.ndarray], changed: str | None = None) -> None:
-        """Send the product maps as one stack, and redraw when the one in view changed."""
+        """Send the product maps (those not streamed one by one) as one stack, and redraw when the one in view changed."""
+        streamed = [label for label in maps if label in self._attached] if self._streams_products() else []
+        sent = {label: stored for label, stored in maps.items() if label not in streamed}
         frame_count = max((stored.shape[0] for stored in maps.values()), default=0)
-        stacked = [np.broadcast_to(stored, (frame_count, self.shape_rows, self.shape_cols)) for stored in maps.values()]
+        sent_frames = max((stored.shape[0] for stored in sent.values()), default=0)
+        stacked = [np.broadcast_to(stored, (sent_frames, self.shape_rows, self.shape_cols)) for stored in sent.values()]
         self._vi_product_maps = maps
-        self.vi_product_labels = list(maps)
-        self.vi_product_map_frames = int(frame_count)
-        self.vi_product_maps_bytes = np.stack(stacked).tobytes() if stacked else b""
+        with self.hold_sync():
+            self.vi_product_streamed = streamed
+            self.vi_product_labels = list(maps)
+            self.vi_product_map_frames = int(sent_frames if streamed else frame_count)
+            self.vi_product_maps_bytes = np.stack(stacked).tobytes() if stacked else b""
         if changed is None or self.vi_source == changed:
             self._refresh_compare_virtual_images()
 
@@ -1915,6 +1937,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 upsampled.pop(identity, None)
             self._attached.setdefault(label, {})[identity] = image
             self._restack_attached(label)
+            if self._streams_products():
+                self._send_product_image(label, identity, image)
             if self.live_phase_stream and label == "Direct":
                 self.frame_idx = index
 
@@ -1966,6 +1990,23 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 maps[label] = stack
             self._publish_product_maps(maps, changed)
             self._publish_detail()
+
+    def _send_product_image(self, label: str, identity: str, image: np.ndarray) -> None:
+        """One scan's ``label`` image to the page, alone (``vi_product_streamed``)."""
+        image = np.ascontiguousarray(image, np.float32)
+        self.send({"type": "vi_product_image", "label": label, "source": identity,
+                   "rows": int(image.shape[0]), "cols": int(image.shape[1])}, buffers=[memoryview(image).cast("B")])
+
+    def _send_product_images(self) -> None:
+        """Every streamed image of the scans kept, for a page that opened or reloaded."""
+        if not self._streams_products():
+            return
+        with self._attached_lock:
+            kept = set(self._stream_source_ids)
+            images = [(label, identity, image) for label, by_scan in self._attached.items()
+                      for identity, image in by_scan.items() if identity in kept]
+        for label, identity, image in images:
+            self._send_product_image(label, identity, image)
 
     def _publish_detail(self, change=None) -> None:
         """Send the shown scan's upsampled attach() image for the image source in view, or nothing."""
@@ -2337,8 +2378,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 self._stream_panel_update = {}
                 self._states_to_send.update({
                     "virtual_image_bytes", "vi_product_labels", "vi_product_map_frames", "vi_product_maps_bytes",
-                    "frame_bytes", "compare_diffraction_bytes", "compare_diffraction_indices",
+                    "vi_product_streamed", "frame_bytes", "compare_diffraction_bytes", "compare_diffraction_indices",
                     "compare_virtual_image_bytes", "compare_image_revision"})
+            self._send_product_images()
             self._stream_display_barrier()
 
     def _stream_display_barrier(self) -> None:

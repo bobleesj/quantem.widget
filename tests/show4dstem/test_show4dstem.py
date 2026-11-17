@@ -203,7 +203,7 @@ def test_an_attached_phase_stays_with_its_scan_as_a_stream_grows(tmp_path, accel
         widget.attach("Direct", -first, frame=loaded[2])            # the scan itself, when labels repeat
         recording.receiving = False
         widget._stream_thread.join(timeout=5)
-        stack = np.frombuffer(widget.vi_product_maps_bytes, np.float32).reshape(3, *SCAN)
+        stack = widget._vi_product_maps["Direct"]            # streamed one scan at a time, kept whole here
         np.testing.assert_array_equal(stack[0], first)
         assert np.isnan(stack[1]).all()
         np.testing.assert_array_equal(stack[2], -first)
@@ -213,6 +213,70 @@ def test_an_attached_phase_stays_with_its_scan_as_a_stream_grows(tmp_path, accel
             widget.attach("Direct", first, frame="z")
         with pytest.raises(ValueError, match="one real image"):
             widget.attach("Direct", first[:2], frame="a")
+    finally:
+        widget.close()
+        for acquisition in loaded:
+            acquisition.close()
+
+
+def test_a_streaming_viewer_sends_each_attached_image_alone_never_the_whole_stack(tmp_path, accelerator):
+    """11-17: every attach() resent every scan's images as one stack (19 MB for five 512 x 512 scans, 16 times that
+    at 2048 x 2048) and the page spent 100 to 200 ms decoding each. A streaming viewer sends the one image that
+    changed, keyed by its scan's identity; a page that opens or reloads gets them all once."""
+    from types import SimpleNamespace
+
+    loaded = [gpu_adapter.load_acquisition(_write_master(tmp_path, f"scan{index}", _counts(index))) for index in range(2)]
+    recording = SimpleNamespace(datasets=list(loaded), error=None, receiving=False)
+    widget = Show4DSTEM.stream(recording, refresh_s=0.02, labels=["a", "b"], verbose=False)
+    sent = []
+
+    def keep(content, buffers=None):
+        """What the page would be sent."""
+        sent.append((content, buffers))
+
+    try:
+        widget._stream_thread.join(timeout=5)
+        widget.send = keep
+        image = np.arange(SCAN[0] * SCAN[1], dtype=np.float32).reshape(SCAN)
+        widget.attach("Direct", image, frame="b")
+        widget.attach("DPC_row", -image, frame="a")
+        products = [(content, buffers) for content, buffers in sent if content.get("type") == "vi_product_image"]
+        a, b = widget._stream_source_ids
+        assert [(content["label"], content["source"]) for content, _ in products] == [("Direct", b), ("DPC_row", a)]
+        assert (products[0][0]["rows"], products[0][0]["cols"]) == SCAN
+        np.testing.assert_array_equal(np.frombuffer(products[0][1][0], np.float32).reshape(SCAN), image)
+        assert widget.vi_product_maps_bytes == b""                  # never the stack
+        assert set(widget.vi_product_streamed) == {"Direct", "DPC_row"}
+        assert set(widget.vi_product_labels) == {"Direct", "DPC_row"}
+        sent.clear()
+        widget._send_product_images()                                # a page that opened or reloaded
+        assert sorted((content["label"], content["source"]) for content, _ in sent) == [("DPC_row", a), ("Direct", b)]
+        widget.vi_source, widget.frame_idx = "Direct", 1
+        np.testing.assert_array_equal(widget.virtual_image(), image)  # the kernel's own image is unchanged
+    finally:
+        widget.close()
+        for acquisition in loaded:
+            acquisition.close()
+
+
+def test_a_scan_drawn_live_from_its_rows_is_sent_whole_only_when_it_ends(tmp_path, accelerator):
+    """11-17: refresh() sent the whole detector image four times a second while the page drew the arriving scan from
+    its rows and positions (17 MB each at 2048 x 2048). While live_phase_preview names a scan, it is not sent whole;
+    when the scan is no longer drawn live, its whole image goes once."""
+    from types import SimpleNamespace
+
+    loaded = [gpu_adapter.load_acquisition(_write_master(tmp_path, "scan0", _counts(0)))]
+    recording = SimpleNamespace(datasets=list(loaded), error=None, receiving=False)
+    widget = Show4DSTEM.stream(recording, refresh_s=0.02, labels=["a"], verbose=False)
+    try:
+        widget._stream_thread.join(timeout=5)
+        widget.vi_source = "roi"
+        widget.live_phase_preview = {"scan": "1", "total": SCAN[0], "cols": SCAN[1]}
+        widget.virtual_image_bytes = b""
+        widget.refresh()
+        assert bytes(widget.virtual_image_bytes) == b""
+        widget.live_phase_preview = {}
+        assert len(bytes(widget.virtual_image_bytes)) == SCAN[0] * SCAN[1] * 4
     finally:
         widget.close()
         for acquisition in loaded:
@@ -234,7 +298,7 @@ def test_an_upsampled_phase_is_drawn_at_full_resolution_and_kept_on_the_scan_gri
         fine = np.random.default_rng(0).random((rows * FACTOR, cols * FACTOR), dtype=np.float32)
         widget.attach("Direct", fine, frame="a")
         widget.attach("Direct", np.ones(SCAN, np.float32), frame="b")
-        stack = np.frombuffer(widget.vi_product_maps_bytes, np.float32).reshape(2, *SCAN)
+        stack = widget._vi_product_maps["Direct"]
         np.testing.assert_allclose(stack[0], fine.reshape(rows, FACTOR, cols, FACTOR).mean(axis=(1, 3)), rtol=1e-6)
         widget.vi_source, widget.frame_idx = "Direct", 0
         detail = widget.vi_detail

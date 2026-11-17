@@ -94,6 +94,7 @@ import {
   type DetectorRoiMode,
 } from "./detectorInteraction";
 import { upsampledTransform, type UpsampledImage } from "./upsampledImage";
+import { streamedProductsOf, type ProductImageMessage } from "./streamedProducts";
 import {
   createLiveRows, floatValues, liveInfo, liveShownImage, sameLiveInfo, sampledValues,
   type LiveFrame, type LiveInfo, type RowsMessage,
@@ -155,8 +156,25 @@ type ViProductMaps = { bytes: DataView; productIndex: number; frames: number; pi
  * source: vi_product_maps_bytes holds float32 [label, frame, scan row, scan col].
  * Null when that source has no map, so the caller falls back to the ROI image.
  */
+function viProductStreamed(model: Show4DSTEMModel): string[] {
+  const streamed = model.get("vi_product_streamed");
+  return Array.isArray(streamed) ? streamed as string[] : [];
+}
+
+/** One scan's image of a label the kernel streams one scan at a time (`vi_product_streamed`), blank when that
+ *  scan has none; null for a label that travels in the stack. */
+function viStreamedFrameView(model: Show4DSTEMModel, source: string, frame: number, scanRows: number, scanCols: number): DataView | null {
+  if (!viProductStreamed(model).includes(source)) return null;
+  const ids = model.get("_stream_source_ids");
+  const id = Array.isArray(ids) ? String(ids[frame] ?? "") : "";
+  const image = streamedProductsOf(model).image(source, id, scanRows, scanCols);
+  return new DataView(image.buffer, image.byteOffset, image.byteLength);
+}
+
 function viProductMaps(model: Show4DSTEMModel, source: string, scanRows: number, scanCols: number): ViProductMaps | null {
-  const labels = Array.isArray(model.get("vi_product_labels")) ? model.get("vi_product_labels") as string[] : [];
+  const streamed = viProductStreamed(model);
+  const labels = (Array.isArray(model.get("vi_product_labels")) ? model.get("vi_product_labels") as string[] : [])
+    .filter((label) => !streamed.includes(label));
   const productIndex = labels.indexOf(source);
   if (productIndex < 0) return null;
   const bytes = model.get("vi_product_maps_bytes") as DataView | undefined;
@@ -182,6 +200,8 @@ function viProductFrameView(
   // Python writes the canonical source names (roi, DPC_row, DPC_col, iDPC, direct ptychography) back to the model.
   const source = sourceOverride ?? model.get("vi_source");
   if (source === "roi") return null;
+  const streamedView = viStreamedFrameView(model, source, Math.round(Number(model.get("frame_idx") || 0)), scanRows, scanCols);
+  if (streamedView) return streamedView;
   const maps = viProductMaps(model, source, scanRows, scanCols);
   if (!maps) return null;
   const start = viProductMapOffset(maps, Math.round(Number(model.get("frame_idx") || 0)));
@@ -198,6 +218,15 @@ function viProductStackForIndices(
 ): DataView | null {
   const source = model.get("vi_source");
   if (source === "roi" || indices.length === 0) return null;
+  if (viProductStreamed(model).includes(source)) {
+    const pixels = Math.max(1, scanRows * scanCols);
+    const stack = new Float32Array(indices.length * pixels);
+    for (let slot = 0; slot < indices.length; slot++) {
+      const view = viStreamedFrameView(model, source, Math.round(Number(indices[slot]) || 0), scanRows, scanCols)!;
+      stack.set(new Float32Array(view.buffer, view.byteOffset, pixels), slot * pixels);
+    }
+    return new DataView(stack.buffer);
+  }
   const maps = viProductMaps(model, source, scanRows, scanCols);
   if (!maps) return null;
   const stack = new Float32Array(indices.length * maps.pixels);
@@ -2546,6 +2575,18 @@ function Show4DSTEM() {
   const [viProductLabels] = useModelState<string[]>("vi_product_labels");
   const [viProductMapFrames] = useModelState<number>("vi_product_map_frames");
   const [viProductMapsBytes] = useModelState<DataView>("vi_product_maps_bytes");
+  const [viProductStreamedLabels] = useModelState<string[]>("vi_product_streamed");
+  // Images the kernel attaches to a scan come one scan at a time (`vi_product_image`); a count of them redraws.
+  const streamedProducts = React.useMemo(() => streamedProductsOf(model), [model]);
+  const [streamedProductsVersion, setStreamedProductsVersion] = React.useState(0);
+  React.useEffect(() => {
+    const receive = (content: ProductImageMessage, buffers?: DataView[]) => {
+      if (content?.type !== "vi_product_image") return;
+      if (streamedProducts.write(content, floatValues(buffers?.[0]))) setStreamedProductsVersion(streamedProducts.version());
+    };
+    model.on("msg:custom", receive);
+    return () => model.off("msg:custom", receive);
+  }, [model, streamedProducts]);
   const [, setDirectRequest] = useModelState<string>("direct_request");
   // A preset button asks the kernel (or, offline, the browser backend) to place the detector.
   const [, requestViPreset] = useModelState<string>("_preset_request");
@@ -2589,6 +2630,10 @@ function Show4DSTEM() {
   // Frame animation state (5D time/tilt series)
   const [frameIdx, setFrameIdxState] = useModelState<number>("frame_idx");
   const [streamSourceIds = []] = useModelState<string[]>("_stream_source_ids");
+  React.useEffect(() => {
+    streamedProducts.keep(streamSourceIds);
+    setStreamedProductsVersion(streamedProducts.version());
+  }, [streamSourceIds, streamedProducts]);
   // A scan chosen in a live session is shown once the kernel answers. Until then the slider and the next
   // step start from the choice, not from the scan still on screen: quick steps each move one scan, and
   // the kernel is asked for one scan at a time, the newest choice last (scanChoice).
@@ -4834,6 +4879,8 @@ function Show4DSTEM() {
     viProductLabels,
     viProductMapFrames,
     viProductMapsBytes,
+    viProductStreamedLabels,
+    streamedProductsVersion,
   ]);
   const displayedVirtualImageBytes = React.useMemo(() => {
     if (liveImage) return liveImage;
@@ -4860,6 +4907,8 @@ function Show4DSTEM() {
     viProductLabels,
     viProductMapFrames,
     viProductMapsBytes,
+    viProductStreamedLabels,
+    streamedProductsVersion,
     virtualImageBytes,
   ]);
   // The image in view at full resolution when it is k x the scan grid: the live Direct preview, or attach()'s
