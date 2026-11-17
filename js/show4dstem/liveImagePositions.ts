@@ -14,6 +14,7 @@ export function createLiveImage() {
   let data: Float32Array | null = null;
   let received = 0;
   let version = 0;
+  let changedFrom = Infinity, changedTo = 0;
   return {
     /** Write one batch. `under` gives the image to start a new scan on when there is no scan before of
      *  this size (the rows received so far over the previous image), or null. False for a batch that cannot be used. */
@@ -38,6 +39,8 @@ export function createLiveImage() {
       if (!(count > 0)) return false;
       data.set(count === values.length ? values : values.subarray(0, count), start);
       received = Math.max(received, start + count);
+      changedFrom = Math.min(changedFrom, start);
+      changedTo = Math.max(changedTo, start + count);
       version += 1;
       return true;
     },
@@ -49,6 +52,16 @@ export function createLiveImage() {
     moved: () => generation !== firstGeneration,
     /** Counts every batch written: a drawing is current while this has not changed. */
     version: () => version,
+    /** The detector area the positions are summed over, counted up each time it moves. */
+    generation: () => generation,
+    /** The rows of a `cols`-wide image written since the last take, [first, last), or null. */
+    takeDirty(cols: number): [number, number] | null {
+      if (!(changedTo > changedFrom) || !(cols > 0)) return null;
+      const rows: [number, number] = [Math.floor(changedFrom / cols), Math.ceil(changedTo / cols)];
+      changedFrom = Infinity;
+      changedTo = 0;
+      return rows;
+    },
   };
 }
 

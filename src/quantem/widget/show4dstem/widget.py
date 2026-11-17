@@ -290,9 +290,18 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     roi_width = traitlets.Float(20.0).tag(sync=True)
     roi_height = traitlets.Float(10.0).tag(sync=True)
     live_phase_stream = traitlets.Bool(False).tag(sync=True)
+    # The scan being received: {scan, total, cols, detRows, detCols, mode, upsample, com_unit}; {} when none is.
+    # It says which scan arrives and changes once per scan. Its pixels go as messages, never in this value (the
+    # page compares a synced value with the one before, byte by byte):
+    #   send({"type": "live_image_rows", "scan", "image", "first_row", "rows", "cols", "total", "upsample"},
+    #        buffers=[float32 rows * upsample by cols * upsample])
+    # writes those rows of the image named "Direct", "roi", "COM_row", "COM_col" or "DPC"; with "under": True
+    # they are what the scan is drawn over (the image before it). Rows not sent keep what the page had.
+    #   send({"type": "live_image_clear"}) forgets every image, so the next scan is drawn over nothing.
+    # A frame that carries whole images (phase, roi, com_row, com_col, dpc as float32 bytes, with dp) still shows.
     live_phase_preview = traitlets.Dict(default_value={}).tag(sync=True)
     # The newest diffraction pattern of the scan being received (float32, detector rows x cols): sent alone, many
-    # times a second, while live_phase_preview carries the image with the rows.
+    # times a second, and drawn without rendering the viewer.
     live_pattern = traitlets.Bytes(b"").tag(sync=True)
     # The shown scan's attach() image at full resolution when it is k x the scan grid; the image panel draws it
     # at the scan's size and the pointer still picks scan positions (image pixel / k).
