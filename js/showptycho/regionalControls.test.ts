@@ -106,6 +106,23 @@ test('a running regional fit disables every aberration and sample slider', async
   expect(sliders().some(root => root.classList.contains('Mui-disabled'))).toBe(false);
 });
 
+test.each(['local', 'remote'])('defocus preview setup follows the %s kernel location', async location => {
+  const model = session({ kernel_location: location, method: 'phase', defocus_preview_revision: 1,
+    local_tilt_enabled: false, local_tilt_active_region: '' });
+  await mount(model);
+  expect(el.textContent?.includes('Preview setup')).toBe(location === 'remote');
+});
+
+test('a full-field defocus key step sends only its exact committed frame', async () => {
+  const model = session({ local_tilt_enabled: false, local_tilt_active_region: '', num_bright_field_pixels: 128 });
+  await mount(model);
+  dragC10(4);
+  await act(async () => { await new Promise<void>(resolve => requestAnimationFrame(() => resolve())); });
+  expect(model.sent.map(message => message.request)).toEqual([
+    expect.objectContaining({ C10_nm: 4, committed: true }),
+  ]);
+});
+
 test('a failed regional preview drops queued drags and says why', async () => {
   const model = session();
   await mount(model);

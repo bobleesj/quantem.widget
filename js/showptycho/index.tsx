@@ -10,6 +10,8 @@
 import * as React from "react";
 import { useLocalTiltWorkspace } from "./localTilt";
 import { idleDiagnostic, latestFrame } from "./interaction";
+import { currentGPUDevice } from "../display/device";
+import { DefocusPreview } from "./defocusPreview";
 import { GPUFrameDisplay, GPUPanelPainter, gpuPanelSources, type GPUPanelSource } from "./gpuFrame";
 import { FFTMagnitudeDisplay } from "./fftDisplay";
 import { fftAutoFrameZoom, fftFrameRegion, type GridRegion } from "./fftFraming";
@@ -2347,7 +2349,7 @@ function Explore() {
     statsWorkerRef.current = worker;
     return () => { worker.dispose(); statsWorkerRef.current = null; };
   }, []);
-  const gpuCmapReadyRef = React.useRef(false);
+  const [gpuCmapReady, setGpuCmapReady] = React.useState(false);
   // Statistics and the Fourier panel of each new phase on the colormap engine's device.
   const gpuFrameRef = React.useRef<GPUFrameDisplay | null>(null);
   // Paints each panel's slot into its own WebGPU canvas (colormap, window, zoom, pan in one pass).
@@ -2362,7 +2364,7 @@ function Explore() {
       if (cancelled) { engine.destroy(); return; }
       gpuCmapRef.current = engine;
       gpuPainterRef.current = new GPUPanelPainter(engine);
-      gpuCmapReadyRef.current = true;
+      setGpuCmapReady(true);
     });
     return () => {
       cancelled = true;
@@ -2371,7 +2373,6 @@ function Explore() {
       gpuPainterRef.current = null;
       gpuCmapRef.current?.destroy();
       gpuCmapRef.current = null;
-      gpuCmapReadyRef.current = false;
       gpuSlotDataRef.current = { 0: null, 1: null, 2: null };
     };
   }, []);
@@ -2455,6 +2456,81 @@ function Explore() {
     reconstructionRef.current, model.get("tilt_correction"), rotationDegRef.current,
   ]);
 
+  const [defocusRevision] = useModelState<number>("defocus_preview_revision");
+  const defocusCache = React.useRef<DefocusPreview | null>(null);
+  const preparing = React.useRef<{token: string; key: string; started: number; solveSeconds: number} | null>(null);
+  const previewPainted = React.useRef(false);
+  const expectedDefocus = React.useRef<number | null>(null);
+  const [defocusStatus, setDefocusStatus] = React.useState("");
+  const [defocusTiming, setDefocusTiming] = React.useState("");
+  const defocusCount = Math.ceil(c10Max) - Math.floor(c10Min) + 3;
+  const defocusMiB = defocusCount * Math.ceil(phaseHeight * phaseWidth / 2) * 4 / 2**20;
+  const [kernelLocation] = useModelState<string>("kernel_location");
+  const autoPreparedRevision = React.useRef(0);
+  const canPreviewDefocus = kernelLocation === "remote" && tuning && defocusRevision > 0 && !webgpuStandalone && !localTiltEnabled && methodModel === "phase" && !showFFT;
+  const prepareDefocus = () => {
+    if (!currentGPUDevice() || preparing.current || inflightDragRef.current) return;
+    // The initial exact frame can arrive before WebGPU finishes initializing.
+    // Repaint it into the GPU slot before staging the preview on that same device.
+    const exact = rawPhaseRef.current;
+    if (exact) renderAllRef.current(exact.data, exact.w, exact.h);
+    autoPreparedRevision.current = defocusRevision;
+    const accepted = JSON.parse(model.get("result_json") || "{}");
+    const job = {token: crypto.randomUUID(), key: requestKey(0, accepted.C12_nm, accepted.phi12_deg),
+      started: performance.now(), solveSeconds: 0};
+    preparing.current = job;
+    defocusCache.current?.destroy();
+    defocusCache.current = null;
+    setDefocusTiming("");
+    setDefocusStatus("Preparing defocus preview");
+    model.send({type: "defocus-planes", token: job.token, index: 0, revision: defocusRevision});
+  };
+  React.useEffect(() => {
+    setDefocusStatus("");
+    setDefocusTiming("");
+    const receive = async (msg: {type: string; token: string; revision: number; error?: string;
+        first: number; count: number; index: number; solve_seconds: number}, buffers: DataView[]) => {
+      const job = preparing.current;
+      if (msg.type !== "defocus-planes" || !job || msg.token !== job.token) return;
+      try {
+        const device = currentGPUDevice();
+        if (!device || msg.error || msg.revision !== defocusRevision) throw new Error(msg.error || "Preview settings changed.");
+        let cache = defocusCache.current;
+        if (!cache) cache = defocusCache.current = new DefocusPreview(device, msg.first, msg.count,
+          model.get("phase_width") * model.get("phase_height"), defocusRevision, job.key);
+        if (cache.loaded !== msg.index || !buffers.length) throw new Error("Incomplete defocus preview.");
+        for (const buffer of buffers) cache.add(buffer);
+        job.solveSeconds += msg.solve_seconds;
+        if (cache.loaded === cache.count) {
+          await device.queue.onSubmittedWorkDone();
+          if (preparing.current !== job) return;
+          const elapsed = (performance.now() - job.started) / 1000;
+          setDefocusTiming(`${cache.count} full-field solves in ${job.solveSeconds.toFixed(2)} s · ${elapsed.toFixed(1)} s total to browser GPU`);
+          preparing.current = null;
+          setDefocusStatus("Defocus preview ready");
+        } else {
+          setDefocusTiming(`${cache.loaded}/${cache.count} full-field solves · ${job.solveSeconds.toFixed(2)} s computing`);
+          setDefocusStatus("Preparing defocus preview");
+          model.send({type: "defocus-planes", token: job.token, index: cache.loaded, revision: defocusRevision});
+        }
+      } catch (error) {
+        if (preparing.current !== job) return;
+        preparing.current = null;
+        setDefocusTiming("");
+        defocusCache.current?.destroy(); defocusCache.current = null;
+        setDefocusStatus(error instanceof Error ? error.message : String(error));
+      }
+    };
+    model.on("msg:custom", receive);
+    return () => {
+      model.off("msg:custom", receive); preparing.current = null;
+      defocusCache.current?.destroy(); defocusCache.current = null;
+    };
+  }, [model, defocusRevision]);
+  React.useEffect(() => {
+    if (canPreviewDefocus && gpuCmapReady && !busy && phaseWidth && phaseHeight &&
+        autoPreparedRevision.current !== defocusRevision) prepareDefocus();
+  }, [canPreviewDefocus, gpuCmapReady, busy, phaseWidth, phaseHeight, defocusRevision]);
   // The busy mark shows at once and clears only after a short quiet spell: a drag answered faster
   // than the next pointer move would otherwise re-render the widget twice per frame.
   const busyTimerRef = React.useRef<number | null>(null);
@@ -2466,6 +2542,7 @@ function Explore() {
   React.useEffect(() => () => { if (busyTimerRef.current !== null) window.clearTimeout(busyTimerRef.current); }, []);
 
   const fireRequest = React.useCallback((c10Val: number, c12Val: number, phi12Val: number, committed: boolean) => {
+    expectedDefocus.current = c10Val;
     const region = regionContextRef.current;
     if (region && !region.ready) {
       inflightDragRef.current = sentRequestsRef.current.length > 0;
@@ -2491,7 +2568,23 @@ function Explore() {
     }});
   }, [model, showBusy]);
 
-  const sendDrag = React.useCallback((c10Val: number, c12Val: number, phi12Val: number, rotationVal = rotationDegRef.current) => {
+  const dispatchDrag = React.useCallback((c10Val: number, c12Val: number, phi12Val: number, rotationVal = rotationDegRef.current, defocusDrag = false) => {
+    const cache = defocusCache.current, canvas = gpuSlotCanvasRef.current[0];
+    const slot = gpuCmapRef.current?.slots[0];
+    if (defocusDrag && currentGPUDevice() && cache && cache.revision === model.get("defocus_preview_revision")
+      && !regionContextRef.current && !showFFTRef.current && viewPinRef.current === null
+      && cache.key === requestKey(0, c12Val, phi12Val) && canvas && gpuPanelSources.has(canvas)
+      && slot && cache.pixels === slot.count && cache.loaded === cache.count
+      && c10Val >= cache.start + 1 && c10Val <= cache.start + cache.count - 2) {
+      expectedDefocus.current = c10Val;
+      if (gpuFrameBusyRef.current) return;  // the previous exact image is still painting
+      cache.draw(c10Val, model.get("display_negate_phase") ? -1 : 1, slot.dataBuffer);
+      previewPainted.current = true;
+      canvas.dataset.quantemDataFrame = `defocus-preview-${c10Val}`;
+      canvas.dispatchEvent(new Event("quantem-frame"));
+      setDefocusStatus("Defocus preview · exact on release");
+      return;
+    }
     if (reconstructionRef.current.method === "phase_of_mean" && !regionContextRef.current && frontendPreviewRef.current?.(c10Val, c12Val, phi12Val, rotationVal)) return;
     // The same complete state already on its way gives the same phase: one input event can report a value twice.
     const latest = sentRequestsRef.current[sentRequestsRef.current.length - 1];
@@ -2503,7 +2596,22 @@ function Explore() {
     fireRequest(c10Val, c12Val, phi12Val, false);
   }, [fireRequest]);
 
+  // A keyboard step emits both change and commit in the same event. Send only the
+  // exact release in that case; while held, send the newest drag each display frame.
+  const dragValues = React.useRef<[number, number, number, number, boolean]>([0, 0, 0, 0, false]);
+  const dragFrame = React.useMemo(() => latestFrame(() => dispatchDrag(...dragValues.current)), [dispatchDrag]);
+  React.useEffect(() => () => dragFrame.cancel(), [dragFrame]);
+  const sendDrag = React.useCallback((c10Val: number, c12Val: number, phi12Val: number, rotationVal = rotationDegRef.current, defocusDrag = false) => {
+    if (regionContextRef.current || !shouldCommitOnReleaseRef.current) {
+      dispatchDrag(c10Val, c12Val, phi12Val, rotationVal);
+      return;
+    }
+    dragValues.current = [c10Val, c12Val, phi12Val, rotationVal, defocusDrag];
+    dragFrame.schedule();
+  }, [dispatchDrag, dragFrame]);
+
   const sendCommit = React.useCallback((c10Val: number, c12Val: number, phi12Val: number, rotationVal = rotationDegRef.current) => {
+    dragFrame.cancel();
     pendingDragRef.current = null;
     if (reconstructionRef.current.method === "phase_of_mean" && !regionContextRef.current && frontendFullRef.current?.(c10Val, c12Val, phi12Val, rotationVal)) return;
     if (sentRequestsRef.current.length >= requestCapacity()) {
@@ -2511,7 +2619,7 @@ function Explore() {
       return;
     }
     fireRequest(c10Val, c12Val, phi12Val, true);
-  }, [fireRequest]);
+  }, [fireRequest, dragFrame]);
 
   /* --- Slider values ref (so callbacks read fresh values without re-creating) --- */
   const sliderVals = React.useRef({ c10: 0, c12: 0, phi12: 0 });
@@ -2821,7 +2929,7 @@ function Explore() {
         if (keys.includes("rot")) setRotationDeg(nextRot);
         sendDrag(nextC10, nextC12, nextPhi12, nextRot);
       } else if (sweepParam === "c10") {
-        setC10(value); sendDrag(value, sliderVals.current.c12, sliderVals.current.phi12);
+        setC10(value); sendDrag(value, sliderVals.current.c12, sliderVals.current.phi12, rotationDegRef.current, true);
       } else if (sweepParam === "c12") {
         setC12(value); sendDrag(sliderVals.current.c10, value, sliderVals.current.phi12);
       } else if (sweepParam === "phi12") {
@@ -2954,7 +3062,7 @@ function Explore() {
     };
     const engine = gpuCmapRef.current;
     const lut = COLORMAPS[cmapName as keyof typeof COLORMAPS] || COLORMAPS.viridis;
-    if (!engine || !gpuCmapReadyRef.current) {
+    if (!engine) {
       const cpuPaint = (stats: FrameStats) => {
         const { vmin, vmax, min, max } = percentileWindow(stats.histogram, pctLo, pctHi);
         const rgba = new Uint8ClampedArray(w * h * 4);
@@ -3064,7 +3172,7 @@ function Explore() {
   const renderFrameOnGPU = React.useCallback((data: Float32Array, w: number, h: number): boolean => {
     const engine = gpuCmapRef.current;
     const fft = displayFFTRef.current;
-    if (!engine || !gpuCmapReadyRef.current || !fft) return false;
+    if (!engine || !fft) return false;
     if (!gpuFrameRef.current) {
       if (!GPUFrameDisplay.compatible(engine, fft as unknown as { path: string })) return false;
       gpuFrameRef.current = new GPUFrameDisplay(engine, fft as never);
@@ -3442,16 +3550,23 @@ function Explore() {
       const bytes = model.get("phase_bytes");
       const width = model.get("phase_width"), height = model.get("phase_height");
       if (!bytes || !width || !height) return;
-      if (bytes === previous && width === previousWidth && height === previousHeight) return;
+      if (bytes === previous && width === previousWidth && height === previousHeight && !previewPainted.current) return;
+      if (previewPainted.current) {
+        const reply = JSON.parse(model.get("result_json") || "{}");
+        if (reply.id > 0 && !reply.error && reply.C10_nm !== expectedDefocus.current) return;
+        previewPainted.current = false;
+        gpuSlotDataRef.current[0] = null;
+        setDefocusStatus(defocusCache.current ? "Defocus preview ready" : "");
+      }
       const data = extractFloat32(bytes);
       // Keep the last complete image until the new dimensions and bytes agree.
       if (!data || data.length !== width * height) return;
       previous = bytes; previousWidth = width; previousHeight = height;
       renderAllRef.current(data, width, height);
     };
-    model.on("change:phase_bytes change:phase_width change:phase_height", receive);
+    model.on("change:phase_bytes change:phase_width change:phase_height change:result_json", receive);
     receive();
-    return () => model.off("change:phase_bytes change:phase_width change:phase_height", receive);
+    return () => model.off("change:phase_bytes change:phase_width change:phase_height change:result_json", receive);
   }, [model]);
 
   /* --- Apply a finished tilt fit: aberration sliders + Sample panel.  The fit's C10 is the
@@ -4301,6 +4416,11 @@ function Explore() {
             </Box>}
           </Box>
         </Popover>
+        {canPreviewDefocus &&
+          <Button size="small" sx={compactButton(tc)} disabled={!gpuCmapRef.current || busy || !!preparing.current || (!!defocusCache.current && defocusCache.current.loaded === defocusCache.current.count)}
+            onClick={prepareDefocus} title="Cache full-field phase samples on the browser GPU at 1 nm defocus intervals. Contrast is held during the drag. Release recomputes the exact phase.">
+            {defocusStatus || "Prepare defocus preview"}
+          </Button>}
         <Button
           size="small"
           variant="outlined"
@@ -4314,6 +4434,10 @@ function Explore() {
         </Button>
       </Stack>
 
+      {canPreviewDefocus && <Typography component="div" sx={{ ...typography.value, color: tc.textMuted }}
+        title="Solve time includes reconstruction and GPU-to-host readback. Total time also includes packing, transfer, and upload to the browser GPU.">
+        {defocusTiming || `Preview setup · ${defocusCount} full-field solves at 1 nm intervals · ${defocusMiB.toFixed(1)} MiB`}
+      </Typography>}
       {localTilt?.toolbar}
 
       <Box data-showptycho-body sx={controlsBeside
@@ -4661,7 +4785,7 @@ function Explore() {
               key: "c10" as AberKey, label: controlsBeside ? "Defocus C10" : "C10", unit: "nm", value: c10, displayPrec: 1,
               tipFull: "C10: defocus.  Positive = overfocus, negative = underfocus.  The dominant aberration.",
               min: c10UiMin, max: c10UiMax, step: 0.1,
-              setValue: (value: number) => { holdSliderValue("c10", value); sendDrag(value, sliderVals.current.c12, sliderVals.current.phi12); },
+              setValue: (value: number) => { holdSliderValue("c10", value); sendDrag(value, sliderVals.current.c12, sliderVals.current.phi12, rotationDegRef.current, true); },
               commitValue: (value: number) => { commitSliderValue("c10", value); if (shouldCommitOnReleaseRef.current) sendCommit(value, sliderVals.current.c12, sliderVals.current.phi12); },
             },
             {

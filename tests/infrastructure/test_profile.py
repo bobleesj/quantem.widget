@@ -182,8 +182,10 @@ def test_profile_reports_each_editable_package_branch(installation, tmp_path, ca
     assert str(tmp_path) not in text
 
 
-@pytest.mark.parametrize("location,label", [("local", "Local"), ("remote", "Remote"), (None, "Unknown"), ("invalid", "Unknown")])
+@pytest.mark.parametrize("location,label", [("local", "Local"), ("remote", "Remote"), (None, "Local"), ("invalid", "Local")])
 def test_profile_kernel_location_is_private(installation, monkeypatch, capsys, location, label):
+    monkeypatch.delenv("SSH_CLIENT", raising=False)
+    monkeypatch.delenv("SSH_CONNECTION", raising=False)
     monkeypatch.setattr(info.platform, "node", lambda: "private-hostname")
     if location is None:
         monkeypatch.delenv("QW_KERNEL_LOCATION", raising=False)
@@ -193,3 +195,12 @@ def test_profile_kernel_location_is_private(installation, monkeypatch, capsys, l
     output = capsys.readouterr().out
     assert f"Kernel          {label}" in output
     assert "private-hostname" not in output
+
+
+@pytest.mark.parametrize("ssh_var", ["SSH_CLIENT", "SSH_CONNECTION"])
+def test_profile_and_viewer_share_ssh_location(monkeypatch, ssh_var):
+    monkeypatch.delenv("QW_KERNEL_LOCATION", raising=False)
+    monkeypatch.setenv(ssh_var, "test-session")
+    assert info._kernel_location() == "remote"
+    monkeypatch.setenv("QW_KERNEL_LOCATION", "local")
+    assert info._kernel_location() == "local"

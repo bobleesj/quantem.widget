@@ -29,6 +29,7 @@ import datetime
 import json
 import math
 import pathlib
+import time
 import uuid
 from collections.abc import Callable
 
@@ -41,9 +42,11 @@ from quantem.widget.adapters import core as core_adapter
 from quantem.widget.adapters import gpu as gpu_adapter
 from quantem.widget.colormap import colorize, contrast_uint8
 from quantem.widget.device import gpu_path_hint, no_gpu_path
+from quantem.widget.info import _kernel_location
 from quantem.widget.showptycho.export import write_showptycho_folder
 from quantem.widget.units import axis_pair, image_axes, per_axis, stated, wrap_degrees
 from quantem.widget.utils.array import device_array
+from quantem.widget.utils.ui import ViewerSize, resolve_panel_width
 
 STARS_FILENAME = "showptycho_stars.json"
 CALIBRATION_FILENAME = "calibration.json"
@@ -261,6 +264,8 @@ class ShowPtycho(anywidget.AnyWidget):
     fitted_scan_detector_rotation_deg = traitlets.Float(0.0).tag(sync=True)
     fitted_sample_json = traitlets.Unicode("{}").tag(sync=True)
     fitted_higher_order_aberrations_json = traitlets.Unicode("{}").tag(sync=True)
+    kernel_location = traitlets.Enum(["local", "remote"], default_value="local").tag(sync=True)
+    defocus_preview_revision = traitlets.Int(0).tag(sync=True)
     phase_bytes = traitlets.Bytes(b"").tag(sync=True)
     phase_width = traitlets.Int(0).tag(sync=True)
     phase_height = traitlets.Int(0).tag(sync=True)
@@ -707,6 +712,7 @@ class ShowPtycho(anywidget.AnyWidget):
         units: str | None = None,
         save_dir: str | pathlib.Path | None = None,
         restore: bool = True,
+        size: ViewerSize = "medium",
         show_fft: bool = False,
         compute_loss: bool = False,
         upsample: str | int | None = None,
@@ -767,7 +773,7 @@ class ShowPtycho(anywidget.AnyWidget):
             data = device_array(data)  # a tensor or CuPy array stays on its GPU until the 2D result is drawn
         if not is_array and sampling is not None:
             raise ValueError("sampling describes an array; a direct ptychography session carries its own scan_sampling_A.")
-        super().__init__()
+        super().__init__(kernel_location=_kernel_location(), panel_px=resolve_panel_width(size))
         self.method = method
         self.compute_loss = compute_loss
         self._explicit_reconstruction_options = {
@@ -854,7 +860,7 @@ class ShowPtycho(anywidget.AnyWidget):
             self.local_tilt_can_fit = True
             self.local_tilt_can_reconstruct = True
         state = self._direct.state()
-        self.regularization_available = state["backend"] == "cuda" and state.get("dense_spectrum", True)
+        self.regularization_available = state["backend"] in ("cuda", "mps") and state.get("dense_spectrum", True)
         self._check_method()
         self._source_path = state["source_path"]
         self._source_scan_shape = state["input_scan_shape"]
@@ -1161,7 +1167,7 @@ class ShowPtycho(anywidget.AnyWidget):
         if (self.method if method is None else method) == "phase_of_mean":
             return
         if not self.regularization_available:
-            raise ValueError("Regularized direct reconstruction currently requires CUDA; use method='phase_of_mean' on MPS.")
+            raise ValueError("Regularized direct reconstruction needs a resident spectrum on CUDA or MPS. Use method='phase_of_mean' for a streamed scan.")
         if self.local_tilt_json:
             raise ValueError("Regional fitting currently supports method='phase_of_mean'; use a separate full-session review for regularization.")
 
@@ -1222,6 +1228,10 @@ class ShowPtycho(anywidget.AnyWidget):
         # Deliver pixels, dimensions and completion together. The browser can
         # request the next frame immediately without a second comm round trip.
         with self.hold_sync():
+            preview_key = (id(self._direct), options_key, tuple(sorted((k, v) for k, v in model.items() if k != "C10_nm")))
+            if preview_key != getattr(self, "_defocus_preview_key", None):
+                self._defocus_preview_key = preview_key
+                self.defocus_preview_revision += 1
             self.phase_height, self.phase_width = phase.shape
             self.phase_bytes = phase.tobytes()
             self.result_json = json.dumps(self._last_result)
@@ -1264,6 +1274,40 @@ class ShowPtycho(anywidget.AnyWidget):
         """Receive a bounded preview command without the generic trait throttle."""
         if content.get("type") == "direct-preview":
             self._on_request(content["request"])
+
+        elif content.get("type") == "defocus-planes":
+            self._send_defocus_planes(content)
+
+    def _send_defocus_planes(self, request: dict) -> None:
+        """Send a bounded batch of full-grid phase samples for the browser's C10 preview."""
+        reply = {"type": "defocus-planes", "token": request["token"], "revision": self.defocus_preview_revision}
+        first = math.floor(self.C10_min_nm) - 1
+        count = math.ceil(self.C10_max_nm) - first + 2
+        index = int(request["index"])
+        if (self._direct is None or self.method != "phase" or self._last_phase is None
+                or self.defocus_preview_revision != request["revision"] or not 0 <= index < count
+                or count * self._last_phase.size * 2 > 384 * 1024**2):
+            self.send({**reply, "error": "Defocus preview unavailable for these settings."})
+            return
+        sample = self._sample() or {}
+        if not self.tilt_correction:
+            sample = {**sample, "sample_tilt_mrad": (0.0, 0.0)}
+        buffers = []
+        solve_seconds = 0.0
+        try:
+            for j in range(index, min(index + 3, count)):
+                start = time.perf_counter()
+                phase, _ = self._direct.preview({**self._drag_model, "C10_nm": float(first + j)},
+                    upsample=self._output_factor, **self._reconstruction_options(), **sample, compute_loss=False)
+                # preview returns a host array, so this includes the completed solve and readback.
+                solve_seconds += time.perf_counter() - start
+                packed = np.asarray(phase, dtype="<f2").ravel()
+                if packed.size % 2:
+                    packed = np.pad(packed, (0, 1))
+                buffers.append(memoryview(packed).cast("B"))
+            self.send({**reply, "first": first, "index": index, "count": count, "solve_seconds": solve_seconds}, buffers=buffers)
+        except (ValueError, RuntimeError, MemoryError) as exc:
+            self.send({**reply, "error": str(exc)})
 
     def _on_request(self, request: dict) -> None:
         """A slider request from the browser {"id", "C10_nm", "C12_nm", "phi12_deg", "committed", ...}: reconstruct at

@@ -6,6 +6,8 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- ShowPtycho updates defocus directly on local kernels and automatically prepares full-field browser previews on remote kernels. Releasing the slider requests the exact phase.
+
 - `Show4DSTEM.live(path)` takes one scan file: that scan alone is shown, and `ShowPtycho.live(viewer)` below fits
   it. `environments/browse_direct_ptycho.ipynb` holds the cells: set `SCAN`, browse, direct ptychography.
 - `Show4DSTEM.live(folder, latest=2)` shows a folder a detector writes into, live: each scan is shown once its files are

@@ -33,6 +33,14 @@ reconstruction enter through the shared `quantem.gpu.DirectPtycho` API and retur
 `DirectPtycho` session so it can reuse resident buffers for notebook interaction; the
 returned result remains the compact analysis output.
 
+Local kernels update defocus directly. On a remote kernel, the full-field phase
+view prepares defocus samples on the browser GPU automatically. Dragging
+interpolates those samples. Releasing the slider requests the exact phase.
+The widget reports preparation progress and timing. Both modes use the same
+notebook call and the kernel location shown by `qw.profile()`. SSH sessions
+are detected automatically. For a remote Jupyter service that does not
+inherit SSH variables, set `QW_KERNEL_LOCATION=remote` in the kernel launcher.
+
 ### Load data, then open the widget
 
 Keep the notebook to two steps. First load and inspect the acquisition:

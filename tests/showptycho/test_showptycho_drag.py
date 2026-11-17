@@ -99,3 +99,24 @@ def test_a_rotation_drag_never_touches_the_drag_windows(ptycho, tmp_path, monkey
     request(6, 1.5, C10_nm=12.05, committed=True)                          # its release prepares the next grab
     assert calls == ["prepare"]
     viewer.close()
+
+
+def test_defocus_preview_uses_the_exact_grid_and_rejects_stale_optics(ptycho, tmp_path, monkeypatch):
+    viewer = ShowPtycho(ptycho, method="phase", save_dir=tmp_path)
+    viewer.upsample = 3
+    messages = []
+    monkeypatch.setattr(viewer, "send", lambda content, buffers=(): messages.append((content, buffers)))
+    request = {"type": "defocus-planes", "index": 1, "token": "test", "revision": viewer.defocus_preview_revision}
+    viewer._send_defocus_planes(request)
+    response, buffers = messages.pop()
+    assert len(buffers) == 3
+    assert response["solve_seconds"] > 0
+    value = response["first"] + request["index"]
+    exact = ptycho.preview({**viewer._drag_model, "C10_nm": value}, upsample=3,
+                           **(viewer._sample() or {}), **viewer._reconstruction_options(), compute_loss=False)[0]
+    plane = np.frombuffer(buffers[0], "<f2")[:exact.size].reshape(exact.shape)
+    np.testing.assert_array_equal(plane, exact.astype("<f2"))
+    viewer.phase_damp *= 2
+    viewer._send_defocus_planes(request)
+    assert "error" in messages[-1][0] and not messages[-1][1]
+    viewer.close()

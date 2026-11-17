@@ -17,6 +17,14 @@ import torch
 ENGINE_MANIFEST = Path(__file__).parent / "static" / "engine-manifest.json"
 
 
+def _kernel_location() -> str:
+    """Use the launcher location, then SSH session evidence, otherwise assume local."""
+    location = os.environ.get("QW_KERNEL_LOCATION", "").strip().lower()
+    if location in {"local", "remote"}:
+        return location
+    return "remote" if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_CLIENT") else "local"
+
+
 def profile() -> None:
     """Print the installed QuantEM stack and active compute environment.
 
@@ -25,7 +33,7 @@ def profile() -> None:
     package indexes or Git remotes.
 
     Kernel location uses ``QW_KERNEL_LOCATION=local|remote`` supplied by
-    the launcher. Without it, location is Unknown; hostnames are never printed.
+    the launcher. Otherwise an SSH session is remote and the default is local.
 
     Installation labels describe local provenance, not publication status.
     Commits come from the imported checkout, VCS install metadata, or an
@@ -156,10 +164,7 @@ def profile() -> None:
     from quantem.widget.adapters import core as core_adapter
     from quantem.widget.adapters import gpu as gpu_adapter
 
-    location = os.environ.get("QW_KERNEL_LOCATION", "unknown").lower()
-    if location not in {"local", "remote"}:
-        location = "unknown"
-    print(f"Kernel          {location.capitalize()}")
+    print(f"Kernel          {_kernel_location().capitalize()}")
     print(f"quantem.widget  {qw.__version__}")
     print_distribution_status("quantem.widget")
     for name, importable in (("quantem.gpu", gpu_adapter.available()), ("quantem", core_adapter.available())):
