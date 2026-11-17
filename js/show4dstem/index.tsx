@@ -5803,8 +5803,11 @@ function Show4DSTEM() {
   // Expensive: VI colormap + data processing → cached offscreen canvas
   React.useEffect(() => {
     if (!rawVirtualImageRef.current) return;
+    // The GPU canvas is hidden while a live row preview is shown (viGpuVisible), so the preview is drawn here:
+    // skipping it left BF, ABF and ADF black for the whole of every streamed scan.
     if (
-      !compareMode
+      !liveImage
+      && !compareMode
       && !viDetail
       && viGpuImageRef.current
       && activeViSource === viGpuImageRef.current.source
@@ -5879,7 +5882,7 @@ function Show4DSTEM() {
     applyColormap(scaled, imageData.data, lut, vmin, vmax);
     offCtx.putImageData(imageData, 0, 0);
     setViOffscreenVersion(version => version + 1);
-  }, [activeViSource, compareMode, displayedVirtualImageBytes, shapeRows, shapeCols, viDetail, viGpuVersion, viColormap, viVminPct, viVmaxPct, viScaleMode, traitViVmin, traitViVmax, viAutoContrast]);
+  }, [activeViSource, liveImage, compareMode, displayedVirtualImageBytes, shapeRows, shapeCols, viDetail, viGpuVersion, viColormap, viVminPct, viVmaxPct, viScaleMode, traitViVmin, traitViVmax, viAutoContrast]);
 
   // Present resident reductions directly, including while the pointer is held.
   // Offscreen bitmap snapshots can be black and can lag the latest detector. The
@@ -6010,7 +6013,7 @@ function Show4DSTEM() {
 
   // Cheap: VI zoom/pan redraw is one drawImage from the cached offscreen canvas
   React.useLayoutEffect(() => {
-    if (!compareMode && !viDetail && viGpuImageRef.current?.source === activeViSource && viGpuRetainedReady) return;
+    if (!liveImage && !compareMode && !viDetail && viGpuImageRef.current?.source === activeViSource && viGpuRetainedReady) return;
     const offscreen = viOffscreenRef.current;
     if (!offscreen || !virtualCanvasRef.current) return;
     const canvas = virtualCanvasRef.current;
@@ -6026,7 +6029,7 @@ function Show4DSTEM() {
     ctx.scale(transform.scale, transform.scale);
     ctx.drawImage(offscreen, 0, 0);
     ctx.restore();
-  }, [activeViSource, compareMode, viDetail, viFactor, viGpuRetainedReady, viOffscreenVersion, viZoom, viPanX, viPanY, viSmooth]);
+  }, [activeViSource, liveImage, compareMode, viDetail, viFactor, viGpuRetainedReady, viOffscreenVersion, viZoom, viPanX, viPanY, viSmooth]);
 
   // Compute FFT (expensive and async: only re-run on data/GPU changes)
   const fftRealRef = React.useRef<Float32Array | null>(null);
