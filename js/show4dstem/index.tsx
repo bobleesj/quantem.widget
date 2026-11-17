@@ -2340,6 +2340,9 @@ function Show4DSTEM() {
   // Model State (synced with Python)
   // ─────────────────────────────────────────────────────────────────────────
   const [liveStream] = useModelState<boolean>("live_phase_stream");
+  // The live view sits in a narrow column beside the scan controls: its panels touch and it starts at
+  // the column's left edge, so the images get every pixel.
+  const panelGap = liveStream ? 0 : PANEL_GAP;
   const [preview] = useModelState<{
     rows?: number; cols?: number; total?: number; detRows?: number; detCols?: number;
     mode?: string; upsample?: number; phase?: DataView; dp?: DataView; roi?: DataView; scan?: string;
@@ -4733,11 +4736,11 @@ function Show4DSTEM() {
   const sideBySideLimit = React.useMemo(() => {
     if (!mainRowWidth) return Infinity;
     const panels = fftDocked ? 3 : 2;
-    return Math.max(SIDE_BY_SIDE_MIN, Math.floor((mainRowWidth - PANEL_GAP * (panels - 1)) / panels));
-  }, [mainRowWidth, fftDocked]);
+    return Math.max(SIDE_BY_SIDE_MIN, Math.floor((mainRowWidth - panelGap * (panels - 1)) / panels));
+  }, [mainRowWidth, fftDocked, panelGap]);
   const fittedDpWidth = Math.min(dpPanelWidthPx || panelWidthPx || DP_DEFAULT_SIZE, sideBySideLimit);
   const compareGridFit = mainRowWidth > 0
-    ? Math.max(SIDE_BY_SIDE_MIN, mainRowWidth - fittedDpWidth * (fftDocked ? 2 : 1) - PANEL_GAP * (fftDocked ? 2 : 1))
+    ? Math.max(SIDE_BY_SIDE_MIN, mainRowWidth - fittedDpWidth * (fftDocked ? 2 : 1) - panelGap * (fftDocked ? 2 : 1))
     : COMPARE_GRID_DEFAULT_WIDTH;
   const compareGridWidth = compareGridPreviewWidth ?? (compareGridWidthPx > 0 ? compareGridWidthPx : compareGridFit);
   React.useEffect(() => {
@@ -4848,13 +4851,13 @@ function Show4DSTEM() {
   React.useEffect(() => {
     // The image fills what the diffraction pattern leaves (shared with the FFT); a set width caps it.
     const rest = mainRowWidth > 0
-      ? Math.max(SIDE_BY_SIDE_MIN, Math.floor((mainRowWidth - fittedDpWidth - PANEL_GAP * (fftDocked ? 2 : 1)) / (fftDocked ? 2 : 1)))
+      ? Math.max(SIDE_BY_SIDE_MIN, Math.floor((mainRowWidth - fittedDpWidth - panelGap * (fftDocked ? 2 : 1)) / (fftDocked ? 2 : 1)))
       : CANVAS_SIZE;
     const cap = viPanelWidthPx || panelWidthPx;
     // Linked panels share the row; an independent image keeps its own width (up to the row) and wraps below.
     const room = (syncResize || liveStream) ? rest : Math.max(rest, mainRowWidth || CANVAS_SIZE);
     setViCanvasSize(cap ? Math.min(cap, room) : rest);
-  }, [viPanelWidthPx, panelWidthPx, mainRowWidth, fittedDpWidth, fftDocked, syncResize, liveStream]);
+  }, [viPanelWidthPx, panelWidthPx, mainRowWidth, fittedDpWidth, fftDocked, syncResize, liveStream, panelGap]);
   const [isResizingCanvas, setIsResizingCanvas] = React.useState(false);
   const [resizeCanvasStart, setResizeCanvasStart] = React.useState<{ x: number; y: number; size: number; panel: "dp" | "vi" } | null>(null);
 
@@ -8467,7 +8470,7 @@ function Show4DSTEM() {
       onMouseDownCapture={handleRootMouseDownCapture}
       onDragOver={onLocalDragOver}
       onDrop={onLocalDrop}
-      sx={{ p: "4px", bgcolor: themeColors.bg, color: themeColors.text, outline: "none", borderRadius: "2px", width: "100%", maxWidth: "100%", boxSizing: "border-box", "@media (max-width: 700px)": { p: 0, overflowX: "hidden", ".jp-OutputArea-output &, .jp-OutputArea-child &": { width: "calc(100vw - 96px)", maxWidth: "calc(100vw - 96px)" } } }}
+      sx={{ p: "4px", ...(liveStream ? { pl: 0 } : {}), bgcolor: themeColors.bg, color: themeColors.text, outline: "none", borderRadius: "2px", width: "100%", maxWidth: "100%", boxSizing: "border-box", "@media (max-width: 700px)": { p: 0, overflowX: "hidden", ".jp-OutputArea-output &, .jp-OutputArea-child &": { width: "calc(100vw - 96px)", maxWidth: "calc(100vw - 96px)" } } }}
     >
       <input
         ref={h5LocalInputRef}
@@ -8568,7 +8571,7 @@ function Show4DSTEM() {
         ref={mainRowRef}
         direction="row"
         sx={{
-          gap: `${PANEL_GAP}px`,
+          gap: `${panelGap}px`,
           flexWrap: "wrap",
           alignItems: "flex-start",
           maxWidth: "100%",
