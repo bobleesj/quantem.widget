@@ -71,3 +71,17 @@ describe("live image positions", () => {
     expect(positionValues(new DataView(new ArrayBuffer(2)), 2)).toBeNull();
   });
 });
+
+describe("the rows that changed", () => {
+  it("are the rows of the batches written since the last take", () => {
+    const live = createLiveImage();
+    expect(live.takeDirty(2)).toBeNull();
+    live.write(...batch("a", 1, 1, [1, 2]));
+    live.write(...batch("a", 1, 3, [3]));
+    expect(live.takeDirty(2)).toEqual([0, 2]);
+    expect(live.takeDirty(2)).toBeNull();
+    live.write(...batch("a", 1, 4, [4, 5]));
+    expect(live.takeDirty(2)).toEqual([2, 3]);
+    expect(live.generation()).toBe(1);
+  });
+});

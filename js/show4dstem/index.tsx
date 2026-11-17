@@ -93,7 +93,11 @@ import {
   type DetectorResizeStart,
   type DetectorRoiMode,
 } from "./detectorInteraction";
-import { livePreviewImages, upsampledTransform, type LiveUnder, type UpsampledImage } from "./upsampledImage";
+import { upsampledTransform, type UpsampledImage } from "./upsampledImage";
+import {
+  createLiveRows, floatValues, liveInfo, liveShownImage, sameLiveInfo, sampledValues,
+  type LiveFrame, type LiveInfo, type RowsMessage,
+} from "./liveRows";
 
 // A .qem viewer URL ends in the exported file name, which also names a granted local file.
 const qemFileName = (url: string): string => url.slice(url.lastIndexOf("/") + 1);
@@ -258,6 +262,19 @@ const SIDE_BY_SIDE_MIN = 160;  // panels shrink this far to stay side by side in
 function keepWheelFromPage(event: WheelEvent) { event.preventDefault(); }
 
 const PANEL_GAP = 4;  // between the diffraction pattern, the image or scan grid and the FFT
+// While a scan arrives the component's state (stats, histogram, the pattern's values) follows this often; the
+// pattern and the image themselves are drawn on every animation frame without a render.
+const LIVE_STATE_MS = 250;
+// The contrast range of an arriving image is read again this often, from at most this many of its values.
+const LIVE_RANGE_MS = 250;
+const LIVE_RANGE_SAMPLES = 65536;
+
+/** The saved scan's image, to start a new scan's detector image on when it is the same size (not on black). */
+function savedImageUnder(model: { get: (name: string) => unknown }, positions: number): Float32Array | null {
+  const bytes = model.get("virtual_image_bytes") as DataView | undefined;
+  if (!bytes || bytes.byteLength !== positions * 4 || bytes.byteOffset % 4 !== 0) return null;
+  return new Float32Array(bytes.buffer, bytes.byteOffset, positions);
+}
 const COMPARE_GRID_DEFAULT_WIDTH = 980;
 
 /** Linear or log display, one small button that says which (11-16: the operator wanted the diffraction pattern
@@ -2352,74 +2369,142 @@ function Show4DSTEM() {
   // The live view sits in a narrow column beside the scan controls: its panels touch and it starts at
   // the column's left edge, so the images get every pixel.
   const panelGap = liveStream ? 0 : PANEL_GAP;
-  const [preview] = useModelState<{
-    rows?: number; cols?: number; total?: number; detRows?: number; detCols?: number;
-    mode?: string; upsample?: number; phase?: DataView; dp?: DataView; roi?: DataView; scan?: string;
-  }>("live_phase_preview");
-  const [livePattern] = useModelState<DataView>("live_pattern");
   const [viSource, setViSource] = useModelState<string>("vi_source");
-  // The row preview on the scan grid; a Direct phase sent k x the grid is also kept at full resolution to draw.
-  // A new scan paints over the last scan's image, as Velox does, not over black (11-16).
-  const liveLastRef = React.useRef<(LiveUnder & { scan?: string }) | null>(null);
-  const liveUnderRef = React.useRef<LiveUnder | null>(null);
-  const liveImages = React.useMemo(() => {
-    if (!preview?.detRows || !preview.detCols || preview.dp?.byteLength !== preview.detRows * preview.detCols * 4) return null;
-    const last = liveLastRef.current;
-    if (last && last.scan !== preview.scan) liveUnderRef.current = last;
-    const images = livePreviewImages(preview, viSource === "Direct", liveUnderRef.current);
-    if (images) liveLastRef.current = { scan: preview.scan, key: images.key, image: images.grid,
-                                        full: images.upsampled?.data ?? null };
-    return images;
-  }, [preview, viSource]);
-  // The detector image (BF, ABF, ADF, a dragged area) of the scan arriving also comes position by position,
-  // about 60 batches a second, as `live_image_positions` messages. Every message is written into one array
-  // as it arrives (not through React state, which keeps only the newest) and drawn once per animation
-  // frame; stats, histogram and the rest of the view follow a few times a second (liveImageTick).
+  // The scan arriving. Its pixels never pass through React state: a new pattern or new rows are written into
+  // arrays kept here and drawn once per animation frame, and the component renders only when the scan itself
+  // changes (its name, size or kind) or, a few times a second, for what reads the image (stats, histogram).
+  // Comparing megabytes of pixels in a synced trait and rendering the whole viewer for every one of them kept
+  // the page busy for most of every second of a scan.
+  const liveRows = React.useMemo(() => createLiveRows(), []);
+  // The detector image (BF, ABF, ADF, a dragged area) also comes position by position, about 60 batches a
+  // second, as `live_image_positions` messages.
   const liveImagePositions = React.useMemo(() => createLiveImage(), []);
+  const [preview, setPreview] = React.useState<LiveInfo | null>(
+    () => liveInfo(model.get("live_phase_preview") as LiveFrame | undefined));
+  const livePatternRef = React.useRef<DataView | null>(null);
+  const [livePattern, setLivePattern] = React.useState<DataView | null>(null);
   const [liveImageTick, setLiveImageTick] = React.useState(0);
   const drawLiveImageRef = React.useRef<(() => void) | null>(null);
+  const drawLivePatternRef = React.useRef<(() => void) | null>(null);
   const liveImageUnderRef = React.useRef<Float32Array | null>(null);
-  liveImageUnderRef.current = liveImages && !liveImages.upsampled ? liveImages.grid : null;
   React.useEffect(() => {
-    let frame = 0, drawn = -1, ticked = 0, settle = 0;
+    let frame = 0, drawnRows = -1, drawnPositions = -1, patternDrawn = true, ticked = 0, settle = 0;
+    const tick = () => {
+      setLivePattern(livePatternRef.current);
+      setLiveImageTick(count => count + 1);
+    };
     const draw = () => {
       frame = 0;
-      if (liveImagePositions.version() === drawn) return;
-      drawn = liveImagePositions.version();
-      drawLiveImageRef.current?.();
+      if (!patternDrawn) { patternDrawn = true; drawLivePatternRef.current?.(); }
+      const rows = liveRows.version(), positions = liveImagePositions.version();
+      if (rows !== drawnRows || positions !== drawnPositions) {
+        drawnRows = rows;
+        drawnPositions = positions;
+        drawLiveImageRef.current?.();
+      }
       const now = performance.now();
-      if (now - ticked >= 250) { ticked = now; setLiveImageTick(tick => tick + 1); }
+      if (now - ticked >= LIVE_STATE_MS) { ticked = now; tick(); }
     };
-    const receive = (content: PositionsMessage, buffers?: DataView[]) => {
-      if (content?.type !== "live_image_positions") return;
-      const values = positionValues(buffers?.[0], content.count);
-      if (!values || !liveImagePositions.write(content, values, () => liveImageUnderRef.current)) return;
+    const changed = () => {
       if (!frame) frame = requestAnimationFrame(draw);
-      // The last batch of a scan also reaches the stats and the histogram.
+      // The last rows of a scan also reach the stats and the histogram.
       window.clearTimeout(settle);
-      settle = window.setTimeout(() => setLiveImageTick(tick => tick + 1), 300);
+      settle = window.setTimeout(tick, LIVE_STATE_MS + 50);
     };
+    const patternBytes = (info: LiveInfo | null, bytes: DataView | undefined) =>
+      info && bytes && bytes.byteLength === info.detRows * info.detCols * 4 ? bytes : null;
+    const onFrame = () => {
+      const next = model.get("live_phase_preview") as LiveFrame | undefined;
+      const info = liveInfo(next);
+      if (info) {
+        liveRows.writeFrame(next);
+        // The frame's own pattern shows until the first of the fast ones is there.
+        const fast = patternBytes(info, model.get("live_pattern") as DataView | undefined);
+        const pattern = fast ?? patternBytes(info, next?.dp);
+        if (pattern && pattern !== livePatternRef.current) { livePatternRef.current = pattern; patternDrawn = false; }
+      }
+      setPreview(before => sameLiveInfo(before, info) ? before : info);
+      changed();
+    };
+    const onPattern = () => {
+      const pattern = model.get("live_pattern") as DataView | undefined;
+      if (!pattern?.byteLength) return;
+      livePatternRef.current = pattern;
+      patternDrawn = false;
+      changed();
+    };
+    const receive = (content: PositionsMessage | RowsMessage, buffers?: DataView[]) => {
+      if (content?.type === "live_image_positions") {
+        const message = content as PositionsMessage;
+        const values = positionValues(buffers?.[0], message.count);
+        if (values && liveImagePositions.write(message, values, () => liveImageUnderRef.current)) changed();
+      } else if (content?.type === "live_image_rows") {
+        if (liveRows.write(content as RowsMessage, floatValues(buffers?.[0]))) changed();
+      } else if (content?.type === "live_image_clear") {
+        liveRows.clear();
+        changed();
+      }
+    };
+    onFrame();
+    model.on("change:live_phase_preview", onFrame);
+    model.on("change:live_pattern", onPattern);
     model.on("msg:custom", receive);
     return () => {
+      model.off("change:live_phase_preview", onFrame);
+      model.off("change:live_pattern", onPattern);
       model.off("msg:custom", receive);
       if (frame) cancelAnimationFrame(frame);
       window.clearTimeout(settle);
     };
-  }, [liveImagePositions, model]);
+  }, [liveImagePositions, liveRows, model]);
   const liveScan = preview?.scan;
-  const liveScanPositions = (preview?.total ?? 0) * (preview?.cols ?? 0);
-  const liveDetectorImage = React.useMemo(() => {
+  // Which image shows: the operator's choice when this scan sends it, else the one shown before while it has
+  // data, else the detector image. Read again with every tick: rows arrive outside React.
+  const liveShownRef = React.useRef<string | null>(null);
+  const liveShown = React.useMemo(() => {
+    if (!preview) return null;
+    const sends = (name: string) => {
+      if (name === "roi") return true;
+      const image = liveRows.get(name, preview.total, preview.cols);
+      return Boolean(image && (image.scan === preview.scan || (name === "Direct" && preview.mode === "Direct")));
+    };
+    return liveShownImage(viSource, liveShownRef.current, sends);
+  }, [liveImageTick, liveRows, preview, viSource]);
+  liveShownRef.current = liveShown;
+  const liveRowImage = React.useMemo(
+    () => preview && liveShown && liveShown !== "roi" ? liveRows.get(liveShown, preview.total, preview.cols) : null,
+    [liveImageTick, liveRows, liveShown, preview]);
+  // The detector image: the positions as they are summed, else the rows the frame brought.
+  const liveDetectorArray = React.useMemo(() => {
+    if (!preview) return null;
     const data = liveImagePositions.data();
-    return liveScan && liveImagePositions.scan() === liveScan && data && data.length === liveScanPositions
-      ? new DataView(data.buffer) : null;
-    // liveImageTick: a new view of the same array, so what reads the image (stats, histogram) reads it again
-  }, [liveImagePositions, liveImageTick, liveScan, liveScanPositions]);
-  // Direct ptycho keeps coming with the preview's rows; every detector image takes the positions.
-  const liveImagePositionsShown = Boolean(liveImages && !liveImages.upsampled && liveDetectorImage
-    && !(viSource === "Direct" && preview?.mode === "Direct"));
-  const liveImage = liveImagePositionsShown ? liveDetectorImage : liveImages?.image ?? null;
+    if (liveImagePositions.scan() === preview.scan && data && data.length === preview.total * preview.cols) return data;
+    return liveRows.get("roi", preview.total, preview.cols)?.grid ?? null;
+  }, [liveImagePositions, liveImageTick, liveRows, preview]);
+  const liveImagePositionsShown = Boolean(preview && liveShown === "roi" && liveDetectorArray
+    && liveDetectorArray === liveImagePositions.data());
+  liveImageUnderRef.current = preview
+    ? liveRows.get("roi", preview.total, preview.cols)?.grid ?? savedImageUnder(model, preview.total * preview.cols)
+    : null;
+  // What reads the image on the scan grid (hover, profile, FFT, stats): a new view of the same array with each
+  // tick, so they read it again.
+  const liveImage = React.useMemo(() => {
+    const grid = liveRowImage ? liveRowImage.grid : liveDetectorArray;
+    return preview && grid ? new DataView(grid.buffer, grid.byteOffset, grid.byteLength) : null;
+  }, [liveDetectorArray, liveImageTick, liveRowImage, preview]);
+  // The array drawn, which stays the same one while rows are written into it: a draw from React happens when
+  // this changes, never because rows arrived.
+  const liveDrawn = liveRowImage ? liveRowImage.data : liveDetectorArray;
+  // The chosen image is not sent for this scan (a scan without a fit has no Direct phase).
+  const liveMissing = preview && liveShown && viSource !== liveShown && viSource !== "roi"
+    && !(viSource === "Direct" && preview.mode === "Direct") ? viSource : null;
   // A scan is arriving: the view shows it, and the controls that choose another scan wait.
   const streaming = liveImage !== null;
+  // A Direct phase sent k x the scan grid is drawn at full resolution.
+  const liveDetail = React.useMemo<UpsampledImage | null>(() => liveRowImage && liveRowImage.factor > 1
+    ? { data: liveRowImage.data, factor: liveRowImage.factor, rows: liveRowImage.rows * liveRowImage.factor,
+        cols: liveRowImage.cols * liveRowImage.factor }
+    : null, [liveRowImage]);
   const [viDetailState] = useModelState<{
     label?: string; frame?: number; factor?: number; rows?: number; cols?: number; image?: DataView;
   }>("vi_detail");
@@ -2446,15 +2531,15 @@ function Show4DSTEM() {
   const [title] = useModelState<string>("title");
   const [showTitle] = useModelState<boolean>("show_title");
 
-  const shapeRows = liveImage ? preview.total! : savedShapeRows;
-  const shapeCols = liveImage ? preview.cols! : savedShapeCols;
-  const detRows = liveImage ? preview.detRows! : savedDetRows;
-  const detCols = liveImage ? preview.detCols! : savedDetCols;
+  const shapeRows = liveImage && preview ? preview.total : savedShapeRows;
+  const shapeCols = liveImage && preview ? preview.cols : savedShapeCols;
+  const detRows = liveImage && preview ? preview.detRows : savedDetRows;
+  const detCols = liveImage && preview ? preview.detCols : savedDetCols;
   const [savedFrameBytes] = useModelState<DataView>("frame_bytes");
   // While a scan arrives its newest pattern comes on its own trait, many times a second; the preview's pattern (one
   // per batch of rows) shows until the first of those is there.
-  const frameBytes = liveImage
-    ? (livePattern && livePattern.byteLength === preview.detRows! * preview.detCols! * 4 ? livePattern : preview.dp!)
+  const frameBytes = liveImage && preview
+    ? (livePattern && livePattern.byteLength === preview.detRows * preview.detCols * 4 ? livePattern : undefined)
     : savedFrameBytes;
   const [virtualImageBytes, setVirtualImageBytes] = useModelState<DataView>("virtual_image_bytes");
   const [frontendVirtualImage, setFrontendVirtualImage] = React.useState<{ bytes: DataView; over: DataView | null } | null>(null);
@@ -4781,14 +4866,14 @@ function Show4DSTEM() {
   // image of the shown scan. Hover, profile and FFT keep reading the scan-grid image above.
   const viDetail = React.useMemo<UpsampledImage | null>(() => {
     if (compareMode) return null;
-    if (liveImage) return liveImages?.upsampled ?? null;
+    if (streaming) return liveDetail;
     const detail = viDetailState;
     if (!detail?.image || !detail.factor || detail.factor < 2 || detail.label !== activeViSource
         || detail.frame !== frameIdx || detail.rows !== shapeRows * detail.factor || detail.cols !== shapeCols * detail.factor
         || detail.image.byteLength !== detail.rows * detail.cols * 4) return null;
     return { data: new Float32Array(detail.image.buffer, detail.image.byteOffset, detail.rows * detail.cols),
              factor: detail.factor, rows: detail.rows, cols: detail.cols };
-  }, [activeViSource, compareMode, frameIdx, liveImage, liveImages, shapeCols, shapeRows, viDetailState]);
+  }, [activeViSource, compareMode, frameIdx, liveDetail, shapeCols, shapeRows, streaming, viDetailState]);
   const viFactor = viDetail?.factor ?? 1;
   const comparePageButtonItems = React.useMemo<(number | "gap")[]>(() => {
     if (activeComparePageCount <= 8) {
@@ -5867,10 +5952,11 @@ function Show4DSTEM() {
   // Render DP with zoom (use summed DP when VI ROI is active)
   // Expensive: colormap + data processing → cached offscreen canvas, painted
   // into the visible canvas before the browser paints the render that brought
-  // the pattern (a layout effect, so a new pattern costs no second render)
-  React.useLayoutEffect(() => {
-    const sourceBytes = displayedDpBytes;
-    if (!sourceBytes) return;
+  // the pattern (a layout effect, so a new pattern costs no second render). While a scan arrives its newest
+  // pattern is drawn by the same code from an animation frame (`fromFrame`), without a render: the histogram
+  // handles and the overlay then wait for the component's next render.
+  const renderDpPattern = (sourceBytes: DataView | null | undefined, fromFrame: boolean) => {
+    if (!sourceBytes || (fromFrame && sourceBytes.byteLength !== detRows * detCols * 4)) return;
 
     const lut = COLORMAPS[dpColormap] || COLORMAPS.inferno;
 
@@ -5892,7 +5978,7 @@ function Show4DSTEM() {
     } else if (dpPercentiles) {
       ({ vmin, vmax } = percentileClip(scaled, dpPercentiles[0], dpPercentiles[1]));
       // The handles follow the percentiles, so the histogram shows what is drawn.
-      const handles = handlePositions(vmin, vmax, dataMin, dataMax);
+      const handles = fromFrame ? null : handlePositions(vmin, vmax, dataMin, dataMax);
       if (handles && Math.abs(handles[0] - dpVminPct) > 0.5) setDpVminPct(handles[0]);
       if (handles && Math.abs(handles[1] - dpVmaxPct) > 0.5) setDpVmaxPct(handles[1]);
     } else {
@@ -5928,15 +6014,26 @@ function Show4DSTEM() {
     dpColorbarVmaxRef.current = vmax;
     paintDpCanvas();
     // A new DP render also updates cached colorbar limits, without an ROI edit.
-    drawDpUiRef.current?.();
-  }, [displayedDpBytes, detRows, detCols, dpColormap, dpVminPct, dpVmaxPct, dpScaleMode, traitDpVmin, traitDpVmax, dpPercentiles, setDpVminPct, setDpVmaxPct]);
+    if (!fromFrame || showDpColorbar) drawDpUiRef.current?.();
+  };
+  // While a scan arrives the newest pattern may be newer than the one in state: never draw an older one over it.
+  React.useLayoutEffect(() => {
+    const newest = livePatternRef.current;
+    renderDpPattern(streaming && newest && newest.byteLength === detRows * detCols * 4 ? newest : displayedDpBytes, false);
+  },
+    [displayedDpBytes, detRows, detCols, dpColormap, dpVminPct, dpVmaxPct, dpScaleMode, traitDpVmin, traitDpVmax, dpPercentiles, setDpVminPct, setDpVmaxPct, streaming]);
+  drawLivePatternRef.current = streaming ? () => renderDpPattern(livePatternRef.current, true) : null;
 
   // useLayoutEffect prevents black flash when canvas dimensions change (resize)
   React.useLayoutEffect(() => paintDpCanvas(), [dpZoom, dpPanX, dpPanY]);
 
-  // Expensive: VI colormap + data processing → cached offscreen canvas. `paintNow`: the positions of the
-  // scan arriving are drawn from their animation frame, without a render in between.
-  const drawViOffscreen = (paintNow: boolean) => {
+  // Expensive: VI colormap + data processing → cached offscreen canvas. While a scan arrives the image is drawn
+  // from an animation frame (`fromFrame`), without a render in between, and only the rows that changed are
+  // coloured again: the contrast range is read a few times a second from a sample of the image, and the whole
+  // image is coloured again only when that range has moved.
+  const viLivePaintRef = React.useRef<{ key: string; array: Float32Array; vmin: number; vmax: number; at: number } | null>(null);
+  const viLiveSampleRef = React.useRef<Float32Array | null>(null);
+  const drawViOffscreen = (fromFrame: boolean) => {
     if (!rawVirtualImageRef.current) return;
     // The GPU canvas is hidden while a live row preview is shown (viGpuVisible), so the preview is drawn here:
     // skipping it left BF, ABF and ADF black for the whole of every streamed scan.
@@ -5952,51 +6049,90 @@ function Show4DSTEM() {
 
     const width = viDetail ? viDetail.cols : shapeCols;
     const height = viDetail ? viDetail.rows : shapeRows;
-    const filtered = viDetail ? viDetail.data : rawVirtualImageRef.current;
+    const factor = viDetail ? viDetail.factor : 1;
+    // The array rows are written into while a scan arrives, else the image in state.
+    const filtered = viDetail ? viDetail.data : streaming && liveDrawn ? liveDrawn : rawVirtualImageRef.current;
+    if (filtered.length < width * height) return;
+    const log = viScaleMode === "log";
 
-    const scaled = viScaleMode === "log" ? displayLogScale(filtered) : filtered;
-
-    // Compute min/max from the data we just received. Do NOT use Python's
-    // viDataMin/viDataMax traits here: they arrive as separate comm messages
-    // and can be stale on rapid preset clicks (BF↔ABF), causing the render
-    // to apply the WRONG normalization range and produce a uniform white/black
-    // VI panel until comm catches up. findDataRange on a scan-shape buffer
-    // (~64K-256K floats) is sub-millisecond.
     // After the detector area moved during a scan, the positions not yet summed over the new area are on
-    // another scale: the contrast is that of the positions already summed.
+    // another scale: the contrast is that of the positions already summed, and the rows below them keep the
+    // colours they had (the image before stays until the new one has data).
     const summed = liveImagePositionsShown && liveImagePositions.moved() && !viDetail
       ? liveImagePositions.received() : 0;
-    const ranged = summed > 0 && summed < scaled.length ? scaled.subarray(0, summed) : scaled;
-    const range = findDataRange(ranged);
-    let dataMin = range.min;
-    let dataMax = range.max;
-    if (isDpcGpuSource(activeViSource)) {
-      const span = Math.max(Math.abs(range.min), Math.abs(range.max), 1e-12);
-      dataMin = -span;
-      dataMax = span;
-    }
+    const partlySummed = summed > 0 && summed < filtered.length;
+    const colouredRows = partlySummed ? Math.ceil(summed / width) : height;
 
-    // Apply absolute bounds or percentile clipping
+    const paintKey = [width, height, viColormap, viScaleMode, traitViVmin, traitViVmax, viPercentiles?.join("-"),
+      viVminPct, viVmaxPct, activeViSource, liveShown, liveImagePositionsShown ? liveImagePositions.generation() : ""].join("|");
+    const before = viLivePaintRef.current?.key === paintKey && viLivePaintRef.current.array === filtered
+      ? viLivePaintRef.current : null;
+    const now = performance.now();
     let vmin: number, vmax: number;
-    if (traitViVmin != null && traitViVmax != null) {
-      if (viScaleMode === "log") {
-        vmin = displayLog(traitViVmin);
-        vmax = displayLog(traitViVmax);
-      } else {
-        vmin = traitViVmin;
-        vmax = traitViVmax;
-      }
-    } else if (viPercentiles) {
-      ({ vmin, vmax } = percentileClip(ranged, viPercentiles[0], viPercentiles[1]));
-      const span = dataMax - dataMin;
-      if (span > 0) {
-        const lo = Math.max(0, Math.min(100, ((vmin - dataMin) / span) * 100));
-        const hi = Math.max(0, Math.min(100, ((vmax - dataMin) / span) * 100));
-        if (Math.abs(lo - viVminPct) > 0.5) setViVminPct(lo);
-        if (Math.abs(hi - viVmaxPct) > 0.5) setViVmaxPct(hi);
-      }
+    let rangeMoved = true;
+    let scaledWhole: Float32Array | null = null;
+    if (streaming && fromFrame && before && now - before.at < LIVE_RANGE_MS) {
+      ({ vmin, vmax } = before);
+      rangeMoved = false;
     } else {
-      ({ vmin, vmax } = sliderRange(dataMin, dataMax, viVminPct, viVmaxPct));
+      // Compute min/max from the data itself. Do NOT use Python's viDataMin/viDataMax traits here: they
+      // arrive as separate comm messages and can be stale on rapid preset clicks (BF↔ABF), causing the
+      // render to apply the WRONG normalization range and produce a uniform white/black VI panel until comm
+      // catches up. While a scan arrives the range is read from a sample: every pixel of a 2048 x 2048 scan
+      // at 2 x is 16 million values.
+      const length = partlySummed ? summed : filtered.length;
+      let ranged: Float32Array;
+      scaledWhole = null;
+      if (streaming) {
+        ranged = sampledValues(filtered, length, LIVE_RANGE_SAMPLES, viLiveSampleRef.current);
+        if (ranged.length === LIVE_RANGE_SAMPLES && ranged.buffer !== filtered.buffer) viLiveSampleRef.current = ranged;
+        if (log) ranged = displayLogScale(ranged);
+      } else {
+        ranged = scaledWhole = log ? displayLogScale(filtered) : filtered;
+      }
+      const range = findDataRange(ranged);
+      let dataMin = range.min;
+      let dataMax = range.max;
+      if (isDpcGpuSource(activeViSource)) {
+        const span = Math.max(Math.abs(range.min), Math.abs(range.max), 1e-12);
+        dataMin = -span;
+        dataMax = span;
+      }
+      // Apply absolute bounds or percentile clipping
+      if (traitViVmin != null && traitViVmax != null) {
+        if (log) {
+          vmin = displayLog(traitViVmin);
+          vmax = displayLog(traitViVmax);
+        } else {
+          vmin = traitViVmin;
+          vmax = traitViVmax;
+        }
+      } else if (viPercentiles) {
+        ({ vmin, vmax } = percentileClip(ranged, viPercentiles[0], viPercentiles[1]));
+        const span = dataMax - dataMin;
+        // The handles follow the percentiles. While a scan arrives the effect that presents the same image on
+        // WebGPU reads them from every pixel and this draw from a sample: only one of the two may set them, or
+        // each moves the handles the other set, without end.
+        const presentedOnGpu = Boolean(viGpuImageRef.current && viGpuColormapRef.current && !viDetail
+          && activeViSource === viGpuImageRef.current.source);
+        if (span > 0 && !fromFrame && !(streaming && presentedOnGpu)) {
+          const lo = Math.max(0, Math.min(100, ((vmin - dataMin) / span) * 100));
+          const hi = Math.max(0, Math.min(100, ((vmax - dataMin) / span) * 100));
+          if (Math.abs(lo - viVminPct) > 0.5) setViVminPct(lo);
+          if (Math.abs(hi - viVmaxPct) > 0.5) setViVmaxPct(hi);
+        }
+      } else {
+        ({ vmin, vmax } = sliderRange(dataMin, dataMax, viVminPct, viVmaxPct));
+      }
+      if (streaming && fromFrame && before) {
+        // The same range within a fiftieth of its span is the same picture: keep the colours already there.
+        const tolerance = Math.abs(before.vmax - before.vmin) / 50;
+        if (Math.abs(vmin - before.vmin) <= tolerance && Math.abs(vmax - before.vmax) <= tolerance) {
+          ({ vmin, vmax } = before);
+          rangeMoved = false;
+        }
+      }
+      viLivePaintRef.current = streaming ? { key: paintKey, array: filtered, vmin, vmax, at: now } : null;
     }
 
     const lut = COLORMAPS[viColormap] || COLORMAPS.inferno;
@@ -6015,16 +6151,34 @@ function Show4DSTEM() {
     if (!offCtx) return;
 
     let imageData = viImageDataRef.current;
+    const fresh = !imageData;
     if (!imageData) {
       imageData = offCtx.createImageData(width, height);
       viImageDataRef.current = imageData;
     }
-    applyColormap(scaled, imageData.data, lut, vmin, vmax);
-    offCtx.putImageData(imageData, 0, 0);
-    if (paintNow) paintViCanvas(); else setViOffscreenVersion(version => version + 1);
+    // The rows to colour: all of them, or while a scan arrives the ones written since the last draw.
+    let first = 0, last = fresh ? height : colouredRows;
+    if (streaming) {
+      const changed = liveImagePositionsShown ? liveImagePositions.takeDirty(width) : liveRows.takeDirty(liveShown ?? "");
+      if (fromFrame && !rangeMoved && !fresh) {
+        if (!changed) return;
+        first = Math.max(0, changed[0] * factor);
+        last = Math.min(height, changed[1] * factor);
+      }
+    }
+    if (last > first) {
+      const values = filtered.subarray(first * width, last * width);
+      const whole = scaledWhole && first === 0 && last === height ? scaledWhole : null;
+      applyColormap(whole ?? (log ? displayLogScale(values) : values), imageData.data.subarray(first * width * 4, last * width * 4),
+        lut, vmin, vmax);
+      offCtx.putImageData(imageData, 0, 0, 0, first, width, last - first);
+    }
+    if (fromFrame) paintViCanvas(); else setViOffscreenVersion(version => version + 1);
   };
+  // `liveDrawn` and not the image in state: while a scan arrives the state's view changes with every tick, and
+  // the rows are drawn from their animation frame.
   React.useEffect(() => drawViOffscreen(false),
-    [activeViSource, liveImage, compareMode, displayedVirtualImageBytes, shapeRows, shapeCols, viDetail, viGpuVersion, viColormap, viVminPct, viVmaxPct, viScaleMode, traitViVmin, traitViVmax, viPercentiles]);
+    [activeViSource, streaming ? liveDrawn : displayedVirtualImageBytes, liveShown, compareMode, shapeRows, shapeCols, viDetail, viGpuVersion, viColormap, viVminPct, viVmaxPct, viScaleMode, traitViVmin, traitViVmax, viPercentiles]);
 
   // Present resident reductions directly, including while the pointer is held.
   // Offscreen bitmap snapshots can be black and can lag the latest detector. The
@@ -6175,7 +6329,7 @@ function Show4DSTEM() {
   React.useLayoutEffect(paintViCanvas,
     [activeViSource, liveImage, compareMode, viDetail, viFactor, viGpuRetainedReady, viOffscreenVersion, viZoom, viPanX, viPanY, viSmooth]);
   // What one animation frame draws while positions arrive: the detector image as it is now.
-  drawLiveImageRef.current = liveImagePositionsShown && !compareMode ? () => drawViOffscreen(true) : null;
+  drawLiveImageRef.current = streaming && !compareMode ? () => drawViOffscreen(true) : null;
 
   // Compute FFT (expensive and async: only re-run on data/GPU changes)
   const fftRealRef = React.useRef<Float32Array | null>(null);
@@ -9230,6 +9384,13 @@ function Show4DSTEM() {
               )}
               {(viPanelLoading || offlineBackendError) && renderPanelLoadingOverlay(
                 offlineBackendError === OFFLINE_NEEDS_WEBGPU ? "Needs WebGPU" : offlineBackendError ? "Show4DSTEM load failed" : "Loading virtual image",
+              )}
+              {liveMissing && (
+                <Box data-show4dstem-live-note sx={{ position: "absolute", top: 3, left: 3, bgcolor: "rgba(0,0,0,0.45)", px: 0.5, py: 0.15, pointerEvents: "none" }}>
+                  <Typography sx={{ fontSize: 10, color: "rgba(255,255,255,0.85)", whiteSpace: "nowrap", lineHeight: 1.2 }}>
+                    no {liveMissing === "Direct" ? "phase" : viSourceLabel(liveMissing)} for this scan
+                  </Typography>
+                </Box>
               )}
               {panelChromeVisible && cursorInfo && cursorInfo.panel === "VI" && (
                 <Box sx={{ position: "absolute", top: 3, right: 3, bgcolor: "rgba(0,0,0,0.35)", px: 0.5, py: 0.15, pointerEvents: "none", minWidth: 100, textAlign: "right" }}>
