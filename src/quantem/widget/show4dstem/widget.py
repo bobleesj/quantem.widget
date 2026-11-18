@@ -1213,7 +1213,12 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         """While a scan arrives (``live_phase_preview`` names it) the page draws it from its rows and positions, so
         refresh() does not send the whole image: at 2048 x 2048 that was 17 MB four times a second, 70 MB/s the page
         decoded for nothing (11-17). When the scan is no longer drawn live, its whole image goes once."""
-        if change["old"] and not change["new"] and self._data is not None and not self._multiple_view_active():
+        if not change["old"] or change["new"]:
+            return
+        if (self.vi_source in (change["old"].get("images") or ())
+                and self.vi_source not in self._vi_product_maps):
+            self.vi_source = "roi"  # An interrupted scan may never attach the chosen live image.
+        elif self._data is not None and not self._multiple_view_active():
             self._compute_virtual_image_from_roi()
 
     @classmethod
@@ -2044,7 +2049,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         """React to an image-source switch: fall back to the ROI image when that product map does not exist, then repaint."""
         source = self.vi_source
         live = self.live_phase_preview
-        available_live = source in PRODUCT_LABELS and source in live.get("images", ())
+        available_live = source in PRODUCT_LABELS and source in (live.get("images") or ())
         if (source != "roi" and source not in self._vi_product_maps and not available_live
                 and not (self.live_phase_stream and source == "Direct")):
             source = "roi"
