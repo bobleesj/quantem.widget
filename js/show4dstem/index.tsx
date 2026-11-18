@@ -9370,7 +9370,6 @@ function Show4DSTEM() {
           {compareMode && compareDpMode === "all" && <AllDiffractionGrid
             bytes={compareDiffractionBytes} indices={compareDiffractionIndices || []}
             rows={detRows} cols={detCols}
-            selectionLabel={viRoiMode === "off" ? "Point" : `${optionLabel(viRoiReduce || "mean")} over shared ${viRoiMode} ROI`}
             renderGrid={({engine, slots, ranges}) => <CompareVirtualGrid
               kind="diffraction" bytes={undefined} count={compareDiffractionIndices.length}
               indices={compareDiffractionIndices} gpuSlots={slots} gpuRanges={ranges}
