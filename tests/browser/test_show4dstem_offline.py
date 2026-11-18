@@ -117,6 +117,8 @@ def pages(serve, browser_out) -> dict[str, str]:
     direct = Show4DSTEM(single)
     phase = np.broadcast_to(np.linspace(-1, 1, 32, dtype=np.float32), (32, 32)).copy()
     direct._set_vi_product_map("Direct", phase)
+    direct._set_vi_product_map("COM_row", phase)
+    direct._set_vi_product_map("COM_col", phase.T)
     direct.vi_source = "Direct"
     direct.vi_colormap = "gray"
     exports["direct"] = direct
@@ -368,7 +370,7 @@ def test_virtual_detector_controls_follow_the_selected_image_source(pages, open_
     detector = page.get_by_role("combobox", name="Detector", exact=True)
     size = page.get_by_role("slider", name="Detector aperture size")
     sources = page.get_by_role("group", name="Image source")
-    for source in ("Direct ptycho", "DPC row", "DPC col", "iDPC"):
+    for source in ("Direct ptycho", "DPC row", "DPC col", "iDPC", "CoM_r", "CoM_c"):
         button = sources.get_by_role("button", name=source, exact=True)
         button.click()
         expect(button).to_have_attribute("aria-pressed", "true")
@@ -381,6 +383,14 @@ def test_virtual_detector_controls_follow_the_selected_image_source(pages, open_
     expect(detector).to_have_text("Circle")
     expect(size).to_be_visible()
     page.set_viewport_size({"width": 390, "height": 900})
+    for source in ("CoM_r", "CoM_c"):
+        button = sources.get_by_role("button", name=source, exact=True)
+        expect(button).to_be_visible()
+        assert button.evaluate("""button => {
+          const bounds = button.getBoundingClientRect();
+          const row = button.parentElement.getBoundingClientRect();
+          return bounds.left >= row.left && bounds.right <= row.right + 0.5;
+        }""")
     sources.get_by_role("button", name="DPC row", exact=True).click()
     options = page.get_by_role("button", name=re.compile("^Pattern options"))
     expect(options).to_be_visible()

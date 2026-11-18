@@ -115,8 +115,8 @@ function viSourceLabel(source: string): string {
   if (source === "roi") return "ROI";
   if (source === "DPC_row") return "DPC row";
   if (source === "DPC_col") return "DPC col";
-  if (source === "COM_row") return "COM row";
-  if (source === "COM_col") return "COM col";
+  if (source === "COM_row") return "CoM_r";
+  if (source === "COM_col") return "CoM_c";
   if (source === "iDPC") return "iDPC";
   if (source === "Direct") return "Direct ptycho";
   return source;
