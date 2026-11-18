@@ -95,6 +95,7 @@ import {
 } from "./detectorInteraction";
 import { upsampledTransform, type UpsampledImage } from "./upsampledImage";
 import { createPaintOver, paintedOver } from "./paintOver";
+import { blankUnvisited, blankUnvisitedDetail, unvisitedMask } from "./unvisited";
 import { streamedProductsOf, type ProductImageMessage } from "./streamedProducts";
 import {
   createLiveRows, floatValues, liveInfo, liveShownImage, sameLiveInfo, sampledValues,
@@ -2578,6 +2579,7 @@ function Show4DSTEM() {
   const [virtualImageBytes, setVirtualImageBytes] = useModelState<DataView>("virtual_image_bytes");
   const [frontendVirtualImage, setFrontendVirtualImage] = React.useState<{ bytes: DataView; over: DataView | null } | null>(null);
   const [viProductLabels] = useModelState<string[]>("vi_product_labels");
+  const [unvisitedBytes] = useModelState<DataView>("unvisited_bytes");
   const [viProductMapFrames] = useModelState<number>("vi_product_map_frames");
   const [viProductMapsBytes] = useModelState<DataView>("vi_product_maps_bytes");
   const [viProductStreamedLabels] = useModelState<string[]>("vi_product_streamed");
@@ -4895,6 +4897,9 @@ function Show4DSTEM() {
     viProductStreamedLabels,
     streamedProductsVersion,
   ]);
+  // Positions a sparse path never visited (a star, random points): drawn blank, whatever image is in view.
+  const unvisited = React.useMemo(() => unvisitedMask(unvisitedBytes, shapeRows, shapeCols),
+                                  [unvisitedBytes, shapeRows, shapeCols]);
   const receivedVirtualImageBytes = React.useMemo(() => {
     if (liveImage) return liveImage;
     // Multiple-mode streaming sends the current image stack, while the single
@@ -4904,9 +4909,11 @@ function Show4DSTEM() {
       displayedCompareVirtualImageBytes, comparePanelIndices, frameIdx, shapeRows, shapeCols,
     ) : null;
     const roiBytes = panel ?? frontendVirtualImageBytes ?? virtualImageBytes;
-    if (activeViSource === "roi") return roiBytes;
-    return viProductFrameView(model, shapeRows, shapeCols, activeViSource) ?? roiBytes;
+    const image = activeViSource === "roi" ? roiBytes
+      : viProductFrameView(model, shapeRows, shapeCols, activeViSource) ?? roiBytes;
+    return blankUnvisited(image, unvisited, shapeRows, shapeCols);
   }, [
+    unvisited,
     liveImage,
     activeViSource,
     compareMode,
@@ -4933,8 +4940,10 @@ function Show4DSTEM() {
     const kind = activeViSource === "roi"
       ? `roi:${roiMode}:${storedRoiRadius}:${storedRoiRadiusInner}:${roiWidth}:${roiHeight}:${detRows}x${detCols}`
       : `${activeViSource}:${detRows}x${detCols}`;
-    return paintedOver(Boolean(embedded), paintOver, kind, shapeRows, shapeCols, receivedVirtualImageBytes);
-  }, [activeViSource, compareMode, detCols, detRows, embedded, liveImage, paintOver, receivedVirtualImageBytes,
+    // unvisited positions stay blank: painting over would fill them with the scan before
+    return blankUnvisited(paintedOver(Boolean(embedded), paintOver, kind, shapeRows, shapeCols, receivedVirtualImageBytes),
+                          unvisited, shapeRows, shapeCols);
+  }, [unvisited, activeViSource, compareMode, detCols, detRows, embedded, liveImage, paintOver, receivedVirtualImageBytes,
       roiHeight, roiMode, roiWidth, shapeCols, shapeRows, storedRoiRadius, storedRoiRadiusInner]);
   // The image in view at full resolution when it is k x the scan grid: the live Direct preview, or attach()'s
   // image of the shown scan. Hover, profile and FFT keep reading the scan-grid image above.
@@ -4943,7 +4952,7 @@ function Show4DSTEM() {
   // that scan's image or an empty detail), so a step never flashes the scan-grid image at 1x first.
   const viDetailCacheRef = React.useRef<Map<string, UpsampledImage>>(new Map());
   const viDetailHeldRef = React.useRef<{ shape: string; image: UpsampledImage } | null>(null);
-  const viDetail = React.useMemo<UpsampledImage | null>(() => {
+  const viDetailReceived = React.useMemo<UpsampledImage | null>(() => {
     if (compareMode) return null;
     if (streaming) return liveDetail;
     const cache = viDetailCacheRef.current;
@@ -4969,6 +4978,8 @@ function Show4DSTEM() {
     const held = viDetailHeldRef.current;
     return held && held.shape === shape && valid ? held.image : null;
   }, [activeViSource, compareMode, frameIdx, frameNames, liveDetail, shapeCols, shapeRows, streaming, viDetailState]);
+  const viDetail = React.useMemo(() => blankUnvisitedDetail(viDetailReceived, unvisited, shapeRows, shapeCols),
+                                 [viDetailReceived, unvisited, shapeRows, shapeCols]);
   const viFactor = viDetail?.factor ?? 1;
   const comparePageButtonItems = React.useMemo<(number | "gap")[]>(() => {
     if (activeComparePageCount <= 8) {

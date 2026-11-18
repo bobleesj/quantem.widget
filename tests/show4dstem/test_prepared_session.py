@@ -217,3 +217,24 @@ def test_named_sizes_change_only_display(options, widths, synced):
 def test_named_size_rejects_conflicting_pixel_width():
     with pytest.raises(ValueError, match="Use dp_size"):
         Show4DSTEM(None, dp_size="medium", dp_panel_width_px=320)
+
+
+def test_positions_a_path_never_visited_are_sent_to_be_drawn_blank():
+    values = torch.arange(5 * 7 * 16 * 16).reshape(5, 7, 16, 16)
+    visits = np.ones((5, 7), np.int32)
+    visits[1, 2] = visits[4, 6] = 0                   # a sparse path kept on its grid: two positions never visited
+    session = DenseSession(values)
+    session.metadata = {"visits_per_position": visits}
+    viewer = Show4DSTEM(session, bright_field_center_px=(7.5, 7.5), bright_field_radius_px=3)
+    try:
+        sent = np.frombuffer(viewer.unvisited_bytes, np.uint8).reshape(5, 7)
+        np.testing.assert_array_equal(sent, visits == 0)
+    finally:
+        viewer.close()
+    measured = DenseSession(values)
+    measured.metadata = {"visits_per_position": np.ones((5, 7), np.int32)}
+    viewer = Show4DSTEM(measured, bright_field_center_px=(7.5, 7.5), bright_field_radius_px=3)
+    try:
+        assert viewer.unvisited_bytes == b""        # every position measured: nothing blank
+    finally:
+        viewer.close()

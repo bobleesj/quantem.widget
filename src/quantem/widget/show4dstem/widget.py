@@ -303,6 +303,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     # at the scan's size and the pointer still picks scan positions (image pixel / k).
     vi_detail = traitlets.Dict(default_value={}).tag(sync=True)
     virtual_image_bytes = _ImageMemoryView(b"").tag(sync=True)
+    # One byte per scan position of the shown scan, 1 where its path never went (``visits_per_position`` 0 in
+    # its metadata: a star or random path kept on its grid); the page draws those positions blank. Empty otherwise.
+    unvisited_bytes = traitlets.Bytes(b"").tag(sync=True)
     vi_source = traitlets.Unicode("roi").tag(sync=True)
     vi_product_labels = traitlets.List(traitlets.Unicode(), default_value=[]).tag(sync=True)
     vi_product_map_frames = traitlets.Int(0).tag(sync=True)
@@ -841,6 +844,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self.observe(self._on_export_request_change, names=["export_request"])
         self.observe(self._on_direct_request_change, names=["direct_request"])
         self.observe(self._on_frame_idx_change, names=["frame_idx"])
+        self.observe(self._update_unvisited, names=["frame_idx", "n_frames", "shape_rows", "shape_cols"])
+        self._update_unvisited()
         self.observe(self._on_preset_request, names=["_preset_request"])
         self.observe(self._on_compare_config_change, names=["view_mode", "compare_max_panels", "n_frames",
                                                             "compare_group_mode", "compare_page_idx",
@@ -1394,6 +1399,19 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                     if index is None:
                         raise ValueError("This scan is no longer available; refresh the scan list.")
                     self.frame_idx = index
+
+    def _update_unvisited(self, _change=None) -> None:
+        """Send the positions of the shown scan its path never visited, read from its ``visits_per_position``."""
+        mask = b""
+        if self._data is not None and 0 <= int(self.frame_idx) < max(1, int(self.n_frames)):
+            metadata = getattr(self._frame_source(int(self.frame_idx)), "metadata", None) or {}
+            visits = metadata.get("visits_per_position")
+            if visits is not None:
+                visits = np.asarray(visits)
+                if visits.shape == (self.shape_rows, self.shape_cols) and (visits == 0).any():
+                    mask = (visits == 0).astype(np.uint8).tobytes()
+        if mask != self.unvisited_bytes:
+            self.unvisited_bytes = mask
 
     def _adopt_shown_calibration(self, _change=None) -> None:
         """A stream shows scans of different steps and optics: take the shown scan's recorded calibration, with any

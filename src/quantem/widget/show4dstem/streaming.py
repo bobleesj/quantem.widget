@@ -241,6 +241,7 @@ class StreamFollower:
                         viewer._stream_selected_source = viewer._stream_source_ids[viewer.frame_idx]
                 if arrived:
                     viewer._adopt_shown_calibration()      # a new scan may have another step (11-16)
+                    viewer._update_unvisited()             # and another path
                 shown = len(sources)
                 if self.partial and isinstance(viewer._data, SessionSeries):
                     # Live sessions remain open as leases until eviction. Their
