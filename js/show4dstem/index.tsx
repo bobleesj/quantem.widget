@@ -2639,6 +2639,10 @@ function Show4DSTEM() {
   const kPixelSize = detectorSamplingMrad?.length === 2 ? detectorSamplingMrad[1] : detectorSamplingInvA?.length === 2 ? detectorSamplingInvA[1] : 1;
   const kPixelUnit = detectorSamplingMrad?.length === 2 ? "mrad" : detectorSamplingInvA?.length === 2 ? "1/angstrom" : "px";
   const [title] = useModelState<string>("title");
+  // Where the dataset being browsed is: its folder on one line, its file on the next (11-18). A scan held
+  // only in GPU memory has the folder it will be saved into and "not saved (live)".
+  const [sourceFolder] = useModelState<string>("source_folder");
+  const [sourceFile] = useModelState<string>("source_file");
   const [showTitle] = useModelState<boolean>("show_title");
 
   const shapeRows = liveImage && preview ? preview.total : savedShapeRows;
@@ -9133,6 +9137,14 @@ function Show4DSTEM() {
           </>}
         </Box>
       </Box>);
+  const sourceLines = (sourceFolder || sourceFile) ? (
+    <Box sx={{ mb: `${SPACING.XS}px`, minWidth: 0, fontSize: 11, lineHeight: 1.35, fontFamily: "monospace" }}>
+      <div title={sourceFolder} style={{ opacity: 0.7, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {sourceFolder || " "}</div>
+      <div title={sourceFile} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        fontStyle: sourceFile && sourceFile.startsWith("not saved") ? "italic" : "normal" }}>
+        {sourceFile || " "}</div>
+    </Box>) : null;
   if (nFrames === 0 && !liveImage) {
     return (
       <Box ref={rootRef} className="show4dstem-root" sx={{ p: "4px", bgcolor: themeColors.bg, color: themeColors.text }}>
@@ -9164,6 +9176,7 @@ function Show4DSTEM() {
         {...(qemSourceAvailable ? {} : { webkitdirectory: "", directory: "" })}
       />
       {/* HEADER */}
+      {sourceLines}
       {titleHeading}
       {embedded && scanChoiceRows}
       {preview?.frozen && keptFrames > 0 && !sizeGroups?.length && (

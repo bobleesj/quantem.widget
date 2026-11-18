@@ -35,3 +35,14 @@ def test_no_dose_without_a_scan_step():
         assert viewer.dose_e_per_A2 is None
     finally:
         viewer.close()
+
+
+def test_source_lines_and_frame_metadata():
+    """The folder and file lines above the title (empty hides them), and the browsed dataset's metadata."""
+    import numpy as np
+    from quantem.widget import Show4DSTEM
+
+    viewer = Show4DSTEM(np.zeros((4, 4, 8, 8), np.float32))
+    assert (viewer.source_folder, viewer.source_file) == ("", "")
+    viewer.source_folder, viewer.source_file = "/data/live/2026-11-18", "not saved (live)"
+    assert isinstance(viewer.frame_metadata(), dict)
