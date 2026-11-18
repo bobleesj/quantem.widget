@@ -212,6 +212,12 @@ class StreamFollower:
                     return not complete
                 if not self.initialized and self.partial and not sources[0].received:
                     return not complete
+                if (self.partial and self.shown_sources and sources[-1] is not self.shown_sources[-1]
+                        and not sources[-1].received):
+                    # The next scan has no pattern yet: the last one stays shown until its first arrives. Shown at
+                    # once, the probe read a position not yet received and the pattern went black between scans
+                    # (the operator, 11-18).
+                    return not complete
                 if viewer._data is None:
                     with viewer.hold_sync(), viewer.hold_trait_notifications():
                         viewer._replace_stream_sources([], sources, labels=self.labels)
@@ -259,10 +265,11 @@ class StreamFollower:
                     viewer._data = completed
                 self.previous = None
             if force or progress != self.previous:
+                if self.partial:                    # the probe on a received pattern before anything is drawn
+                    self.follow_probe(sources[shown - 1])
                 viewer.refresh()
                 if self.partial:
                     current = sources[shown - 1]
-                    self.follow_probe(current)
                     scan = current.metadata.get("series", shown)
                     # One short line that never wraps beside a control panel; the counts are in the stats bar.
                     done = " ✓" if current.received == current.total else ""
