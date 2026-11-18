@@ -31,3 +31,10 @@ export function blankUnvisitedDetail(image: UpsampledImage | null, mask: Uint8Ar
   }
   return { ...image, data };
 }
+
+/** The pattern to draw at scan position `position`: blank (NaN) where the path never went, else `pattern` itself. */
+export function unvisitedPattern(pattern: DataView | undefined, mask: Uint8Array | null, position: number,
+                                 pixels: number): DataView | undefined {
+  if (!pattern || !mask || !mask[position] || !(pixels > 0)) return pattern;
+  return new DataView(new Float32Array(pixels).fill(NaN).buffer);
+}

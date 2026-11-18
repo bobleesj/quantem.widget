@@ -95,7 +95,7 @@ import {
 } from "./detectorInteraction";
 import { upsampledTransform, type UpsampledImage } from "./upsampledImage";
 import { createPaintOver, paintedOver } from "./paintOver";
-import { blankUnvisited, blankUnvisitedDetail, unvisitedMask } from "./unvisited";
+import { blankUnvisited, blankUnvisitedDetail, unvisitedMask, unvisitedPattern } from "./unvisited";
 import { streamedProductsOf, type ProductImageMessage } from "./streamedProducts";
 import {
   createLiveRows, floatValues, liveInfo, liveShownImage, sameLiveInfo, sampledValues,
@@ -2573,13 +2573,21 @@ function Show4DSTEM() {
   const [savedFrameBytes] = useModelState<DataView>("frame_bytes");
   // While a scan arrives its newest pattern comes on its own trait, many times a second; the preview's pattern (one
   // per batch of rows) shows until the first of those is there.
-  const frameBytes = liveImage && preview
+  const receivedFrameBytes = liveImage && preview
     ? (livePattern && livePattern.byteLength === preview.detRows * preview.detCols * 4 ? livePattern : undefined)
     : savedFrameBytes;
   const [virtualImageBytes, setVirtualImageBytes] = useModelState<DataView>("virtual_image_bytes");
   const [frontendVirtualImage, setFrontendVirtualImage] = React.useState<{ bytes: DataView; over: DataView | null } | null>(null);
   const [viProductLabels] = useModelState<string[]>("vi_product_labels");
   const [unvisitedBytes] = useModelState<DataView>("unvisited_bytes");
+  // Positions a sparse path never visited (a star, random points): drawn blank, whatever image is in view, and so is
+  // the pattern at such a position (the scan holds the mean pattern there, which was never measured).
+  const unvisited = React.useMemo(() => unvisitedMask(unvisitedBytes, shapeRows, shapeCols),
+                                  [unvisitedBytes, shapeRows, shapeCols]);
+  const frameBytes = React.useMemo(
+    () => (liveImage ? receivedFrameBytes : unvisitedPattern(receivedFrameBytes, unvisited, posRow * shapeCols + posCol,
+                                                             detRows * detCols)),
+    [liveImage, receivedFrameBytes, unvisited, posRow, posCol, shapeCols, detRows, detCols]);
   const [viProductMapFrames] = useModelState<number>("vi_product_map_frames");
   const [viProductMapsBytes] = useModelState<DataView>("vi_product_maps_bytes");
   const [viProductStreamedLabels] = useModelState<string[]>("vi_product_streamed");
@@ -4897,9 +4905,6 @@ function Show4DSTEM() {
     viProductStreamedLabels,
     streamedProductsVersion,
   ]);
-  // Positions a sparse path never visited (a star, random points): drawn blank, whatever image is in view.
-  const unvisited = React.useMemo(() => unvisitedMask(unvisitedBytes, shapeRows, shapeCols),
-                                  [unvisitedBytes, shapeRows, shapeCols]);
   const receivedVirtualImageBytes = React.useMemo(() => {
     if (liveImage) return liveImage;
     // Multiple-mode streaming sends the current image stack, while the single

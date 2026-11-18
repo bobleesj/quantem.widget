@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blankUnvisited, blankUnvisitedDetail, unvisitedMask } from "./unvisited";
+import { blankUnvisited, blankUnvisitedDetail, unvisitedMask, unvisitedPattern } from "./unvisited";
 
 describe("unvisited positions", () => {
   const mask = unvisitedMask(new DataView(new Uint8Array([0, 1, 0, 1]).buffer), 2, 2);
@@ -27,5 +27,11 @@ describe("unvisited positions", () => {
     expect(Number.isNaN(drawn[2])).toBe(true);     // row 0, col 2: scan position (0, 1)
     expect(Number.isNaN(drawn[15])).toBe(true);    // row 3, col 3: scan position (1, 1)
     expect(drawn[8]).toBe(5);                      // row 2, col 0: scan position (1, 0)
+  });
+
+  it("shows no pattern at a position the path never visited", () => {
+    const pattern = new DataView(new Float32Array([7, 7, 7]).buffer);
+    expect(unvisitedPattern(pattern, mask, 0, 3)).toBe(pattern);
+    expect([...new Float32Array(unvisitedPattern(pattern, mask, 1, 3)!.buffer)].every(Number.isNaN)).toBe(true);
   });
 });
