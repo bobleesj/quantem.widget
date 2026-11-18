@@ -1157,3 +1157,15 @@ def test_live_titles_name_the_scan_short_and_a_live_frame_by_number(recording):
         assert viewer.title == "Live · frame 7 · 5/12"
     finally:
         viewer.close()
+
+
+def test_sparse_grid_title_counts_detector_visits_instead_of_grid_cells(recording):
+    grid = LiveScan("series_8_grid")
+    grid.metadata.update(grid_of="series_8", scan_positions=[[0, 0], [0, 2], [0, 0]])
+    viewer = Show4DSTEM.stream(recording)
+    try:
+        recording.acquisitions.append(grid)
+        viewer.refresh_stream()
+        assert viewer.title == "Live · 8 · 3 visits · 1 kept"
+    finally:
+        viewer.close()

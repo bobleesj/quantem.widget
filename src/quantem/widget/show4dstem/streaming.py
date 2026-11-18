@@ -271,10 +271,14 @@ class StreamFollower:
                 viewer.refresh()
                 if self.partial:
                     current = sources[shown - 1]
-                    scan = current.metadata.get("series", shown)
+                    grid_of = current.metadata.get("grid_of")
+                    scan = grid_of or current.metadata.get("series", shown)
                     # One short line that never wraps beside a control panel; the counts are in the stats bar.
                     done = " ✓" if current.received == current.total else ""
                     counts = f"{current.received:,}/{current.total:,}{done}"
+                    visits = current.metadata.get("scan_positions")
+                    if grid_of and visits is not None:
+                        counts = f"{len(visits):,} visits"
                     frame = live_frame_number(scan)
                     if frame is not None:
                         # a Live frame replaces the one before and is never kept: no count of kept scans
