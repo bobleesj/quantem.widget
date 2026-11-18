@@ -54,7 +54,7 @@ import { pointToSegmentDistance } from "../shared/geometry";
 import { shouldIgnoreWidgetShortcut } from "../shared/widgetShortcuts";
 import { resolveDisplayBounds } from "../shared/displayRange";
 import { Histogram } from "../shared/Histogram";
-import { COLORMAPS, COLORMAP_NAMES, renderToOffscreen, renderToOffscreenReuse, createGPUColormapEngine, GPUColormapEngine, VOLUME_SLICE_MIN_ZOOM } from "../display/colormaps";
+import { COLORMAPS, COLORMAP_NAMES, reverseLut, renderToOffscreen, renderToOffscreenReuse, createGPUColormapEngine, GPUColormapEngine, VOLUME_SLICE_MIN_ZOOM } from "../display/colormaps";
 import { getHardwareGPUDevice, onGPULost, webGPULostReason, type RenderPath } from "../display/device";
 import { DisplayFFT, getDisplayFFT, fft2d, fftshift, nextPow2, computeMagnitude, autoEnhanceFFT, applyHannWindow2D, reciprocalCoordinatesFromShiftedOffset, zeroPadTopLeft } from "../display/fft";
 import { findFFTPeakBrowser } from "../display/geometry";
@@ -368,19 +368,6 @@ function makeExportFilename(title: string, numSlices: number, numRows: number, n
   const slug = exportTitleSlug(title, "show3dslices");
   const suffix = encoding === "uint8" ? "quantized" : "exact";
   return `${slug}_${numSlices}x${numRows}x${numCols}_${suffix}.html`;
-}
-
-function reverseLut(lut: Uint8Array): Uint8Array {
-  const out = new Uint8Array(lut.length);
-  const entryCount = lut.length / 3;
-  for (let i = 0; i < entryCount; i++) {
-    const src = (entryCount - 1 - i) * 3;
-    const dst = i * 3;
-    out[dst + 0] = lut[src + 0];
-    out[dst + 1] = lut[src + 1];
-    out[dst + 2] = lut[src + 2];
-  }
-  return out;
 }
 
 function maybeFlip(data: Float32Array, flip: boolean): Float32Array {

@@ -10,9 +10,9 @@ type DiffractionSlots = {
 };
 
 /** Upload native patterns once; the common grid owns every interaction. */
-export function AllDiffractionGrid({bytes, indices, rows, cols, selectionLabel, renderGrid}: {
+export function AllDiffractionGrid({bytes, indices, rows, cols, renderGrid}: {
   bytes: DataView | undefined; indices: number[]; rows: number; cols: number;
-  selectionLabel: string; renderGrid: (data: DiffractionSlots) => React.ReactNode;
+  renderGrid: (data: DiffractionSlots) => React.ReactNode;
 }) {
   const [engine, setEngine] = React.useState<GPUColormapEngine | null>(null);
   const [data, setData] = React.useState<DiffractionSlots | null>(null);
@@ -50,7 +50,6 @@ export function AllDiffractionGrid({bytes, indices, rows, cols, selectionLabel, 
     return () => { cancelled = true; };
   }, [engine, bytes, indices, rows, cols]);
   return <section aria-label="All diffraction patterns" style={{width:"100%"}}>
-    <div style={{fontSize:11, marginBottom:4}}>Diffraction patterns · {selectionLabel} · shared contrast</div>
     {error && <div role="alert">{error}</div>}
     {!indices.length && <div>No scan positions selected.</div>}
     {indices.length > 0 && data && renderGrid(data)}
