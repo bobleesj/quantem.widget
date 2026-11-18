@@ -4980,8 +4980,14 @@ function Show4DSTEM() {
     },
     onBlur: () => setHoverSource(previous => previous === source ? null : previous),
   });
-  const [flipPhaseContrast, setFlipPhaseContrast] = React.useState(false);
-  const canFlipPhaseContrast = activeViSource === "Direct" && !compareMode;
+  // Flip per phase image (2026-11-18, the operator): for DPC it chooses the other 180° branch of the least-curl rotation
+  // (rotating by theta + 180 gives the negative phase), for Direct the displayed contrast; each image keeps its own.
+  const [flipBySource, setFlipBySource] = React.useState<Record<string, boolean>>({});
+  const flipPhaseContrast = Boolean(flipBySource[activeViSource]);
+  const setFlipPhaseContrast = React.useCallback((on: boolean) =>
+    setFlipBySource(previous => ({ ...previous, [activeViSource]: on })), [activeViSource]);
+  const canFlipPhaseContrast = (activeViSource === "Direct" || activeViSource === "DPC" || activeViSource === "iDPC")
+    && !compareMode;
   const reversePhaseLut = canFlipPhaseContrast && flipPhaseContrast;
   const viDisplayLut = React.useMemo(() => {
     const lut = COLORMAPS[viColormap] || COLORMAPS.inferno;
@@ -8849,12 +8855,14 @@ function Show4DSTEM() {
     themedSelect, themedTypography
   ]);
   const flipPhaseControl = React.useMemo(() => canFlipPhaseContrast && (
-    <Box component="label" title="Invert the displayed phase contrast" sx={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+    <Box component="label" title={activeViSource === "Direct" ? "Invert the displayed phase contrast"
+      : "The other 180° branch of the DPC rotation: the rotation is known modulo 180°, and this branch gives the opposite sign"}
+      sx={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
       <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Flip</Typography>
       <Switch checked={flipPhaseContrast} onChange={(event) => setFlipPhaseContrast(event.target.checked)}
         size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Flip phase contrast" } }} />
     </Box>
-  ), [canFlipPhaseContrast, flipPhaseContrast, themedTypography]);
+  ), [activeViSource, canFlipPhaseContrast, flipPhaseContrast, setFlipPhaseContrast, themedTypography]);
   const viToolbarControls = React.useMemo(() => (
     controlsVisible && <Stack
       direction="row"
