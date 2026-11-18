@@ -94,6 +94,7 @@ import {
   type DetectorRoiMode,
 } from "./detectorInteraction";
 import { upsampledTransform, type UpsampledImage } from "./upsampledImage";
+import { createPaintOver, paintedOver } from "./paintOver";
 import { streamedProductsOf, type ProductImageMessage } from "./streamedProducts";
 import {
   createLiveRows, floatValues, liveInfo, liveShownImage, sameLiveInfo, sampledValues,
@@ -4884,7 +4885,7 @@ function Show4DSTEM() {
     viProductStreamedLabels,
     streamedProductsVersion,
   ]);
-  const displayedVirtualImageBytes = React.useMemo(() => {
+  const receivedVirtualImageBytes = React.useMemo(() => {
     if (liveImage) return liveImage;
     // Multiple-mode streaming sends the current image stack, while the single
     // image trait can still contain its initial NaN placeholder. FFT and line
@@ -4913,6 +4914,18 @@ function Show4DSTEM() {
     streamedProductsVersion,
     virtualImageBytes,
   ]);
+  // Embedded in a host panel, a scan arriving is drawn over the last image of its kind (the detector image of this
+  // detector, DPC, the Direct phase) and shape, as Velox does: positions not measured yet show the last scan's,
+  // never black. The live preview's rows already keep what was under them. A notebook viewer draws NaN as before.
+  const paintOver = React.useMemo(() => createPaintOver(), []);
+  const displayedVirtualImageBytes = React.useMemo(() => {
+    if (liveImage || compareMode) return receivedVirtualImageBytes;
+    const kind = activeViSource === "roi"
+      ? `roi:${roiMode}:${storedRoiRadius}:${storedRoiRadiusInner}:${roiWidth}:${roiHeight}:${detRows}x${detCols}`
+      : `${activeViSource}:${detRows}x${detCols}`;
+    return paintedOver(Boolean(embedded), paintOver, kind, shapeRows, shapeCols, receivedVirtualImageBytes);
+  }, [activeViSource, compareMode, detCols, detRows, embedded, liveImage, paintOver, receivedVirtualImageBytes,
+      roiHeight, roiMode, roiWidth, shapeCols, shapeRows, storedRoiRadius, storedRoiRadiusInner]);
   // The image in view at full resolution when it is k x the scan grid: the live Direct preview, or attach()'s
   // image of the shown scan. Hover, profile and FFT keep reading the scan-grid image above.
   // Details already received, by source and scan name, so playback and the dataset slider go straight to a scan's

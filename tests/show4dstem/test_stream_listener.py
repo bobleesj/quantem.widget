@@ -1113,3 +1113,18 @@ def test_a_stopped_stream_titles_one_short_line():
     assert stopped_title(memory) == "Live acquisition stopped: the GPU ran out of memory"
     other = RuntimeError("receiver closed\nTraceback (most recent call last):\n  File x")
     assert stopped_title(other) == "Live acquisition stopped: receiver closed"
+
+
+@pytest.mark.parametrize("embedded", [False, True])
+def test_a_replaced_newest_scan_shows_its_replacement_when_embedded(recording, embedded):
+    scans = [LiveScan("a", 1), LiveScan("live_1", 2), LiveScan("live_2", 3)]
+    viewer = Show4DSTEM.stream(recording, embedded=embedded)
+    try:
+        recording.acquisitions.extend(scans[:2])
+        viewer.refresh_stream()
+        viewer.frame_idx = 1
+        # the next Live frame replaces the one in view, as Spectra does
+        viewer._replace_stream_sources(scans[:2], [scans[0], scans[2]])
+        assert viewer.frame_labels[viewer.frame_idx] == ("live_2" if embedded else "a")
+    finally:
+        viewer.close()

@@ -1532,7 +1532,14 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 self._stream_source_ids = [identities[source] if source in identities else
                                            self._new_stream_source_ids(1)[0] for source in sources]
                 self.n_frames = len(sources)
-                self.frame_idx = sources.index(selected) if selected in sources else 0
+                if selected in sources:
+                    self.frame_idx = sources.index(selected)
+                elif self.embedded and previous and selected is previous[-1]:
+                    # the newest scan was replaced (a Live frame by the next): the scan replacing it shows, so
+                    # it is drawn over the one before it, not over the oldest scan kept
+                    self.frame_idx = len(sources) - 1
+                else:
+                    self.frame_idx = 0
                 self._stream_selected_source = self._stream_source_ids[self.frame_idx]
                 self.frame_labels = [str(labels[i]) if labels and i < len(labels) else
                                      names.get(source, (dataset_name(source) or f"acquisition {i}")

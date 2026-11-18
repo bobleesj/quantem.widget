@@ -85,7 +85,7 @@ test("a rejected position releases the optimistic cursor so the identical pixel 
 
 test("FFT reads the selected current comparison panel, not the single-image stream placeholder", () => {
   const declaration = findNode((node): node is ts.VariableDeclaration => ts.isVariableDeclaration(node)
-    && node.name.getText(tree) === "displayedVirtualImageBytes");
+    && node.name.getText(tree) === "receivedVirtualImageBytes");
   const memo = declaration.initializer as ts.CallExpression;
   const factory = memo.arguments[0] as ts.ArrowFunction;
   const select = new Function("comparisonImageView", "compareMode", "displayedCompareVirtualImageBytes",
