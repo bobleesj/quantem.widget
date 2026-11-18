@@ -260,6 +260,10 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
 
     title = traitlets.Unicode("").tag(sync=True)
     show_title = traitlets.Bool(True).tag(sync=True)
+    # The dataset being browsed: its folder (first line) and file name (second line), above the title; empty hides
+    # them. A host (a scanning GUI) sets them as the browsed dataset changes (frame_metadata gives what it reads).
+    source_folder = traitlets.Unicode("").tag(sync=True)
+    source_file = traitlets.Unicode("").tag(sync=True)
     # Live acquisition: the diffraction pattern follows the newest arrived pattern, except while the user
     # interacts and for STREAM_FOLLOW_PAUSE_S after (drag the probe, let go, and it returns to the newest).
     stream_follow = traitlets.Bool(True)
@@ -1409,6 +1413,22 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                     if index is None:
                         raise ValueError("This scan is no longer available; refresh the scan list.")
                     self.frame_idx = index
+
+    def frame_metadata(self, frame_idx: int | None = None) -> dict:
+        """The metadata of a dataset in the viewer (the one shown when ``frame_idx`` is None); {} without any.
+
+        Examples
+        --------
+        >>> viewer.frame_metadata().get("series")  # doctest: +SKIP
+        """
+        if not self.n_frames:
+            return {}
+        index = int(self.frame_idx if frame_idx is None else frame_idx)
+        try:
+            metadata = getattr(self._frame_source(index), "metadata", None)
+        except (IndexError, KeyError, TypeError):
+            return {}
+        return metadata if isinstance(metadata, dict) else {}
 
     def dose(self, frame_idx: int | None = None) -> float | None:
         """The electron dose of a scan in e-/A^2: mean counts per scan position / (counts per electron x step area).
