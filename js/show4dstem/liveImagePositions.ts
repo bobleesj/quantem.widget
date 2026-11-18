@@ -5,6 +5,9 @@
  *  animation frame. Positions not received yet keep what was there: the scan before, as Velox shows it. */
 export type PositionsMessage = {
   type?: string; scan: string; generation: number; start: number; count: number; total: number;
+  /** A scan kept as visits (any scan path: a spiral, a star, a point list with revisits): the message holds visits
+   *  start..start+count, and a second buffer, int32, the position each lands on (row * cols + col). */
+  at?: boolean;
 };
 
 export function createLiveImage() {
@@ -18,10 +21,11 @@ export function createLiveImage() {
   return {
     /** Write one batch. `under` gives the image to start a new scan on when there is no scan before of
      *  this size (the rows received so far over the previous image), or null. False for a batch that cannot be used. */
-    write(message: PositionsMessage, values: Float32Array, under: () => Float32Array | null = () => null): boolean {
+    write(message: PositionsMessage, values: Float32Array, under: () => Float32Array | null = () => null,
+          at: Int32Array | null = null): boolean {
       const total = Math.round(message.total);
       const start = Math.round(message.start);
-      if (!(total > 0) || !(start >= 0) || start >= total || !message.scan) return false;
+      if (!(total > 0) || !(start >= 0) || (!at && start >= total) || !message.scan) return false;
       if (message.scan !== scan || !data || data.length !== total) {
         if (!data || data.length !== total) {
           const seed = under();
@@ -34,6 +38,24 @@ export function createLiveImage() {
         // The detector area moved: every position so far comes again, summed over the new area.
         generation = message.generation;
         received = 0;
+      }
+      if (at) {
+        // Each visit where the beam was: a revisit paints over its position, an unvisited one keeps what is there.
+        const visits = Math.min(values.length, at.length, Math.round(message.count));
+        let low = Infinity, high = 0;
+        for (let i = 0; i < visits; i++) {
+          const position = at[i];
+          if (!(position >= 0 && position < total)) continue;
+          data[position] = values[i];
+          if (position < low) low = position;
+          if (position + 1 > high) high = position + 1;
+        }
+        if (!(high > low)) return false;
+        received = total;                     // visits have no order along the image: it is summed where drawn
+        changedFrom = Math.min(changedFrom, low);
+        changedTo = Math.max(changedTo, high);
+        version += 1;
+        return true;
       }
       const count = Math.min(values.length, Math.round(message.count), total - start);
       if (!(count > 0)) return false;
@@ -75,4 +97,16 @@ export function positionValues(buffer: DataView | ArrayBuffer | undefined, count
   const values = new Float32Array(length);
   new Uint8Array(values.buffer).set(bytes.subarray(0, length * 4));
   return values;
+}
+
+/** The int32 positions of a message buffer (``at``), copied as ``positionValues`` copies the values. */
+export function positionIndices(buffer: DataView | ArrayBuffer | undefined, count: number): Int32Array | null {
+  if (!buffer) return null;
+  const bytes = buffer instanceof ArrayBuffer
+    ? new Uint8Array(buffer) : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  const length = Math.min(Math.floor(bytes.byteLength / 4), Math.max(0, Math.round(count)));
+  if (!length) return null;
+  const indices = new Int32Array(length);
+  new Uint8Array(indices.buffer).set(bytes.subarray(0, length * 4));
+  return indices;
 }

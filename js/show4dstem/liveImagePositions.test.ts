@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createLiveImage, positionValues } from "./liveImagePositions";
+import { createLiveImage, positionIndices, positionValues } from "./liveImagePositions";
 
 const batch = (scan: string, generation: number, start: number, values: number[], total = 6) =>
   [{ type: "live_image_positions", scan, generation, start, count: values.length, total }, new Float32Array(values)] as const;
@@ -83,5 +83,17 @@ describe("the rows that changed", () => {
     live.write(...batch("a", 1, 4, [4, 5]));
     expect(live.takeDirty(2)).toEqual([2, 3]);
     expect(live.generation()).toBe(1);
+  });
+
+  it("writes the visits of a scan kept as visits where the beam was: revisits paint over, unvisited keep the image under", () => {
+    const live = createLiveImage();
+    const message = { type: "live_image_positions", scan: "s", generation: 1, start: 0, count: 4, total: 6, at: true };
+    const under = () => new Float32Array([9, 9, 9, 9, 9, 9]);
+    expect(live.write(message, new Float32Array([1, 2, 3, 4]), under, new Int32Array([5, 0, 5, 2]))).toBe(true);
+    expect(Array.from(live.data()!)).toEqual([2, 9, 4, 9, 9, 3]);
+    expect(live.takeDirty(3)).toEqual([0, 2]);
+    const next = { ...message, start: 4, count: 1 };
+    expect(live.write(next, new Float32Array([7]), under, new Int32Array([9]))).toBe(false);   // off the scan
+    expect(positionIndices(new Int32Array([3, 1]).buffer, 2)).toEqual(new Int32Array([3, 1]));
   });
 });

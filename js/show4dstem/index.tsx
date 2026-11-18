@@ -4,7 +4,7 @@ import { createLatestFrameQueue } from "./latestFrameQueue";
 import { chosenFrameIndex, createScanChoice } from "./scanChoice";
 import { formatMean, formatStat } from "./statText";
 import { isLiveFrame, keptScanCount, positionLabelAnchor, shortScanName, titleNamesScan } from "./viewLabels";
-import { createLiveImage, positionValues, type PositionsMessage } from "./liveImagePositions";
+import { createLiveImage, positionIndices, positionValues, type PositionsMessage } from "./liveImagePositions";
 import {
   CONTRAST_PERCENTILES, chosenPercentiles, contrastRangeChoice, handlePositions, percentilesLabel,
   percentilesOfChoice, type Percentiles,
@@ -2469,7 +2469,9 @@ function Show4DSTEM() {
       if (content?.type === "live_image_positions") {
         const message = content as PositionsMessage;
         const values = positionValues(buffers?.[0], message.count);
-        if (values && liveImagePositions.write(message, values, () => liveImageUnderRef.current)) changed();
+        const at = message.at ? positionIndices(buffers?.[1], message.count) : null;
+        if (values && (!message.at || at)
+            && liveImagePositions.write(message, values, () => liveImageUnderRef.current, at)) changed();
       } else if (content?.type === "live_image_rows") {
         if (liveRows.write(content as RowsMessage, floatValues(buffers?.[0]))) changed();
       } else if (content?.type === "live_image_clear") {
