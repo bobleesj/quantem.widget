@@ -30,21 +30,24 @@ export type LiveFrame = {
 
 /** What the view needs to know about the scan arriving; it changes once per scan, not with every row. */
 export type LiveInfo = {
-  scan: string; total: number; cols: number; detRows: number; detCols: number; mode: string; comUnit: string;
+  scan: string; total: number; cols: number; detRows: number; detCols: number; mode: string; comUnit: string; images: string[];
 };
 
 /** The frame's description without its pixels; null when no scan is arriving. */
 export function liveInfo(frame: LiveFrame | undefined | null): LiveInfo | null {
   if (!frame?.detRows || !frame.detCols || !frame.total || !frame.cols) return null;
+  const images = FRAME_IMAGES.filter(([field, name]) => name !== "roi"
+    && (frame[field] || (Array.isArray(frame.images) && frame.images.includes(name)))).map(([, name]) => name);
   return { scan: String(frame.scan ?? ""), total: Math.round(frame.total), cols: Math.round(frame.cols),
            detRows: Math.round(frame.detRows), detCols: Math.round(frame.detCols), mode: String(frame.mode ?? ""),
-           comUnit: String(frame.com_unit ?? "") };
+           comUnit: String(frame.com_unit ?? ""), images };
 }
 
 export function sameLiveInfo(a: LiveInfo | null, b: LiveInfo | null): boolean {
   if (!a || !b) return a === b;
   return a.scan === b.scan && a.total === b.total && a.cols === b.cols && a.detRows === b.detRows
-    && a.detCols === b.detCols && a.mode === b.mode && a.comUnit === b.comUnit;
+    && a.detCols === b.detCols && a.mode === b.mode && a.comUnit === b.comUnit
+    && a.images.length === b.images.length && a.images.every((name, index) => name === b.images[index]);
 }
 
 /** The float32 values of a comm buffer, copied only when it is not aligned to four bytes. */

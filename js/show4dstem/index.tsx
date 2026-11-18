@@ -114,6 +114,8 @@ function viSourceLabel(source: string): string {
   if (source === "roi") return "ROI";
   if (source === "DPC_row") return "DPC row";
   if (source === "DPC_col") return "DPC col";
+  if (source === "COM_row") return "COM row";
+  if (source === "COM_col") return "COM col";
   if (source === "iDPC") return "iDPC";
   if (source === "Direct") return "Direct ptycho";
   return source;
@@ -525,6 +527,9 @@ const VI_SOURCE_COLORS: Record<string, { dark: string; light: string }> = {
   adf: { dark: "#ffaa44", light: "#9a5a00" },
   DPC_row: { dark: "#38bdf8", light: "#0369a1" },
   DPC_col: { dark: "#a78bfa", light: "#6d28d9" },
+  COM_row: { dark: "#38bdf8", light: "#0369a1" },
+  COM_col: { dark: "#a78bfa", light: "#6d28d9" },
+  DPC: { dark: "#2dd4bf", light: "#0f766e" },
   iDPC: { dark: "#2dd4bf", light: "#0f766e" },
   Direct: { dark: "#f472b6", light: "#be185d" },
 };
@@ -4832,7 +4837,7 @@ function Show4DSTEM() {
     const seen = new Set<string>();
     const out: string[] = [];
     const add = (source: string) => {
-      if (!["DPC_row", "DPC_col", "iDPC", "Direct"].includes(source) || seen.has(source)) return;
+      if (!["DPC_row", "DPC_col", "iDPC", "Direct", "COM_row", "COM_col", "DPC"].includes(source) || seen.has(source)) return;
       seen.add(source);
       out.push(source);
     };
@@ -4840,13 +4845,14 @@ function Show4DSTEM() {
       add(label);
     });
     if (preview?.mode === "Direct") add("Direct");
+    preview?.images.forEach(add);
     if (webgpuDpcReady) {
       add("DPC_row");
       add("DPC_col");
       add("iDPC");
     }
     return out;
-  }, [viProductLabels, webgpuDpcReady, preview?.mode]);
+  }, [viProductLabels, webgpuDpcReady, preview]);
   const activeViSource = React.useMemo(() => {
     return viSource === "roi" || viProductSourceOptions.includes(viSource) ? viSource : "roi";
   }, [viProductSourceOptions, viSource]);
@@ -9112,7 +9118,7 @@ function Show4DSTEM() {
               <Typography sx={statsShownSx}>Std <Box component="span" sx={statsValueSx}>{formatStat(dpStats[3])}</Box></Typography>
               {/* The image buttons together on a line of their own, under the readings (one of them alone at the end of
                   the readings' line read as a stray label). */}
-              {controlsVisible && <Box sx={{ display: "flex", flexBasis: "100%", alignItems: "center", columnGap: "12px", flexWrap: "wrap" }}>
+              {controlsVisible && <Box sx={{ display: "flex", flexBasis: "100%", alignItems: "center", columnGap: "8px", flexWrap: "wrap" }}>
                 <Typography component="span" onClick={() => requestViPreset("bf")} sx={viSourceButtonSx("bf", activeViSource === "roi")}>BF</Typography>
                 <Typography component="span" onClick={() => requestViPreset("abf")} sx={viSourceButtonSx("abf")}>ABF</Typography>
                 <Typography component="span" onClick={() => requestViPreset("adf")} sx={viSourceButtonSx("adf")}>ADF</Typography>
