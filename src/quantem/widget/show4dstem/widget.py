@@ -282,6 +282,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     roi_radius_inner = traitlets.Float(5.0).tag(sync=True)
     roi_width = traitlets.Float(20.0).tag(sync=True)
     roi_height = traitlets.Float(10.0).tag(sync=True)
+    # The view sits inside a host panel (a scanning GUI): its panels touch, it has no padding, and the View and
+    # Dataset row is under the title. False keeps the notebook layout.
+    embedded = traitlets.Bool(False).tag(sync=True)
     live_phase_stream = traitlets.Bool(False).tag(sync=True)
     # The scan being received: {scan, total, cols, detRows, detCols, mode, upsample, com_unit}; {} when none is.
     # It says which scan arrives and changes once per scan. Its pixels go as messages, never in this value (the

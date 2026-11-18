@@ -2627,11 +2627,11 @@ function Show4DSTEM() {
   // Frame animation state (5D time/tilt series)
   const [frameIdx, setFrameIdxState] = useModelState<number>("frame_idx");
   const [streamSourceIds = []] = useModelState<string[]>("_stream_source_ids");
-  // A streamed view (scans arriving, a live phase) sits in a narrow column beside the scan controls: its panels touch
-  // and it has no padding, so the images get every pixel and no page background shows between them (11-18: a white
-  // line between the pattern and the image when no Direct phase streamed, the only case the gap was removed for).
-  const liveLayout = !!liveStream || streamSourceIds.length > 0 || streaming;
-  const panelGap = liveLayout ? 0 : PANEL_GAP;
+  // A view embedded in a host panel (the scanning GUI's narrow column beside its controls): its panels touch and it
+  // has no padding, so the images get every pixel and no page background shows between them. A notebook viewer,
+  // streaming or not, keeps its gap and padding.
+  const [embedded] = useModelState<boolean>("embedded");
+  const panelGap = embedded ? 0 : PANEL_GAP;
   React.useEffect(() => {
     streamedProducts.keep(streamSourceIds);
     setStreamedProductsVersion(streamedProducts.version());
@@ -8818,22 +8818,20 @@ function Show4DSTEM() {
     viRoiReduce, viScaleMode
   ]);
   // View and the Dataset controls: one row. While a scan streams the view stays on the scan arriving: the row is
-  // hidden in place, so nothing moves when a scan starts or ends. In a viewer scans stream into (it has stream
-  // sources, or a live phase stream) the row is under the title, above the pattern and the image, on one line, its
-  // room kept from the first scan on (11-18: under the image it was below the fold of the
-  // scanning GUI); elsewhere it is under the image, no wider than it.
-  const streamedViewer = liveStream || streamSourceIds.length > 0;
+  // hidden in place, so nothing moves when a scan starts or ends. Embedded in a host panel the row is under the
+  // title, above the pattern and the image, on one line, its room kept from the first scan on (11-18: under the
+  // image it was below the fold of the scanning GUI); elsewhere it is under the image, no wider than it.
   const scanChoiceHidden = streaming || nFrames <= 1;
-  const scanChoiceRows = controlsVisible && (nFrames > 1 || streamedViewer) && (<Box data-show4dstem-scan-rows aria-hidden={scanChoiceHidden || undefined}
+  const scanChoiceRows = controlsVisible && (nFrames > 1 || embedded) && (<Box data-show4dstem-scan-rows aria-hidden={scanChoiceHidden || undefined}
         sx={scanChoiceHidden ? { visibility: "hidden", pointerEvents: "none" } : undefined}>
-        <Box sx={{ ...controlRow, columnGap: `${SPACING.XS}px`, rowGap: "2px", ...(streamedViewer ? { mb: `${SPACING.XS}px`, flexWrap: "nowrap" } : { mt: `${SPACING.XS}px` }), border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
+        <Box sx={{ ...controlRow, columnGap: `${SPACING.XS}px`, rowGap: "2px", ...(embedded ? { mb: `${SPACING.XS}px`, flexWrap: "nowrap" } : { mt: `${SPACING.XS}px` }), border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
           <Typography sx={{ ...themedTypography.label, fontSize: 10, flexShrink: 0 }}>View</Typography>
           <Select
             value={viewMode}
             onChange={(event) => setViewMode(String(event.target.value))}
             size="small"
             inputProps={{ "aria-label": "Show4DSTEM view mode" }}
-            sx={{ ...themedSelect, minWidth: 72, fontSize: 10, flexShrink: 0 }}
+            sx={{ ...themedSelect, minWidth: 72, fontSize: 10, ...(embedded ? { flexShrink: 0 } : {}) }}
             MenuProps={themedMenuProps}
           >
             <MenuItem value="single">Single</MenuItem>
@@ -8934,7 +8932,7 @@ function Show4DSTEM() {
       onMouseDownCapture={handleRootMouseDownCapture}
       onDragOver={onLocalDragOver}
       onDrop={onLocalDrop}
-      sx={{ p: "4px", ...(liveLayout ? { p: 0 } : {}), bgcolor: themeColors.bg, color: themeColors.text, outline: "none", borderRadius: "2px", width: "100%", maxWidth: "100%", boxSizing: "border-box", "@media (max-width: 700px)": { p: 0, overflowX: "hidden", ".jp-OutputArea-output &, .jp-OutputArea-child &": { width: "calc(100vw - 96px)", maxWidth: "calc(100vw - 96px)" } } }}
+      sx={{ p: embedded ? 0 : "4px", bgcolor: themeColors.bg, color: themeColors.text, outline: "none", borderRadius: "2px", width: "100%", maxWidth: "100%", boxSizing: "border-box", "@media (max-width: 700px)": { p: 0, overflowX: "hidden", ".jp-OutputArea-output &, .jp-OutputArea-child &": { width: "calc(100vw - 96px)", maxWidth: "calc(100vw - 96px)" } } }}
     >
       <input
         ref={h5LocalInputRef}
@@ -8947,7 +8945,7 @@ function Show4DSTEM() {
       />
       {/* HEADER */}
       {titleHeading}
-      {streamedViewer && scanChoiceRows}
+      {embedded && scanChoiceRows}
       {sizeGroups && sizeGroups.length > 1 && (
         <Box role="tablist" aria-label="Scan size" sx={{ display: "flex", flexWrap: "wrap", gap: "4px", mb: `${SPACING.SM}px` }}>
           {sizeGroups.map((label, index) => (
@@ -9544,7 +9542,7 @@ function Show4DSTEM() {
                   </Box>
                 </Box>
               </Box>
-              {!streamedViewer && scanChoiceRows}
+              {!embedded && scanChoiceRows}
               {showDirectCalibrationPanel && (
                 <Box sx={{ mt: `${SPACING.XS}px`, width: "100%", maxWidth: viCanvasWidth, boxSizing: "border-box" }}>
                   <Button
