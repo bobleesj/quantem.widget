@@ -1464,9 +1464,14 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._update_frame()
 
     def _initialize_stream_geometry(self, source, options) -> None:
-        """Adopt the first real scan's geometry and calibration after an idle start."""
+        """Adopt the first real scan's geometry and calibration after an idle start. The operator's detector area
+        stays when the detector size is the same (2026-11-18: a live view moving between a 512 scan and 128 Live frames
+        re-initialized at each switch and snapped ADF back to the bright-field circle)."""
         self._device = torch.device(self._data.device)
+        detector_before = (self.det_rows, self.det_cols) if getattr(self, "_stream_geometry_set", False) else None
         self.shape_rows, self.shape_cols, self.det_rows, self.det_cols = self._data.shape[-4:]
+        self._stream_geometry_set = True
+        keep_detector_area = detector_before == (self.det_rows, self.det_cols)
         self.pos_row = self.pos_col = 0
         self.vi_roi_center_row, self.vi_roi_center_col = self.shape_rows / 2, self.shape_cols / 2
         self.vi_roi_center = [self.vi_roi_center_row, self.vi_roi_center_col]
@@ -1495,7 +1500,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             center if center is not None else (self.det_rows / 2, self.det_cols / 2))
         self.bright_field_radius_px = (radius if radius is not None else
                                       min(self.det_rows, self.det_cols) * BRIGHT_FIELD_RADIUS_FRACTION)
-        self._set_roi_to_disk()
+        if not keep_detector_area:                  # a new detector size: the bright-field disk of this one
+            self._set_roi_to_disk()
 
     @contextmanager
     def _defer_stream_observers(self):

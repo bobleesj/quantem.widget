@@ -1169,3 +1169,18 @@ def test_sparse_grid_title_counts_detector_visits_instead_of_grid_cells(recordin
         assert viewer.title == "Live · 8 · 3 visits · 1 kept"
     finally:
         viewer.close()
+
+
+def test_reinitialized_geometry_keeps_the_operators_detector_area_at_the_same_detector_size(recording):
+    """2026-11-18, at the microscope: a live view moving between a 512 scan and 128 Live frames re-initialized its
+    geometry at each switch, and ADF snapped back to the bright-field circle."""
+    viewer = Show4DSTEM.stream(recording)
+    try:
+        recording.acquisitions.append(LiveScan("first"))
+        viewer.refresh_stream()
+        viewer.apply_preset("adf")
+        chosen = (viewer.roi_mode, viewer.roi_center, viewer.roi_radius_inner, viewer.roi_radius)
+        viewer._initialize_stream_geometry(recording.acquisitions[0], {})      # the shape switch the page makes
+        assert (viewer.roi_mode, viewer.roi_center, viewer.roi_radius_inner, viewer.roi_radius) == chosen
+    finally:
+        viewer.close()
