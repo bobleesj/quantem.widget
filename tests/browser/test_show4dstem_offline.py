@@ -153,19 +153,6 @@ def choose(page, combobox, option: str) -> None:
     page.wait_for_timeout(1500)
 
 
-def image_scale_select(page, panel_selector: str):
-    """The Lin/Log select under a panel (the first one below it, within its column)."""
-    index = page.evaluate("""(selector) => {
-      const panel = document.querySelector(selector).getBoundingClientRect();
-      const combos = Array.from(document.querySelectorAll('[role="combobox"]'));
-      return combos.findIndex(combo => {
-        const box = combo.getBoundingClientRect();
-        return combo.textContent.trim() === 'Lin' && box.top > panel.bottom && box.left >= panel.left - 2 && box.left < panel.right;
-      });
-    }""", panel_selector)
-    return page.locator('[role="combobox"]').nth(index)
-
-
 # ---------------------------------------------------------------------------
 # Multiple view
 # ---------------------------------------------------------------------------
@@ -233,9 +220,9 @@ def test_detector_outline_survives_a_device_pixel_ratio_change(pages, open_page,
 
 def test_dpc_log_tiles_keep_negative_values(pages, open_page, hardware_adapter):
     page = open_export(open_page, hardware_adapter, pages["series"], ready=TILE)
-    page.locator('[aria-label="Show DPC row virtual detector"]').click()
+    page.get_by_role("button", name="DPC row", exact=True).click()
     page.wait_for_timeout(2000)
-    choose(page, image_scale_select(page, TILE), "Log")
+    page.get_by_role("button", name="Image display scale: linear", exact=True).click()
     page.wait_for_timeout(1500)
     # The signed log keeps a DPC map's negative half: only its minimum takes the first colormap entry.
     darkest = page.evaluate("""() => {
@@ -335,10 +322,9 @@ def test_dp_histogram_axis_reads_the_shown_pattern(pages, open_page, hardware_ad
 
 def test_source_buttons_stay_visible_on_a_narrow_panel(pages, open_page, hardware_adapter):
     page = open_export(open_page, hardware_adapter, pages["narrow"])
-    button = page.locator('[aria-label="Show iDPC virtual detector"]')
+    button = page.get_by_role("button", name="iDPC", exact=True)
     button.wait_for(timeout=30_000)
-    inside = page.evaluate("""() => {
-      const button = document.querySelector('[aria-label="Show iDPC virtual detector"]');
+    inside = button.evaluate("""button => {
       const bar = button.parentElement.getBoundingClientRect();
       const box = button.getBoundingClientRect();
       const top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
@@ -373,3 +359,32 @@ def test_flip_changes_only_the_direct_phase_contrast(pages, open_page, hardware_
     toggle.uncheck()
     page.wait_for_function("([selector, before]) => document.querySelector(selector).toDataURL() === before",
                            arg=[VI, before])
+
+
+def test_virtual_detector_controls_follow_the_selected_image_source(pages, open_page, hardware_adapter):
+    from playwright.sync_api import expect
+
+    page = open_export(open_page, hardware_adapter, pages["direct"], ready=VI)
+    detector = page.get_by_role("combobox", name="Detector", exact=True)
+    size = page.get_by_role("slider", name="Detector aperture size")
+    sources = page.get_by_role("group", name="Image source")
+    for source in ("Direct ptycho", "DPC row", "DPC col", "iDPC"):
+        button = sources.get_by_role("button", name=source, exact=True)
+        button.click()
+        expect(button).to_have_attribute("aria-pressed", "true")
+        expect(detector).to_have_count(0)
+        expect(size).to_have_count(0)
+        expect(page.get_by_role("combobox", name="Scan region", exact=True)).to_be_visible()
+        expect(page.get_by_role("checkbox", name="Diffraction colorbar")).to_be_visible()
+
+    sources.get_by_role("button", name="BF", exact=True).click()
+    expect(detector).to_have_text("Circle")
+    expect(size).to_be_visible()
+    page.set_viewport_size({"width": 390, "height": 900})
+    sources.get_by_role("button", name="DPC row", exact=True).click()
+    options = page.get_by_role("button", name=re.compile("^Pattern options"))
+    expect(options).to_be_visible()
+    expect(options).not_to_contain_text("Circle")
+    options.click()
+    expect(detector).to_have_count(0)
+    expect(page.get_by_role("checkbox", name="Diffraction colorbar")).to_be_visible()

@@ -1426,7 +1426,7 @@ interface CompareVirtualGridProps {
   onReorderFrame: (dragFrame: number, targetFrame: number) => void;
   onDragFrameChange: (idx: number | null) => void;
   onPendingMoveFrameChange: (idx: number | null) => void;
-  onPositionChange: (row: number, col: number, commit?: boolean) => void;
+  onPositionChange?: (row: number, col: number, commit?: boolean) => void;
   onGpuRendererReady?: (requestRender: (() => void) | null) => void;
 }
 
@@ -1484,6 +1484,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
   gpuBytesCurrent = false,
   sourceLoading = false,
 }: CompareVirtualGridProps) {
+  const canUpdatePosition = Boolean(onPositionChange);
   const autoContrast = percentiles !== null;
   const percentileLow = percentiles ? percentiles[0] : 1;
   const percentileHigh = percentiles ? percentiles[1] : 99;
@@ -1863,7 +1864,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     const row = Math.round(Math.max(0, Math.min(shapeRows - 1, canvasToMask(tileY, compareZoom, comparePanY))));
     // The parent coalesces scan/detector requests once per animation frame.
     // A second rAF here adds a full display frame to every pointer move.
-    onPositionChange(row, col, commit);
+    onPositionChange?.(row, col, commit);
   }, [comparePanX, comparePanY, compareZoom, onPositionChange, shapeCols, shapeRows]);
 
   React.useLayoutEffect(() => {
@@ -1894,6 +1895,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
       ctx?.clearRect(0, 0, overlay.width, overlay.height);
       if (!panel && !gpuLoaded) return;
       if (showScaleBar && cssWidth >= 96) drawScaleBarHiDPI(overlay, dpr, compareZoom, pixelSize || 1, pixelUnit, shapeCols);
+      if (!canUpdatePosition) return;
       // A scan ROI replaces the scan-position crosshair, as on the single image.
       if (scanRegion && scanRegion.mode !== "off") {
         drawViRoiOverlayHiDPI(overlay, dpr, scanRegion.mode,
@@ -1920,7 +1922,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
     paint();
     batchModel.on("change:pos_row", changed); batchModel.on("change:pos_col", changed);
     return () => { if (raf) cancelAnimationFrame(raf); batchModel.off("change:pos_row", changed); batchModel.off("change:pos_col", changed); };
-  }, [batchModel, kind, comparePanX, comparePanY, compareZoom, cursorCol, cursorRow, dpr, isDraggingPosition, overlayVersion, pixelSize, pixelUnit, renderEntries, shapeCols, shapeRows, showScaleBar, scanRegion]);
+  }, [batchModel, kind, comparePanX, comparePanY, compareZoom, cursorCol, cursorRow, dpr, isDraggingPosition, overlayVersion, pixelSize, pixelUnit, renderEntries, shapeCols, shapeRows, showScaleBar, scanRegion, canUpdatePosition]);
 
   // Hover readout: the value under the pointer, read from the panel's bytes or,
   // for a GPU-only panel, four bytes of its resident counts.
@@ -2004,7 +2006,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
               onDoubleClick={handleCompareDoubleClick}
               onPointerDown={(event) => {
                 const target = event.target instanceof Element ? event.target : null;
-                if (!loaded || reorderMode || target?.closest("button")) return;
+                if (!loaded || reorderMode || target?.closest("button") || (!canUpdatePosition && !event.shiftKey)) return;
                 positionDragKeyRef.current = comparisonPanelKey(frame, sourceIds);
                 event.currentTarget.setPointerCapture(event.pointerId);
                 if (event.shiftKey) {
@@ -2120,7 +2122,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
                 border: "none",
                 boxSizing: "border-box",
                 outline: "none",
-                cursor: reorderMode ? "grab" : "crosshair",
+                cursor: reorderMode ? "grab" : canUpdatePosition ? "crosshair" : "default",
                 overflow: "hidden",
                 touchAction: reorderMode ? "auto" : "none",
                 opacity: isDragging ? 0.45 : 1,
@@ -2338,7 +2340,7 @@ const CompareVirtualGrid = React.memo(function CompareVirtualGrid({
         }), [
     renderEntries, activeIdx, labels, sourceIds, starred, draggingFrame,
     pendingMoveFrame, themeColors, reorderMode, handleCompareDoubleClick,
-    updatePositionFromPointer, updateReadout, hideReadout, onSelect, onPendingMoveFrameChange, onReorderFrame,
+    updatePositionFromPointer, updateReadout, hideReadout, onSelect, canUpdatePosition, onPendingMoveFrameChange, onReorderFrame,
     displayIndices, onDragFrameChange, movePreviewFrame, shapeCols, shapeRows,
     imageLeft, imageTop, imageWidth, imageHeight, smooth, panelChromeVisible,
     onToggleStar, onHide, onResizeStart, mobileGridCols, gridCols, resizeGripSx, kind, compareZoom, comparePanX, comparePanY,
@@ -7992,6 +7994,9 @@ function Show4DSTEM() {
       color,
       fontWeight: active ? 800 : 700,
       opacity: active ? 1 : 0.9,
+      background: "none",
+      border: 0,
+      padding: 0,
       cursor: "pointer",
       display: "inline-flex",
       alignItems: "center",
@@ -8127,8 +8132,19 @@ function Show4DSTEM() {
     boxSizing: "border-box",
     flexWrap: "wrap",
   };
-  const dpOptionSummary = `${optionLabel(roiMode)}${roiMode === "annular" ? ` ${Math.round(roiRadiusInner)}-${Math.round(roiRadius)}px` : roiMode !== "point" ? ` ${Math.round(roiRadius)}px` : ""} | ${optionLabel(dpColormap)} | ${dpScaleMode === "log" ? "Log" : "Lin"}`;
-  const viOptionSummary = `${viSourceLabel(activeViSource)} | ${viRoiMode === "off" ? "ROI off" : `${optionLabel(viRoiMode)} ${Math.round(viRoiRadius || 5)}px`} | ${optionLabel(viColormap)} | ${viScaleMode === "log" ? "Log" : "Lin"}`;
+  const apertureSummary = !roiVirtualDetectorActive ? "" : (
+    roiMode === "annular" ? `Annular ${Math.round(roiRadiusInner)}–${Math.round(roiRadius)}px`
+    : roiMode === "rect" ? `Rect ${Math.round(roiWidth)}×${Math.round(roiHeight)}px`
+    : roiMode === "circle" || roiMode === "square" ? `${optionLabel(roiMode)} ${Math.round(roiRadius)}px`
+    : optionLabel(roiMode)
+  );
+  const dpOptionSummary = [apertureSummary, optionLabel(dpColormap), dpScaleMode === "log" ? "Log" : "Lin"]
+    .filter(Boolean).join(" | ");
+  const scanRoiSummary = viRoiMode === "off" ? "" : viRoiMode === "rect"
+    ? `Scan ROI ${Math.round(viRoiWidth)}×${Math.round(viRoiHeight)}px`
+    : `Scan ROI ${optionLabel(viRoiMode)} ${Math.round(viRoiRadius || 5)}px`;
+  const viOptionSummary = [viSourceLabel(activeViSource), scanRoiSummary, optionLabel(viColormap),
+    viScaleMode === "log" ? "Log" : "Lin"].filter(Boolean).join(" | ");
   const fftOptionSummary = `${fftScaleMode === "log" ? "Log" : "Lin"} | ${optionLabel(fftColormap)}${fftAuto ? " | Auto" : ""}`;
   const directBfCountText = Number(directBrightFieldPixels || 0) > 0
     ? `${Math.max(0, Math.round(Number(directBrightFieldPixels || 0)))} BF px`
@@ -8630,8 +8646,8 @@ function Show4DSTEM() {
   const dpControlRows = React.useMemo(() => (
     <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: "1 1 220px", minWidth: 0, justifyContent: "center" }}>
       {/* Row 1: Detector + slider */}
-      <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-        <Select title="Detector" inputProps={{ "aria-label": "Detector" }} value={roiMode || "point"} onChange={(event) => setRoiMode(event.target.value)} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
+      {roiVirtualDetectorActive && <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
+        <Select title="Virtual detector aperture" inputProps={{ "aria-label": "Detector" }} value={roiMode || "point"} onChange={(event) => setRoiMode(event.target.value)} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
           <MenuItem value="point">Point</MenuItem>
           <MenuItem value="circle">Circle</MenuItem>
           <MenuItem value="square">Square</MenuItem>
@@ -8641,6 +8657,8 @@ function Show4DSTEM() {
         {(roiMode === "circle" || roiMode === "square" || roiMode === "annular") && (
           <>
             <Slider
+              getAriaLabel={(index) => roiMode === "annular"
+                ? (index === 0 ? "Detector inner radius" : "Detector outer radius") : "Detector aperture size"}
               value={roiMode === "annular" ? [roiRadiusInner, roiRadius] : [roiRadius]}
               onChange={(_, value) => {
                 beginDpRoiInteraction();
@@ -8665,7 +8683,7 @@ function Show4DSTEM() {
             </Typography>
           </>
         )}
-      </Box>
+      </Box>}
       {/* Row 2: Color + Scale + Colorbar */}
       <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
         <Select title="Colormap" inputProps={{ "aria-label": "Colormap" }} value={dpColormap} onChange={(event) => setDpColormap(String(event.target.value))} size="small" sx={{ ...themedSelect, minWidth: 65, fontSize: 10 }} MenuProps={themedMenuProps}>
@@ -8682,7 +8700,7 @@ function Show4DSTEM() {
     </Box>
   ), [
     beginDpRoiInteraction, detCols, detRows, dpColormap, dpScaleMode, finishDpRoiInteraction,
-    requestCompareViLive, roiMode, roiRadius, roiRadiusInner, setDpColormap, setDpScaleMode, setRoiMode,
+    requestCompareViLive, roiMode, roiRadius, roiRadiusInner, roiVirtualDetectorActive, setDpColormap, setDpScaleMode, setRoiMode,
     setRoiRadius, setRoiRadiusInner, setShowDpColorbar, showDpColorbar, maskedPixels, showMaskedPixels, setShowMaskedPixels, themeColors, themedMenuProps,
     themedSelect, themedTypography
   ]);
@@ -8811,7 +8829,7 @@ function Show4DSTEM() {
     <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: "0 1 auto", minWidth: 0, justifyContent: "center" }}>
       {/* Row 1: ROI selector */}
       <Box sx={{ ...controlRow, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
-        <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>ROI</Typography>
+        <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Scan ROI</Typography>
         <Select inputProps={{ "aria-label": "Scan region" }} value={viRoiMode || "off"} onChange={(event) => setViRoiMode(event.target.value)} size="small" sx={{ ...themedSelect, minWidth: 60, fontSize: 10 }} MenuProps={themedMenuProps}>
           <MenuItem value="off">Off</MenuItem>
           <MenuItem value="circle">Circle</MenuItem>
@@ -8823,6 +8841,7 @@ function Show4DSTEM() {
             {(viRoiMode === "circle" || viRoiMode === "square") && (
               <>
                 <Slider
+                  aria-label="Scan region size"
                   value={viRoiRadius || 5}
                   onChange={(_, value) => setViRoiRadius(value as number)}
                   min={1}
@@ -9145,28 +9164,23 @@ function Show4DSTEM() {
               {/* no Min: detector counts start at 0, and the row then fits one line beside the image buttons */}
               <Typography sx={statsShownSx}>Max <Box component="span" sx={statsValueSx}>{formatStat(dpStats[2])}</Box></Typography>
               <Typography sx={statsShownSx}>Std <Box component="span" sx={statsValueSx}>{formatStat(dpStats[3])}</Box></Typography>
-              {/* The image buttons together on a line of their own, under the readings (one of them alone at the end of
-                  the readings' line read as a stray label). */}
-              {controlsVisible && <Box sx={{ display: "flex", flexBasis: "100%", alignItems: "center", columnGap: embedded ? "8px" : "12px", flexWrap: "wrap" }}>
-                <Typography component="span" onClick={() => requestViPreset("bf")} sx={viSourceButtonSx("bf", activeViSource === "roi")}>BF</Typography>
-                <Typography component="span" onClick={() => requestViPreset("abf")} sx={viSourceButtonSx("abf")}>ABF</Typography>
-                <Typography component="span" onClick={() => requestViPreset("adf")} sx={viSourceButtonSx("adf")}>ADF</Typography>
-                {hasViProductSources && viProductSourceOptions.map((source) => {
-                  const active = activeViSource === source;
-                  return (
-                    <Typography
-                      key={source}
-                      component="span"
-                      aria-label={`Show ${viSourceLabel(source)} virtual detector`}
-                      aria-pressed={active}
-                      onClick={() => setViSource(source)}
-                      sx={viSourceButtonSx(source, active)}
-                    >
-                      {viSourceLabel(source)}
-                    </Typography>
-                  );
-                })}
-              </Box>}
+            </Box>
+          )}
+          {controlsVisible && !dpPanelLoading && (dpStats?.length === 4 || hasViProductSources) && (
+            <Box role="group" aria-label="Image source" sx={{ ...statsBarSx, mt: 0, minHeight: 0,
+              columnGap: embedded ? "8px" : "12px" }}>
+              {(["bf", "abf", "adf"] as const).map((preset) => (
+                <Typography key={preset} component="button" type="button" onClick={() => requestViPreset(preset)}
+                  sx={viSourceButtonSx(preset)}>{preset.toUpperCase()}</Typography>
+              ))}
+              {viProductSourceOptions.map((source) => (
+                <Typography key={source} component="button" type="button"
+                  aria-pressed={activeViSource === source}
+                  onClick={() => setViSource(source)}
+                  sx={viSourceButtonSx(source, activeViSource === source)}>
+                  {viSourceLabel(source)}
+                </Typography>
+              ))}
             </Box>
           )}
 
@@ -9199,7 +9213,7 @@ function Show4DSTEM() {
                 sx={mobileOptionToggleSx}
                 endIcon={mobileDpOptionsOpen ? <KeyboardArrowUpIcon fontSize="small" /> : <KeyboardArrowDownIcon fontSize="small" />}
               >
-                <Box component="span">Detector options</Box>
+                <Box component="span">Pattern options</Box>
                 <Box component="span" sx={mobileOptionSummarySx}>{dpOptionSummary}</Box>
               </Button>
               <Box sx={mobileOptionsPanelSx(mobileDpOptionsOpen)}>
@@ -9378,7 +9392,7 @@ function Show4DSTEM() {
               onToggleStar={toggleCompareStar} onHide={hideCompareFrame}
               onReorderFrame={moveCompareFrame} onDragFrameChange={setCompareDraggingFrame}
               onPendingMoveFrameChange={setComparePendingMoveFrame}
-              onPositionChange={(row, col, commit) => {
+              onPositionChange={roiVirtualDetectorActive ? (row, col, commit) => {
                 setLocalKRow(row);
                 setLocalKCol(col);
                 // All diffraction panels edit the same live virtual detector.
@@ -9391,7 +9405,7 @@ function Show4DSTEM() {
                 } else {
                   requestCompareViLive();
                 }
-              }}
+              } : undefined}
             />}
           />}
           {compareMode ? (
