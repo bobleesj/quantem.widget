@@ -25,12 +25,14 @@ export type LiveRowImage = {
 export type LiveFrame = {
   rows?: number; cols?: number; total?: number; detRows?: number; detCols?: number; mode?: string;
   upsample?: number; scan?: string; com_unit?: string; images?: string[];
+  diffraction_only?: boolean; source_id?: string;
   phase?: DataView; dp?: DataView; roi?: DataView; com_row?: DataView; com_col?: DataView; dpc?: DataView;
 };
 
 /** What the view needs to know about the scan arriving; it changes once per scan, not with every row. */
 export type LiveInfo = {
   scan: string; total: number; cols: number; detRows: number; detCols: number; mode: string; comUnit: string; images: string[];
+  diffractionOnly: boolean; sourceId: string;
 };
 
 /** The frame's description without its pixels; null when no scan is arriving. */
@@ -40,13 +42,15 @@ export function liveInfo(frame: LiveFrame | undefined | null): LiveInfo | null {
     && (frame[field] || (Array.isArray(frame.images) && frame.images.includes(name)))).map(([, name]) => name);
   return { scan: String(frame.scan ?? ""), total: Math.round(frame.total), cols: Math.round(frame.cols),
            detRows: Math.round(frame.detRows), detCols: Math.round(frame.detCols), mode: String(frame.mode ?? ""),
-           comUnit: String(frame.com_unit ?? ""), images };
+           comUnit: String(frame.com_unit ?? ""), images, diffractionOnly: Boolean(frame.diffraction_only),
+           sourceId: frame.source_id ?? "" };
 }
 
 export function sameLiveInfo(a: LiveInfo | null, b: LiveInfo | null): boolean {
   if (!a || !b) return a === b;
   return a.scan === b.scan && a.total === b.total && a.cols === b.cols && a.detRows === b.detRows
     && a.detCols === b.detCols && a.mode === b.mode && a.comUnit === b.comUnit
+    && a.diffractionOnly === b.diffractionOnly && a.sourceId === b.sourceId
     && a.images.length === b.images.length && a.images.every((name, index) => name === b.images[index]);
 }
 

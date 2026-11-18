@@ -98,12 +98,17 @@ describe("the scan arriving", () => {
   it("is described without its pixels, and is the same while only rows arrive", () => {
     const frame = { scan: "a", rows: 8, cols: 4, total: 8, detRows: 2, detCols: 2, mode: "Direct", com_unit: "mrad" };
     const info = liveInfo(frame)!;
-    expect(info).toEqual({ scan: "a", total: 8, cols: 4, detRows: 2, detCols: 2, mode: "Direct", comUnit: "mrad", images: [] });
+    expect(info).toEqual({ scan: "a", total: 8, cols: 4, detRows: 2, detCols: 2, mode: "Direct", comUnit: "mrad",
+      images: [], diffractionOnly: false, sourceId: "" });
     expect(sameLiveInfo(info, liveInfo({ ...frame, rows: 3 }))).toBe(true);
     expect(sameLiveInfo(info, liveInfo({ ...frame, scan: "b" }))).toBe(false);
     expect(liveInfo({})).toBeNull();
     expect(sameLiveInfo(null, null)).toBe(true);
     expect(sameLiveInfo(info, null)).toBe(false);
+    const multiple = liveInfo({ ...frame, diffraction_only: true, source_id: "arriving" })!;
+    expect(multiple).toMatchObject({ diffractionOnly: true, sourceId: "arriving" });
+    expect(sameLiveInfo(multiple, info)).toBe(false);
+    expect(sameLiveInfo(multiple, liveInfo({ ...frame, diffraction_only: true, source_id: "previous" }))).toBe(false);
   });
 
   it("advertises only known live COM and DPC products as they become available", () => {

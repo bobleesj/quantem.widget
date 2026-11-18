@@ -296,6 +296,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     #   send({"type": "live_image_clear"}) forgets every image, so the next scan is drawn over nothing.
     # A frame that carries whole images (phase, roi, com_row, com_col, dpc as float32 bytes, with dp) still shows.
     live_phase_preview = traitlets.Dict(default_value={}).tag(sync=True)
+    # The receiver uses the diffraction-only frame in Multiple when the matching browser bundle supports it.
+    supports_live_diffraction_in_multiple = True
     # The newest diffraction pattern of the scan being received (float32, detector rows x cols): sent alone, many
     # times a second, and drawn without rendering the viewer.
     live_pattern = traitlets.Bytes(b"").tag(sync=True)

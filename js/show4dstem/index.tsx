@@ -2527,7 +2527,8 @@ function Show4DSTEM() {
   // tick, so they read it again.
   const liveImage = React.useMemo(() => {
     const grid = liveRowImage ? liveRowImage.grid : liveDetectorArray;
-    return preview && grid ? new DataView(grid.buffer, grid.byteOffset, grid.byteLength) : null;
+    return preview && !preview.diffractionOnly && grid
+      ? new DataView(grid.buffer, grid.byteOffset, grid.byteLength) : null;
   }, [liveDetectorArray, liveImageTick, liveRowImage, preview]);
   // The array drawn, which stays the same one while rows are written into it: a draw from React happens when
   // this changes, never because rows arrived.
@@ -5474,7 +5475,13 @@ function Show4DSTEM() {
 
 
   const usesViRoiDp = viRoiMode && viRoiMode !== "off" && viRoiDpBytes && viRoiDpBytes.byteLength > 0;
-  const displayedDpBytes = !liveImage && usesViRoiDp ? viRoiDpBytes : frameBytes;
+  const liveSelectedDp = Boolean(preview?.diffractionOnly && !usesViRoiDp
+    && (!compareMode || compareDpMode === "selected") && preview.sourceId
+    && preview.sourceId === streamSourceIds[chosenFrameIdx]
+    && preview.detRows === detRows && preview.detCols === detCols);
+  const liveDp = streaming || liveSelectedDp;
+  const displayedDpBytes = liveSelectedDp && livePattern?.byteLength === detRows * detCols * 4 ? livePattern
+    : !liveImage && usesViRoiDp ? viRoiDpBytes : frameBytes;
 
   // DP stats (computed JS-side from frame_bytes, not 4 Python traits) and the
   // histogram input derive from the displayed pattern in the render that shows
@@ -6140,10 +6147,10 @@ function Show4DSTEM() {
   // While a scan arrives the newest pattern may be newer than the one in state: never draw an older one over it.
   React.useLayoutEffect(() => {
     const newest = livePatternRef.current;
-    renderDpPattern(streaming && newest && newest.byteLength === detRows * detCols * 4 ? newest : displayedDpBytes, false);
+    renderDpPattern(liveDp && newest && newest.byteLength === detRows * detCols * 4 ? newest : displayedDpBytes, false);
   },
-    [displayedDpBytes, detRows, detCols, dpColormap, dpVminPct, dpVmaxPct, dpScaleMode, traitDpVmin, traitDpVmax, dpPercentiles, setDpVminPct, setDpVmaxPct, streaming]);
-  drawLivePatternRef.current = streaming ? () => renderDpPattern(livePatternRef.current, true) : null;
+    [displayedDpBytes, detRows, detCols, dpColormap, dpVminPct, dpVmaxPct, dpScaleMode, traitDpVmin, traitDpVmax, dpPercentiles, setDpVminPct, setDpVmaxPct, liveDp]);
+  drawLivePatternRef.current = liveDp ? () => renderDpPattern(livePatternRef.current, true) : null;
 
   // useLayoutEffect prevents black flash when canvas dimensions change (resize)
   React.useLayoutEffect(() => paintDpCanvas(), [dpZoom, dpPanX, dpPanY]);
