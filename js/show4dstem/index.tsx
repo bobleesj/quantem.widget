@@ -8815,18 +8815,23 @@ function Show4DSTEM() {
     themeColors, themedMenuProps, themedSelect, themedTypography, viColormap, viRoiMode, viRoiRadius,
     viRoiReduce, viScaleMode
   ]);
-  // View and the Dataset controls: one row under the image, no wider than it. While a scan streams the
-  // view stays on the scan arriving: the row is hidden in place, so nothing moves when a scan starts or ends.
-  const scanChoiceRows = controlsVisible && nFrames > 1 && (<Box data-show4dstem-scan-rows aria-hidden={streaming || undefined}
-        sx={streaming ? { visibility: "hidden", pointerEvents: "none" } : undefined}>
-        <Box sx={{ ...controlRow, columnGap: `${SPACING.XS}px`, rowGap: "2px", mt: `${SPACING.XS}px`, border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
+  // View and the Dataset controls: one row. While a scan streams the view stays on the scan arriving: the row is
+  // hidden in place, so nothing moves when a scan starts or ends. In a viewer scans stream into (it has stream
+  // sources, or a live phase stream) the row is under the title, above the pattern and the image, on one line, its
+  // room kept from the first scan on (11-18: under the image it was below the fold of the
+  // scanning GUI); elsewhere it is under the image, no wider than it.
+  const streamedViewer = liveStream || streamSourceIds.length > 0;
+  const scanChoiceHidden = streaming || nFrames <= 1;
+  const scanChoiceRows = controlsVisible && (nFrames > 1 || streamedViewer) && (<Box data-show4dstem-scan-rows aria-hidden={scanChoiceHidden || undefined}
+        sx={scanChoiceHidden ? { visibility: "hidden", pointerEvents: "none" } : undefined}>
+        <Box sx={{ ...controlRow, columnGap: `${SPACING.XS}px`, rowGap: "2px", ...(streamedViewer ? { mb: `${SPACING.XS}px`, flexWrap: "nowrap" } : { mt: `${SPACING.XS}px` }), border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
           <Typography sx={{ ...themedTypography.label, fontSize: 10, flexShrink: 0 }}>View</Typography>
           <Select
             value={viewMode}
             onChange={(event) => setViewMode(String(event.target.value))}
             size="small"
             inputProps={{ "aria-label": "Show4DSTEM view mode" }}
-            sx={{ ...themedSelect, minWidth: 72, fontSize: 10 }}
+            sx={{ ...themedSelect, minWidth: 72, fontSize: 10, flexShrink: 0 }}
             MenuProps={themedMenuProps}
           >
             <MenuItem value="single">Single</MenuItem>
@@ -8940,6 +8945,7 @@ function Show4DSTEM() {
       />
       {/* HEADER */}
       {titleHeading}
+      {streamedViewer && scanChoiceRows}
       {sizeGroups && sizeGroups.length > 1 && (
         <Box role="tablist" aria-label="Scan size" sx={{ display: "flex", flexWrap: "wrap", gap: "4px", mb: `${SPACING.SM}px` }}>
           {sizeGroups.map((label, index) => (
@@ -9536,7 +9542,7 @@ function Show4DSTEM() {
                   </Box>
                 </Box>
               </Box>
-              {scanChoiceRows}
+              {!streamedViewer && scanChoiceRows}
               {showDirectCalibrationPanel && (
                 <Box sx={{ mt: `${SPACING.XS}px`, width: "100%", maxWidth: viCanvasWidth, boxSizing: "border-box" }}>
                   <Button
