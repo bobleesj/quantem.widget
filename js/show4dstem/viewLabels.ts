@@ -3,6 +3,16 @@ export function shortScanName(name: string): string {
   return name.replace(/^series_(\d+)/, "$1");
 }
 
+/** True for a Live frame ("live_<n>"): one at a time, each replacing the last, never kept. */
+export function isLiveFrame(name: string | undefined): boolean {
+  return /^live_\d+$/.test(name ?? "");
+}
+
+/** The scans a viewer keeps: its scans less the Live frame, which is never kept. */
+export function keptScanCount(names: string[] | undefined, count: number): number {
+  return Math.max(0, count - (names ?? []).filter(isLiveFrame).length);
+}
+
 /** The scale bar and its label hold the image's bottom-right corner (CSS px). */
 export const SCALE_BAR_CORNER = { width: 150, height: 52 };
 

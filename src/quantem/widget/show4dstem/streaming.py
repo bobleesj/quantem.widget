@@ -1,5 +1,6 @@
 """Internal polling lifecycle for a viewer borrowing live acquisition data."""
 
+import re
 import threading
 import time
 import traceback
@@ -18,6 +19,18 @@ if TYPE_CHECKING:
 STREAM_FOLLOW_PAUSE_S = 1.5
 # Seconds before a failed live update is tried again (the receiver still runs; the next scan must show).
 STREAM_RETRY_S = 1.0
+
+
+def short_scan_name(name) -> str:
+    """A scan's name as the viewer prints it: its number ("41" for "series_41", "41_rot90" for "series_41_rot90");
+    any other name unchanged. The same rule as the page's shortScanName (js/show4dstem/viewLabels.ts)."""
+    return re.sub(r"^series_(\d+)", r"\1", str(name))
+
+
+def live_frame_number(name) -> str | None:
+    """The number of a Live frame (``live_<n>``: one at a time, each replacing the last, never kept), else None."""
+    match = re.fullmatch(r"live_(\d+)", str(name))
+    return match.group(1) if match else None
 
 
 def _shape_of(source) -> tuple:
@@ -250,7 +263,15 @@ class StreamFollower:
                     scan = current.metadata.get("series", shown)
                     # One short line that never wraps beside a control panel; the counts are in the stats bar.
                     done = " ✓" if current.received == current.total else ""
-                    viewer.title = f"Live · {scan} · {current.received:,}/{current.total:,}{done} · {shown} kept"
+                    counts = f"{current.received:,}/{current.total:,}{done}"
+                    frame = live_frame_number(scan)
+                    if frame is not None:
+                        # a Live frame replaces the one before and is never kept: no count of kept scans
+                        viewer.title = f"Live · frame {frame} · {counts}"
+                    else:
+                        kept = sum(live_frame_number(source.metadata.get("series", "")) is None
+                                   for source in sources[:shown])
+                        viewer.title = f"Live · {short_scan_name(scan)} · {counts} · {kept} kept"
                 else:
                     viewer.title = self.options.get("title") or getattr(self.recording, "title", None) or self.title
                 self.previous = progress

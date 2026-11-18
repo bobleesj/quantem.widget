@@ -1092,7 +1092,7 @@ def test_a_failed_update_does_not_stop_the_live_panel(monkeypatch):
             time.sleep(0.02)
         assert viewer._stream_thread.is_alive()
         assert viewer.n_frames == 3 and viewer.stream_error is None
-        assert "series_16" in viewer.title
+        assert "Live · 16 · " in viewer.title             # the short scan name, as the page prints it
     finally:
         viewer.close()
 
@@ -1126,5 +1126,34 @@ def test_a_replaced_newest_scan_shows_its_replacement_when_embedded(recording, e
         # the next Live frame replaces the one in view, as Spectra does
         viewer._replace_stream_sources(scans[:2], [scans[0], scans[2]])
         assert viewer.frame_labels[viewer.frame_idx] == ("live_2" if embedded else "a")
+    finally:
+        viewer.close()
+
+
+def test_short_scan_name_follows_the_page_rule():
+    import json
+    from pathlib import Path
+
+    from quantem.widget.show4dstem.streaming import short_scan_name
+
+    # the same examples the page's shortScanName is tested on (js/show4dstem/viewLabels.test.ts)
+    examples = json.loads((Path(__file__).parents[2] / "js/show4dstem/shortScanName.examples.json").read_text())
+    assert examples
+    for name, short in examples:
+        assert short_scan_name(name) == short
+
+
+def test_live_titles_name_the_scan_short_and_a_live_frame_by_number(recording):
+    go = LiveScan("series_4_rot0")
+    viewer = Show4DSTEM.stream(recording)
+    try:
+        recording.acquisitions.append(go)
+        viewer.refresh_stream()
+        assert viewer.title == "Live · 4_rot0 · 12/12 ✓ · 1 kept"
+        frame = LiveScan("live_7")
+        frame.received = 5
+        recording.acquisitions[:] = [go, frame]
+        viewer.refresh_stream()
+        assert viewer.title == "Live · frame 7 · 5/12"
     finally:
         viewer.close()

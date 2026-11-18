@@ -3,7 +3,7 @@ import { captureGpuCanvas } from "./captureGpuCanvas";
 import { createLatestFrameQueue } from "./latestFrameQueue";
 import { chosenFrameIndex, createScanChoice } from "./scanChoice";
 import { formatMean, formatStat } from "./statText";
-import { positionLabelAnchor, shortScanName, titleNamesScan } from "./viewLabels";
+import { isLiveFrame, keptScanCount, positionLabelAnchor, shortScanName, titleNamesScan } from "./viewLabels";
 import { createLiveImage, positionValues, type PositionsMessage } from "./liveImagePositions";
 import {
   CONTRAST_PERCENTILES, chosenPercentiles, contrastRangeChoice, handlePositions, percentilesLabel,
@@ -2669,6 +2669,8 @@ function Show4DSTEM() {
   // Printed by number ("41" for "series_41"); the scan's identity is `_stream_source_ids`, not its label.
   const [frameNames] = useModelState<string[]>("frame_labels");
   const frameLabels = React.useMemo(() => frameNames?.map(shortScanName), [frameNames]);
+  // A Live frame (live_<n>) replaces the one before and is never kept: the Dataset row counts kept scans only.
+  const keptFrames = keptScanCount(frameNames, nFrames);
   // When a stream ends the Dataset selection goes to the scan just taken (once it is among the kept
   // scans), so the image, the slider and the title name the scan the operator was watching.
   const streamedScanRef = React.useRef<string | null>(null);
@@ -8291,7 +8293,7 @@ function Show4DSTEM() {
       <span title={title || "4D-STEM Explorer"} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {title || "4D-STEM Explorer"}</span>
       <RenderPathBadge colors={themeColors} />
-      {nFrames > 1 && !streaming && !titleNamesScan(title, frameNames?.[frameIdx])
+      {nFrames > 1 && !streaming && !isLiveFrame(frameNames?.[frameIdx]) && !titleNamesScan(title, frameNames?.[frameIdx])
         && <span style={{ fontWeight: "normal", fontSize: 13, marginLeft: 8, opacity: 0.7 }}>({frameLabels && frameLabels.length > frameIdx ? frameLabels[frameIdx] : `${frameDimLabel} ${frameIdx + 1}/${nFrames}`})</span>}
       {panelChromeVisible && <InfoTooltip text={<Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
         <MetadataSection rows={[
@@ -8840,7 +8842,7 @@ function Show4DSTEM() {
   // hidden in place, so nothing moves when a scan starts or ends. Embedded in a host panel the row is under the
   // title, above the pattern and the image, on one line, its room kept from the first scan on (11-18: under the
   // image it was below the fold of the scanning GUI); elsewhere it is under the image, no wider than it.
-  const scanChoiceHidden = streaming || nFrames <= 1;
+  const scanChoiceHidden = streaming || keptFrames <= 1;
   const scanChoiceRows = controlsVisible && (nFrames > 1 || embedded) && (<Box data-show4dstem-scan-rows aria-hidden={scanChoiceHidden || undefined}
         sx={scanChoiceHidden ? { visibility: "hidden", pointerEvents: "none" } : undefined}>
         <Box sx={{ ...controlRow, columnGap: `${SPACING.XS}px`, rowGap: "2px", ...(embedded ? { mb: `${SPACING.XS}px`, flexWrap: "nowrap" } : { mt: `${SPACING.XS}px` }), border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
@@ -9129,7 +9131,7 @@ function Show4DSTEM() {
               <Typography sx={statsShownSx}>Std <Box component="span" sx={statsValueSx}>{formatStat(dpStats[3])}</Box></Typography>
               {/* The image buttons together on a line of their own, under the readings (one of them alone at the end of
                   the readings' line read as a stray label). */}
-              {controlsVisible && <Box sx={{ display: "flex", flexBasis: "100%", alignItems: "center", columnGap: "8px", flexWrap: "wrap" }}>
+              {controlsVisible && <Box sx={{ display: "flex", flexBasis: "100%", alignItems: "center", columnGap: embedded ? "8px" : "12px", flexWrap: "wrap" }}>
                 <Typography component="span" onClick={() => requestViPreset("bf")} sx={viSourceButtonSx("bf", activeViSource === "roi")}>BF</Typography>
                 <Typography component="span" onClick={() => requestViPreset("abf")} sx={viSourceButtonSx("abf")}>ABF</Typography>
                 <Typography component="span" onClick={() => requestViPreset("adf")} sx={viSourceButtonSx("adf")}>ADF</Typography>

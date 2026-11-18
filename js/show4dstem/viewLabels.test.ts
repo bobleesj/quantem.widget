@@ -1,7 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { SCALE_BAR_CORNER, positionLabelAnchor, shortScanName, titleNamesScan } from "./viewLabels";
+import { SCALE_BAR_CORNER, isLiveFrame, keptScanCount, positionLabelAnchor, shortScanName, titleNamesScan } from "./viewLabels";
+import shortScanNameExamples from "./shortScanName.examples.json";
 
 describe("viewer labels", () => {
+  it("prints scan names as the Python title does (shared examples)", () => {
+    for (const [name, short] of shortScanNameExamples) expect(shortScanName(name)).toBe(short);
+  });
+
+  it("counts a Live frame as no kept scan", () => {
+    expect(isLiveFrame("live_12")).toBe(true);
+    expect(isLiveFrame("series_12")).toBe(false);
+    expect(isLiveFrame("live_view")).toBe(false);
+    expect(keptScanCount(["live_3"], 1)).toBe(0);
+    expect(keptScanCount(["series_1", "series_2", "live_3"], 3)).toBe(2);
+    expect(keptScanCount(undefined, 2)).toBe(2);
+  });
+
   it("prints a scan by its number", () => {
     expect(shortScanName("series_41")).toBe("41");
     expect(shortScanName("series_41_rot90")).toBe("41_rot90");
