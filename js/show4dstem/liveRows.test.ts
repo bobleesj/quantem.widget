@@ -98,12 +98,22 @@ describe("the scan arriving", () => {
   it("is described without its pixels, and is the same while only rows arrive", () => {
     const frame = { scan: "a", rows: 8, cols: 4, total: 8, detRows: 2, detCols: 2, mode: "Direct", com_unit: "mrad" };
     const info = liveInfo(frame)!;
-    expect(info).toEqual({ scan: "a", total: 8, cols: 4, detRows: 2, detCols: 2, mode: "Direct", comUnit: "mrad" });
+    expect(info).toEqual({ scan: "a", total: 8, cols: 4, detRows: 2, detCols: 2, mode: "Direct", comUnit: "mrad", images: [] });
     expect(sameLiveInfo(info, liveInfo({ ...frame, rows: 3 }))).toBe(true);
     expect(sameLiveInfo(info, liveInfo({ ...frame, scan: "b" }))).toBe(false);
     expect(liveInfo({})).toBeNull();
     expect(sameLiveInfo(null, null)).toBe(true);
     expect(sameLiveInfo(info, null)).toBe(false);
+  });
+
+  it("advertises only known live COM and DPC products as they become available", () => {
+    const frame = { scan: "a", total: 8, cols: 4, detRows: 2, detCols: 2 };
+    const before = liveInfo(frame)!;
+    const preview = liveInfo({ ...frame, images: ["DPC", "COM_col", "COM_row", "DPC", "unknown"] })!;
+    expect(before.images).toEqual([]);
+    expect(preview.images).toEqual(["COM_row", "COM_col", "DPC"]);
+    expect(sameLiveInfo(before, preview)).toBe(false);
+    expect(liveShownImage("COM_col", "roi", name => preview.images.includes(name))).toBe("COM_col");
   });
 
   it("shows the chosen image when the scan sends it, else the one before, else the detector image", () => {

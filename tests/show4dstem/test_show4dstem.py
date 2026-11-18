@@ -993,6 +993,30 @@ def test_product_map_from_direct_phase_becomes_the_image(monkeypatch):
         widget.close()
 
 
+def test_live_com_and_dpc_are_selectable_before_their_full_maps_arrive():
+    widget = Show4DSTEM(_counts(3), device="cpu", precompute_virtual_images=False)
+    try:
+        widget.vi_source = "COM_row"
+        assert widget.vi_source == "roi"
+        labels = ("COM_row", "COM_col", "DPC")
+        widget.live_phase_preview = {"scan": "interrupted", "images": list(labels)}
+        widget.vi_source = "COM_row"
+        assert widget.vi_source == "COM_row"
+        widget.live_phase_preview = {}
+        assert widget.vi_source == "roi"
+        widget.live_phase_preview = {"scan": "current", "images": list(labels)}
+        for index, label in enumerate(labels):
+            widget.vi_source = label
+            assert widget.vi_source == label
+            widget.attach(label, np.full(SCAN, index, np.float32))
+        widget.live_phase_preview = {}
+        for index, label in enumerate(labels):
+            widget.vi_source = label
+            assert np.all(widget.virtual_image() == index)
+    finally:
+        widget.close()
+
+
 # ---------------------------------------------------------------------------
 # Files read densely, without quantem.gpu
 # ---------------------------------------------------------------------------

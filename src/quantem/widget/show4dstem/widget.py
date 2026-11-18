@@ -82,7 +82,7 @@ from quantem.widget.utils.ui import (
 
 BRIGHT_FIELD_RADIUS_FRACTION = 0.125  # bright-field radius as a fraction of the detector side before fitting
 DEFAULT_VI_ROI_RATIO = 0.15  # scan ROI radius as a fraction of the scan side
-PRODUCT_LABELS = ("DPC_row", "DPC_col", "Direct")
+PRODUCT_LABELS = ("DPC_row", "DPC_col", "Direct", "COM_row", "COM_col", "DPC")
 # the calibration a 4D acquisition carries, under the .qem format's flat names
 # direct_phase()'s downloadable record; ShowPtycho's calibration.json has another shape and schema
 DIRECT_CALIBRATION_SCHEMA = "quantem.show4dstem-direct-calibration/5"
@@ -1216,7 +1216,12 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         """While a scan arrives (``live_phase_preview`` names it) the page draws it from its rows and positions, so
         refresh() does not send the whole image: at 2048 x 2048 that was 17 MB four times a second, 70 MB/s the page
         decoded for nothing (11-17). When the scan is no longer drawn live, its whole image goes once."""
-        if change["old"] and not change["new"] and self._data is not None and not self._multiple_view_active():
+        if not change["old"] or change["new"]:
+            return
+        if (self.vi_source in (change["old"].get("images") or ())
+                and self.vi_source not in self._vi_product_maps):
+            self.vi_source = "roi"  # An interrupted scan may never attach the chosen live image.
+        elif self._data is not None and not self._multiple_view_active():
             self._compute_virtual_image_from_roi()
 
     @classmethod
@@ -1927,7 +1932,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
 
     def attach(self, label: str, image, *, frame=0) -> None:
         """Show an image made from one scan, such as its direct ptychography phase, as that scan's ``label`` image
-        beside the detector images (``"Direct"``, ``"DPC_row"`` or ``"DPC_col"``; choose it as the image source).
+        beside the detector images. Choose the attached label as the image source. Centre-of-mass and
+        integrated DPC maps use ``"COM_row"``, ``"COM_col"`` and ``"DPC"``.
 
         ``frame`` is the scan's index, its label, or the scan (dataset) itself, which names it when labels repeat.
         In a streaming viewer the image stays with its scan as scans arrive and leave; a scan without one shows that
@@ -2052,7 +2058,10 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     def _on_vi_source_change(self, change=None) -> None:
         """React to an image-source switch: fall back to the ROI image when that product map does not exist, then repaint."""
         source = self.vi_source
-        if source != "roi" and source not in self._vi_product_maps and not (self.live_phase_stream and source == "Direct"):
+        live = self.live_phase_preview
+        available_live = source in PRODUCT_LABELS and source in (live.get("images") or ())
+        if (source != "roi" and source not in self._vi_product_maps and not available_live
+                and not (self.live_phase_stream and source == "Direct")):
             source = "roi"
         if source != self.vi_source:
             self.vi_source = source  # re-enters this observer with a valid source
