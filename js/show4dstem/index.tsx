@@ -6455,8 +6455,8 @@ function Show4DSTEM() {
   drawLiveImageRef.current = streaming && !compareMode ? () => drawViOffscreen(true) : null;
 
   // Compute FFT (expensive and async: only re-run on data/GPU changes)
-  const fftRealRef = React.useRef<Float32Array | null>(null);
-  const fftImagRef = React.useRef<Float32Array | null>(null);
+  const fftSpectrumRef = React.useRef<{ real: Float32Array; imag: Float32Array;
+    width: number; height: number; pixelSize: number; hasGaps: boolean } | null>(null);
   const fftRunSeqRef = React.useRef(0);
   const [fftVersion, setFftVersion] = React.useState(0);
 
@@ -6467,6 +6467,7 @@ function Show4DSTEM() {
     let width = shapeCols;
     let height = shapeRows;
     let sourceData = rawVirtualImageRef.current;
+    if (sourceData.length !== width * height) return;
     let origCropW = 0, origCropH = 0;
 
     // ROI FFT: crop virtual image to VI ROI region and pre-pad to power-of-2.
@@ -6511,10 +6512,10 @@ function Show4DSTEM() {
     }
 
     const fftW = width, fftH = height;
-    const commitFft = (real: Float32Array, imag: Float32Array) => {
+    const commitFft = (real: Float32Array, imag: Float32Array, hasGaps: boolean) => {
       if (cancelled || runSeq !== fftRunSeqRef.current) return;
-      fftRealRef.current = real;
-      fftImagRef.current = imag;
+      if (real.length !== fftW * fftH || imag.length !== real.length) return;
+      fftSpectrumRef.current = { real, imag, width: fftW, height: fftH, pixelSize, hasGaps };
       if (origCropW > 0) {
         setFftCropDims({ cropWidth: origCropW, cropHeight: origCropH, fftWidth: fftW, fftHeight: fftH });
       } else if (fftW !== shapeCols || fftH !== shapeRows) {
@@ -6527,18 +6528,26 @@ function Show4DSTEM() {
     // The worker shifts its spectrum itself; the WebGPU spectrum is shifted here.
     const transform = async () => {
       const real = sourceData.slice();
+      let hasGaps = false;
+      // A sparse scan masks its unvisited pixels in the viewer. Zero them only for the FFT.
+      for (let index = 0; index < real.length; index++) {
+        if (!Number.isFinite(real[index])) {
+          real[index] = 0;
+          hasGaps = true;
+        }
+      }
       const imag = new Float32Array(real.length);
       const gpuFft = gpuReady ? gpuFFTRef.current : null;
       if (!gpuFft) {
         const result = await fft2dAsync(real, imag, fftW, fftH, false);
-        commitFft(result.real, result.imag);
+        commitFft(result.real, result.imag, hasGaps);
         return;
       }
       const spectrum = await gpuFft.fft2D(real, imag, fftW, fftH, false);
       if (cancelled || runSeq !== fftRunSeqRef.current) return;
       fftshift(spectrum.real, fftW, fftH);
       fftshift(spectrum.imag, fftW, fftH);
-      commitFft(spectrum.real, spectrum.imag);
+      commitFft(spectrum.real, spectrum.imag, hasGaps);
     };
     // A failed transform (a lost device) keeps the last spectrum on screen.
     const timer = window.setTimeout(() => {
@@ -6548,17 +6557,14 @@ function Show4DSTEM() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [displayedVirtualImageBytes, shapeRows, shapeCols, gpuReady, showFft, roiFftActive, viRoiMode, viRoiCenterRow, viRoiCenterCol, localViRoiCenterRow, localViRoiCenterCol, viRoiRadius, viRoiWidth, viRoiHeight, fftWindow]);
+  }, [displayedVirtualImageBytes, shapeRows, shapeCols, pixelSize, gpuReady, showFft, roiFftActive, viRoiMode, viRoiCenterRow, viRoiCenterCol, localViRoiCenterRow, localViRoiCenterCol, viRoiRadius, viRoiWidth, viRoiHeight, fftWindow]);
 
   // Expensive: FFT magnitude + histogram + colormap → cached offscreen canvas
   React.useEffect(() => {
-    if (!fftRealRef.current || !fftImagRef.current) return;
-    if (!showFft) return;
-
-    const width = fftCropDims?.fftWidth ?? shapeCols;
-    const height = fftCropDims?.fftHeight ?? shapeRows;
-    const real = fftRealRef.current;
-    const imag = fftImagRef.current;
+    const spectrum = fftSpectrumRef.current;
+    if (!showFft || !spectrum) return;
+    // Keep the last spectrum at its own dimensions while a differently shaped scan starts.
+    const { width, height, real, imag } = spectrum;
     const lut = COLORMAPS[fftColormap] || COLORMAPS.inferno;
 
     // Compute magnitude with scale mode
@@ -6605,7 +6611,7 @@ function Show4DSTEM() {
     applyColormap(magnitude, imgData.data, lut, vmin, vmax);
     offCtx.putImageData(imgData, 0, 0);
     setFftOffscreenVersion(version => version + 1);
-  }, [showFft, fftVersion, fftScaleMode, fftAuto, fftVminPct, fftVmaxPct, fftColormap, shapeRows, shapeCols, fftCropDims]);
+  }, [showFft, fftVersion, fftScaleMode, fftAuto, fftVminPct, fftVmaxPct, fftColormap]);
 
   // The docked canvas is recreated after returning from the inset. Repaint it from the cached spectrum.
   React.useLayoutEffect(() => {
@@ -6640,9 +6646,8 @@ function Show4DSTEM() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     // D-spacing crosshair marker
-    if (fftClickInfo && showFft) {
-      const fftW = fftCropDims?.fftWidth ?? shapeCols;
-      const fftH = fftCropDims?.fftHeight ?? shapeRows;
+    if (fftClickInfo && showFft && fftSpectrumRef.current) {
+      const { width: fftW, height: fftH } = fftSpectrumRef.current;
       ctx.save();
       // Forward mapping: image col/row → canvas x/y (matches stretched drawImage).
       const screenX = fftPanX + fftZoom * (fftClickInfo.col * canvas.width / fftW);
@@ -6675,7 +6680,7 @@ function Show4DSTEM() {
       }
       ctx.restore();
     }
-  }, [fftDocked, fftZoom, fftPanX, fftPanY, showFft, fftClickInfo, scanUnit, shapeCols, shapeRows, fftCropDims]);
+  }, [fftDocked, fftZoom, fftPanX, fftPanY, showFft, fftClickInfo, scanUnit, fftVersion, shapeCols, shapeRows]);
 
   // Clear FFT click info when virtual image changes (scan position, VI ROI, etc.)
   React.useEffect(() => {
@@ -7819,8 +7824,9 @@ function Show4DSTEM() {
     const scaleY = canvas.height / rect.height;
     const canvasX = (event.clientX - rect.left) * scaleX;
     const canvasY = (event.clientY - rect.top) * scaleY;
-    const fftW = fftCropDims?.fftWidth ?? shapeCols;
-    const fftH = fftCropDims?.fftHeight ?? shapeRows;
+    const spectrum = fftSpectrumRef.current;
+    if (!spectrum) return;
+    const { width: fftW, height: fftH } = spectrum;
     // Reverse the render transform: canvas coords -> image coords.
     // Render: translate(panX, panY); scale(zoom); drawImage(offscreen, 0,0,fftW,fftH, 0,0,canvasW,canvasH)
     // So: canvasX = panX + zoom * (imgCol * canvasW / fftW)  →  imgCol = (canvasX - panX) / zoom * fftW / canvasW
@@ -7839,7 +7845,8 @@ function Show4DSTEM() {
       imgCol = snapped.col;
       imgRow = snapped.row;
     }
-    const readout = fftClickReadout(imgRow, imgCol, fftH, fftW, pixelSize);  // null on the DC center
+    if (fftSpectrumRef.current !== spectrum) return;
+    const readout = fftClickReadout(imgRow, imgCol, fftH, fftW, spectrum.pixelSize);  // null on the DC center
     setFftClickInfo(readout && { row: imgRow, col: imgCol, ...readout });
   };
   const handleFftMouseLeave = () => { fftClickStartRef.current = null; setIsDraggingFFT(false); setFftDragStart(null); };
@@ -9792,7 +9799,9 @@ function Show4DSTEM() {
 
             {/* FFT Canvas */}
             <Box sx={{ ...container.imageBox, width: "100%", maxWidth: viCanvasWidth, aspectRatio: `${shapeCols} / ${shapeRows}`, height: "auto", touchAction: "none", ...mobileImageBoxSx }}>
-              <canvas data-quantem-scientific-output="show4dstem-fft" ref={fftCanvasRef} width={shapeCols} height={shapeRows} style={{ position: "absolute", width: "100%", height: "100%", imageRendering: "pixelated" }} />
+              <canvas data-quantem-scientific-output="show4dstem-fft"
+                title={fftSpectrumRef.current?.hasGaps ? "Unmeasured pixels are zero for the FFT." : undefined}
+                ref={fftCanvasRef} width={shapeCols} height={shapeRows} style={{ position: "absolute", width: "100%", height: "100%", imageRendering: "pixelated" }} />
               <canvas
                 ref={fftOverlayRef} width={shapeCols} height={shapeRows}
                 onMouseDown={handleFftMouseDown} onMouseMove={handleFftMouseMove}
