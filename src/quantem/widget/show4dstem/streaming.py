@@ -62,7 +62,10 @@ def _size_label(shape, count: int) -> str:
     """A size group's name: scan rows x columns x detector (one number when square), and how many scans."""
     rows, cols, det_rows, det_cols = shape
     detector = f"{det_rows}" if det_rows == det_cols else f"{det_rows}×{det_cols}"
-    return f"{rows}×{cols}×{detector} · {count} scan{'s' if count != 1 else ''}"
+    scans = f"{count} scan{'s' if count != 1 else ''}"
+    if rows == 1:   # a scan kept as visits (any path): one pattern per visit, not a 1-row image
+        return f"{cols:,} visits ×{detector} · {scans}"
+    return f"{rows}×{cols}×{detector} · {scans}"
 
 
 class StreamFollower:
