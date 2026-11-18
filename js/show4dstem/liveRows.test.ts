@@ -16,6 +16,10 @@ describe("live image rows", () => {
     expect(liveImageAvailable(image, next)).toBe(true);
     expect(liveImageAvailable(image, { ...next, scan: "series_1" })).toBe(false);
     expect(sameLiveInfo(next, { ...next, frozen: true })).toBe(false);
+    // the rotation DPC was integrated with travels with the frame (2026-11-18): shown beside Flip
+    expect(liveInfo({ scan: "live_2", total: 3, cols: 2, detRows: 4, detCols: 4, dpc_rotation_deg: 3.9 })!.dpcRotationDeg).toBe(3.9);
+    expect(next.dpcRotationDeg).toBeNull();
+    expect(sameLiveInfo(next, { ...next, dpcRotationDeg: 183.9 })).toBe(false);
     live.write(...rows("live_2", name, 0, [7, 8]));
     expect(Array.from(image.data)).toEqual([7, 8, 3, 4, 5, 6]);
   });

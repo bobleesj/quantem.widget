@@ -27,7 +27,7 @@ export type LiveRowImage = {
 export type LiveFrame = {
   rows?: number; cols?: number; total?: number; detRows?: number; detCols?: number; mode?: string;
   upsample?: number; scan?: string; com_unit?: string; images?: string[];
-  diffraction_only?: boolean; source_id?: string; frozen?: boolean;
+  diffraction_only?: boolean; source_id?: string; frozen?: boolean; dpc_rotation_deg?: number;
   phase?: DataView; dp?: DataView; roi?: DataView; com_row?: DataView; com_col?: DataView; dpc?: DataView;
 };
 
@@ -35,6 +35,8 @@ export type LiveFrame = {
 export type LiveInfo = {
   scan: string; total: number; cols: number; detRows: number; detCols: number; mode: string; comUnit: string; images: string[];
   diffractionOnly: boolean; sourceId: string; frozen: boolean;
+  /** The rotation DPC was integrated with (degrees), from the receiver; null when not known. */
+  dpcRotationDeg: number | null;
 };
 
 /** The frame's description without its pixels; null when no scan is arriving. */
@@ -45,7 +47,9 @@ export function liveInfo(frame: LiveFrame | undefined | null): LiveInfo | null {
   return { scan: String(frame.scan ?? ""), total: Math.round(frame.total), cols: Math.round(frame.cols),
            detRows: Math.round(frame.detRows), detCols: Math.round(frame.detCols), mode: String(frame.mode ?? ""),
            comUnit: String(frame.com_unit ?? ""), images, diffractionOnly: Boolean(frame.diffraction_only),
-           sourceId: frame.source_id ?? "", frozen: Boolean(frame.frozen) };
+           sourceId: frame.source_id ?? "", frozen: Boolean(frame.frozen),
+           dpcRotationDeg: typeof frame.dpc_rotation_deg === "number" && Number.isFinite(frame.dpc_rotation_deg)
+             ? frame.dpc_rotation_deg : null };
 }
 
 export function sameLiveInfo(a: LiveInfo | null, b: LiveInfo | null): boolean {
@@ -53,6 +57,7 @@ export function sameLiveInfo(a: LiveInfo | null, b: LiveInfo | null): boolean {
   return a.scan === b.scan && a.total === b.total && a.cols === b.cols && a.detRows === b.detRows
     && a.detCols === b.detCols && a.mode === b.mode && a.comUnit === b.comUnit
     && a.diffractionOnly === b.diffractionOnly && a.sourceId === b.sourceId && a.frozen === b.frozen
+    && a.dpcRotationDeg === b.dpcRotationDeg
     && a.images.length === b.images.length && a.images.every((name, index) => name === b.images[index]);
 }
 

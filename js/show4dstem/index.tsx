@@ -4988,6 +4988,13 @@ function Show4DSTEM() {
     setFlipBySource(previous => ({ ...previous, [activeViSource]: on })), [activeViSource]);
   const canFlipPhaseContrast = (activeViSource === "Direct" || activeViSource === "DPC" || activeViSource === "iDPC")
     && !compareMode;
+  const dpcSource = activeViSource === "DPC" || activeViSource === "iDPC";
+  const [dpcRotationDeg, setDpcRotationDeg] = React.useState<number | null>(null);
+  const previewRotation = preview?.dpcRotationDeg;
+  React.useEffect(() => {
+    if (typeof previewRotation === "number" && Number.isFinite(previewRotation)) setDpcRotationDeg(previewRotation);
+  }, [previewRotation]);
+  const shownDpcRotation = dpcRotationDeg == null ? null : (dpcRotationDeg + (flipPhaseContrast ? 180 : 0)) % 360;
   const reversePhaseLut = canFlipPhaseContrast && flipPhaseContrast;
   const viDisplayLut = React.useMemo(() => {
     const lut = COLORMAPS[viColormap] || COLORMAPS.inferno;
@@ -8861,8 +8868,13 @@ function Show4DSTEM() {
       <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Flip</Typography>
       <Switch checked={flipPhaseContrast} onChange={(event) => setFlipPhaseContrast(event.target.checked)}
         size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Flip phase contrast" } }} />
+      {dpcSource && shownDpcRotation != null && (
+        <Typography sx={{ ...themedTypography.label, fontSize: 10, fontVariantNumeric: "tabular-nums" }}
+          title="The scan-to-detector rotation DPC is integrated with: the calibration's, else the least-curl estimate (known modulo 180°). Flip shows the other branch.">
+          rot {shownDpcRotation.toFixed(1)}°</Typography>
+      )}
     </Box>
-  ), [activeViSource, canFlipPhaseContrast, flipPhaseContrast, setFlipPhaseContrast, themedTypography]);
+  ), [activeViSource, canFlipPhaseContrast, dpcSource, flipPhaseContrast, setFlipPhaseContrast, shownDpcRotation, themedTypography]);
   const viToolbarControls = React.useMemo(() => (
     controlsVisible && <Stack
       direction="row"
@@ -8953,7 +8965,6 @@ function Show4DSTEM() {
             setIsHoveringViProfileLine(false);
           }
         }} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Image profile" } }} />
-        {flipPhaseControl}
         <Button size="small" sx={compactButton} disabled={viZoom === 1 && viPanX === 0 && viPanY === 0} onClick={() => { setViZoom(1); setViPanX(0); setViPanY(0); }}>Reset</Button>
         <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={async () => {
           let canvas: HTMLCanvasElement | null = null;
@@ -9338,6 +9349,9 @@ function Show4DSTEM() {
                   {viSourceLabel(source)}
                 </Typography>
               ))}
+              {/* under the image buttons, beside DPC (2026-11-18, the operator): Flip and the rotation it gives */}
+              {flipPhaseControl && <Box sx={{ flexBasis: "100%", display: "flex", alignItems: "center", gap: "6px" }}>
+                {flipPhaseControl}</Box>}
             </Box>
           )}
 
@@ -9748,11 +9762,6 @@ function Show4DSTEM() {
                     </Subscribe>
                   </Box>
                 </Box>
-                {flipPhaseControl && mobileTightLayout && mobileViOptionsOpen && (
-                  <Box sx={{ display: "none", "@media (max-width: 700px)": { display: "flex", mt: "4px" } }}>
-                    {flipPhaseControl}
-                  </Box>
-                )}
               </Box>
               {!embedded && scanChoiceRows}
               {showDirectCalibrationPanel && (
