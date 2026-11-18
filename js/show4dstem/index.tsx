@@ -35,7 +35,7 @@ import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import { useTheme, WIDGET_UI_FONT as SHOW4DSTEM_UI_FONT, WIDGET_TYPOGRAPHY as typography } from "../theme";
 import { SPACING, controlRow, compactButton, switchStyles, upwardMenuProps, controlPanel, reorderBadgeSx, panelStarButtonSx } from "../controlStyles";
-import { COLORMAPS, COLORMAP_NAMES, GPUColormapEngine, applyColormap } from "../display/colormaps";
+import { COLORMAPS, COLORMAP_NAMES, GPUColormapEngine, applyColormap, reverseLut } from "../display/colormaps";
 import { DisplayFFT, getDisplayFFT, fft2dAsync, fftshift, computeMagnitude, autoEnhanceFFT, nextPow2, applyHannWindow2D, fftClickReadout, zeroPadTopLeft } from "../display/fft";
 import { cropMaskedRegion, findFFTPeakBrowser, sampleLineProfileBrowser } from "../display/geometry";
 import {
@@ -4859,6 +4859,14 @@ function Show4DSTEM() {
   const activeViSource = React.useMemo(() => {
     return viSource === "roi" || viProductSourceOptions.includes(viSource) ? viSource : "roi";
   }, [viProductSourceOptions, viSource]);
+  const [flipPhaseContrast, setFlipPhaseContrast] = React.useState(false);
+  const canFlipPhaseContrast = activeViSource === "Direct" && !compareMode;
+  const reversePhaseLut = canFlipPhaseContrast && flipPhaseContrast;
+  const viDisplayLut = React.useMemo(() => {
+    const lut = COLORMAPS[viColormap] || COLORMAPS.inferno;
+    return reversePhaseLut ? reverseLut(lut) : lut;
+  }, [viColormap, reversePhaseLut]);
+  const viDisplayLutKey = reversePhaseLut ? `${viColormap}:reversed` : viColormap;
   const hasViProductSources = viProductSourceOptions.length > 0;
   const roiVirtualDetectorActive = activeViSource === "roi";
   // A browser-computed image shows until the trait it was published over changes, so a newer
@@ -6156,7 +6164,7 @@ function Show4DSTEM() {
     const partlySummed = summed > 0 && summed < filtered.length;
     const colouredRows = partlySummed ? Math.ceil(summed / width) : height;
 
-    const paintKey = [width, height, viColormap, viScaleMode, traitViVmin, traitViVmax, viPercentiles?.join("-"),
+    const paintKey = [width, height, viDisplayLutKey, viScaleMode, traitViVmin, traitViVmax, viPercentiles?.join("-"),
       viVminPct, viVmaxPct, activeViSource, liveShown, liveImagePositionsShown ? liveImagePositions.generation() : ""].join("|");
     const before = viLivePaintRef.current?.key === paintKey && viLivePaintRef.current.array === filtered
       ? viLivePaintRef.current : null;
@@ -6228,7 +6236,6 @@ function Show4DSTEM() {
       viLivePaintRef.current = streaming ? { key: paintKey, array: filtered, vmin, vmax, at: now } : null;
     }
 
-    const lut = COLORMAPS[viColormap] || COLORMAPS.inferno;
     let offscreen = viOffscreenRef.current;
     if (!offscreen) {
       offscreen = document.createElement("canvas");
@@ -6263,7 +6270,7 @@ function Show4DSTEM() {
       const values = filtered.subarray(first * width, last * width);
       const whole = scaledWhole && first === 0 && last === height ? scaledWhole : null;
       applyColormap(whole ?? (log ? displayLogScale(values) : values), imageData.data.subarray(first * width * 4, last * width * 4),
-        lut, vmin, vmax);
+        viDisplayLut, vmin, vmax);
       offCtx.putImageData(imageData, 0, 0, 0, first, width, last - first);
     }
     if (fromFrame) paintViCanvas(); else setViOffscreenVersion(version => version + 1);
@@ -6271,7 +6278,7 @@ function Show4DSTEM() {
   // `liveDrawn` and not the image in state: while a scan arrives the state's view changes with every tick, and
   // the rows are drawn from their animation frame.
   React.useEffect(() => drawViOffscreen(false),
-    [activeViSource, streaming ? liveDrawn : displayedVirtualImageBytes, liveShown, compareMode, shapeRows, shapeCols, viDetail, viGpuVersion, viColormap, viVminPct, viVmaxPct, viScaleMode, traitViVmin, traitViVmax, viPercentiles]);
+    [activeViSource, streaming ? liveDrawn : displayedVirtualImageBytes, liveShown, compareMode, shapeRows, shapeCols, viDetail, viGpuVersion, viDisplayLut, viDisplayLutKey, viVminPct, viVmaxPct, viScaleMode, traitViVmin, traitViVmax, viPercentiles]);
 
   // Present resident reductions directly, including while the pointer is held.
   // Offscreen bitmap snapshots can be black and can lag the latest detector. The
@@ -6342,8 +6349,7 @@ function Show4DSTEM() {
       vmax = traitViVmax;
     }
 
-    const lut = COLORMAPS[viColormap] || COLORMAPS.inferno;
-    engine.uploadLUT(viColormap, lut);
+    engine.uploadLUT(viDisplayLutKey, viDisplayLut);
     const canvas = virtualGpuCanvasRef.current;
     if (!canvas) return;
     let target = virtualGpuContextRef.current;
@@ -6383,7 +6389,8 @@ function Show4DSTEM() {
     shapeRows,
     shapeCols,
     viGpuVersion,
-    viColormap,
+    viDisplayLut,
+    viDisplayLutKey,
     viVminPct,
     viVmaxPct,
     viScaleMode,
@@ -8679,13 +8686,21 @@ function Show4DSTEM() {
     setRoiRadius, setRoiRadiusInner, setShowDpColorbar, showDpColorbar, maskedPixels, showMaskedPixels, setShowMaskedPixels, themeColors, themedMenuProps,
     themedSelect, themedTypography
   ]);
+  const flipPhaseControl = React.useMemo(() => canFlipPhaseContrast && (
+    <Box component="label" title="Invert the displayed phase contrast" sx={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+      <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Flip</Typography>
+      <Switch checked={flipPhaseContrast} onChange={(event) => setFlipPhaseContrast(event.target.checked)}
+        size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Flip phase contrast" } }} />
+    </Box>
+  ), [canFlipPhaseContrast, flipPhaseContrast, themedTypography]);
   const viToolbarControls = React.useMemo(() => (
     controlsVisible && <Stack
       direction="row"
       spacing={`${SPACING.SM}px`}
       alignItems="center"
+      useFlexGap
       justifyContent="flex-end"
-      sx={{ flexWrap: "nowrap", flexShrink: 0, whiteSpace: "nowrap" }}
+      sx={{ flexWrap: canFlipPhaseContrast ? "wrap" : "nowrap", flexShrink: canFlipPhaseContrast ? 1 : 0, whiteSpace: "nowrap" }}
     >
       {compareMode && <>
         <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Cols</Typography>
@@ -8768,6 +8783,7 @@ function Show4DSTEM() {
             setIsHoveringViProfileLine(false);
           }
         }} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Image profile" } }} />
+        {flipPhaseControl}
         <Button size="small" sx={compactButton} disabled={viZoom === 1 && viPanX === 0 && viPanY === 0} onClick={() => { setViZoom(1); setViPanX(0); setViPanY(0); }}>Reset</Button>
         <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={async () => {
           let canvas: HTMLCanvasElement | null = null;
@@ -8785,8 +8801,8 @@ function Show4DSTEM() {
       </>}
     </Stack>
   ), [
-    compareCols, compareHiddenCount, compareHiddenMenuAnchor, compareHiddenPanelItems, compareMode,
-    controlsVisible, getActiveViCanvas, setCompareCols, setCompareHiddenMenuAnchor, setCompareHiddenPanels,
+    canFlipPhaseContrast, compareCols, compareHiddenCount, compareHiddenMenuAnchor, compareHiddenPanelItems, compareMode,
+    controlsVisible, flipPhaseControl, getActiveViCanvas, setCompareCols, setCompareHiddenMenuAnchor, setCompareHiddenPanels,
     setHoveredViProfileEndpoint, setIsHoveringViProfileLine, setShowFft, setViPanX, setViPanY,
     setViProfileActive, setViProfilePoints, setViZoom, showCompareFrame, showFft, themeColors,
     themedMenuProps, themedSelect, themedTypography, title, viPanX, viPanY, viProfileActive, viZoom
@@ -9562,6 +9578,11 @@ function Show4DSTEM() {
                     </Subscribe>
                   </Box>
                 </Box>
+                {flipPhaseControl && mobileTightLayout && mobileViOptionsOpen && (
+                  <Box sx={{ display: "none", "@media (max-width: 700px)": { display: "flex", mt: "4px" } }}>
+                    {flipPhaseControl}
+                  </Box>
+                )}
               </Box>
               {!embedded && scanChoiceRows}
               {showDirectCalibrationPanel && (

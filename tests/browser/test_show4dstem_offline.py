@@ -114,6 +114,12 @@ def pages(serve, browser_out) -> dict[str, str]:
     narrow = Show4DSTEM(single)
     narrow.panel_width_px = 300
     exports["narrow"] = narrow
+    direct = Show4DSTEM(single)
+    phase = np.broadcast_to(np.linspace(-1, 1, 32, dtype=np.float32), (32, 32)).copy()
+    direct._set_vi_product_map("Direct", phase)
+    direct.vi_source = "Direct"
+    direct.vi_colormap = "gray"
+    exports["direct"] = direct
     url = serve(root)
     for name, viewer in exports.items():
         viewer.export_html(root / name / f"{name}.html", dtype="uint16")
@@ -350,3 +356,20 @@ def test_space_plays_the_frame_series(pages, open_page, hardware_adapter):
     page.keyboard.press(" ")
     page.wait_for_timeout(1500)
     assert counter.inner_text() != "1/3"
+
+
+def test_flip_changes_only_the_direct_phase_contrast(pages, open_page, hardware_adapter):
+    page = open_export(open_page, hardware_adapter, pages["direct"], ready=VI)
+    toggle = page.get_by_role("checkbox", name="Flip phase contrast")
+    canvas = page.locator(VI).first
+    before = canvas.evaluate("(node) => node.toDataURL()")
+    original = shot(page, VI)
+    assert original[:, -20:-10].mean() > original[:, 10:20].mean()
+    toggle.check()
+    page.wait_for_function("([selector, before]) => document.querySelector(selector).toDataURL() !== before",
+                           arg=[VI, before])
+    flipped = shot(page, VI)
+    assert flipped[:, -20:-10].mean() < flipped[:, 10:20].mean()
+    toggle.uncheck()
+    page.wait_for_function("([selector, before]) => document.querySelector(selector).toDataURL() === before",
+                           arg=[VI, before])

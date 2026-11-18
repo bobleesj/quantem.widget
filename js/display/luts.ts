@@ -26,3 +26,16 @@ function createColormapLUT(points: number[][]): Uint8Array {
 export const COLORMAPS: Record<string, Uint8Array> = Object.fromEntries(
   Object.entries(COLORMAP_POINTS).map(([name, points]) => [name, createColormapLUT(points)])
 );
+
+export function reverseLut(lut: Uint8Array): Uint8Array {
+  const out = new Uint8Array(lut.length);
+  const entryCount = lut.length / 3;
+  for (let i = 0; i < entryCount; i++) {
+    const src = (entryCount - 1 - i) * 3;
+    const dst = i * 3;
+    out[dst + 0] = lut[src + 0];
+    out[dst + 1] = lut[src + 1];
+    out[dst + 2] = lut[src + 2];
+  }
+  return out;
+}
