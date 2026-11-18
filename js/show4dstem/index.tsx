@@ -6580,14 +6580,14 @@ function Show4DSTEM() {
     setFftOffscreenVersion(version => version + 1);
   }, [showFft, fftVersion, fftScaleMode, fftAuto, fftVminPct, fftVmaxPct, fftColormap, shapeRows, shapeCols, fftCropDims]);
 
-  // Cheap: FFT zoom/pan redraw is one drawImage from the cached offscreen canvas
+  // The docked canvas is recreated after returning from the inset. Repaint it from the cached spectrum.
   React.useLayoutEffect(() => {
     if (!fftCanvasRef.current) return;
     const canvas = fftCanvasRef.current;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const offscreen = fftOffscreenRef.current;
-    if (!offscreen || !showFft) { ctx.clearRect(0, 0, canvas.width, canvas.height); return; }
+    if (!offscreen) { ctx.clearRect(0, 0, canvas.width, canvas.height); return; }
     const fftW = offscreen.width;
     const fftH = offscreen.height;
     const canvasW = canvas.width;
@@ -6602,7 +6602,7 @@ function Show4DSTEM() {
     ctx.scale(fftZoom, fftZoom);
     ctx.drawImage(offscreen, 0, 0, fftW, fftH, 0, 0, canvasW, canvasH);
     ctx.restore();
-  }, [fftOffscreenVersion, fftZoom, fftPanX, fftPanY, showFft]);
+  }, [fftDocked, fftOffscreenVersion, fftZoom, fftPanX, fftPanY, shapeCols, shapeRows]);
 
   // Render FFT overlay with d-spacing crosshair marker
   React.useEffect(() => {
@@ -6648,7 +6648,7 @@ function Show4DSTEM() {
       }
       ctx.restore();
     }
-  }, [fftZoom, fftPanX, fftPanY, showFft, fftClickInfo, scanUnit, shapeCols, shapeRows, fftCropDims]);
+  }, [fftDocked, fftZoom, fftPanX, fftPanY, showFft, fftClickInfo, scanUnit, shapeCols, shapeRows, fftCropDims]);
 
   // Clear FFT click info when virtual image changes (scan position, VI ROI, etc.)
   React.useEffect(() => {

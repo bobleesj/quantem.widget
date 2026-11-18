@@ -19,6 +19,7 @@ pytestmark = pytest.mark.browser
 DP = 'canvas[data-quantem-scientific-output="show4dstem-diffraction-pattern"]'
 VI = 'canvas[data-quantem-scientific-output="show4dstem-virtual-image"]'
 FFT = 'canvas[data-quantem-scientific-output="show4dstem-fft"]'
+FFT_INSET = 'canvas[data-quantem-scientific-output="show4dstem-fft-inset"]'
 TILE = '[aria-label="Show4DSTEM multiple panel 1"]'
 # Every string drawn on a canvas, so labels painted into overlays can be read back.
 RECORD_CANVAS_TEXT = """
@@ -261,8 +262,24 @@ def test_rect_point_and_square_detectors_change_the_virtual_image(pages, open_pa
     assert min(differences["rect"], differences["point"], differences["square"]) > 20 and differences["circle"] <= 1, differences
 
 
+def test_docking_fft_repaints_the_cached_spectrum(pages, open_page, hardware_adapter):
+    page = open_export(open_page, hardware_adapter, pages["single"], ready=FFT_INSET)
+    painted_spectrum = """canvas => {
+        const {width, height} = canvas;
+        const pixels = canvas.getContext('2d').getImageData(0, 0, width, height).data;
+        return pixels.some((value, index) => index % 4 !== 3 && value > 0);
+    }"""
+    assert page.locator(FFT_INSET).evaluate(painted_spectrum)
+    for _ in range(2):
+        page.get_by_role("button", name="Dock FFT as a panel").click()
+        assert page.locator(FFT).evaluate(painted_spectrum)
+        page.get_by_role("button", name="Inset", exact=True).click()
+        assert page.locator(FFT_INSET).evaluate(painted_spectrum)
+
+
 def test_fft_click_that_fails_to_refine_ends_the_drag(pages, open_page, hardware_adapter):
-    page = open_export(open_page, hardware_adapter, pages["single"], ready=FFT)
+    page = open_export(open_page, hardware_adapter, pages["single"], ready=FFT_INSET)
+    page.get_by_role("button", name="Dock FFT as a panel").click()
     page.wait_for_timeout(1500)
     box = page.locator(FFT).bounding_box()
     # a lost device fails the GPU peak refine: every readback rejects during the click
@@ -283,7 +300,8 @@ def test_fft_click_that_fails_to_refine_ends_the_drag(pages, open_page, hardware
 
 
 def test_uncalibrated_scan_labels_read_px(pages, open_page, hardware_adapter):
-    page = open_export(open_page, hardware_adapter, pages["single"], ready=FFT, init_script=RECORD_CANVAS_TEXT)
+    page = open_export(open_page, hardware_adapter, pages["single"], ready=FFT_INSET, init_script=RECORD_CANVAS_TEXT)
+    page.get_by_role("button", name="Dock FFT as a panel").click()
     page.wait_for_timeout(1500)
     box = page.locator(FFT).bounding_box()
     # a click far from the center snaps to a spot there, not to the zero-frequency peak
