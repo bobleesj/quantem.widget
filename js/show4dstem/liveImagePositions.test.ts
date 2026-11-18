@@ -85,12 +85,12 @@ describe("the rows that changed", () => {
     expect(live.generation()).toBe(1);
   });
 
-  it("writes the visits of a scan kept as visits where the beam was: revisits paint over, unvisited keep the image under", () => {
+  it("writes the visits of a scan kept as visits where the beam was: revisits paint over, unvisited stay blank", () => {
     const live = createLiveImage();
     const message = { type: "live_image_positions", scan: "s", generation: 1, start: 0, count: 4, total: 6, at: true };
     const under = () => new Float32Array([9, 9, 9, 9, 9, 9]);
     expect(live.write(message, new Float32Array([1, 2, 3, 4]), under, new Int32Array([5, 0, 5, 2]))).toBe(true);
-    expect(Array.from(live.data()!)).toEqual([2, 9, 4, 9, 9, 3]);
+    expect(Array.from(live.data()!)).toEqual([2, NaN, 4, NaN, NaN, 3]);
     expect(live.takeDirty(3)).toEqual([0, 2]);
     const next = { ...message, start: 4, count: 1 };
     expect(live.write(next, new Float32Array([7]), under, new Int32Array([9]))).toBe(false);   // off the scan

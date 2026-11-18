@@ -27,7 +27,10 @@ export function createLiveImage() {
       const start = Math.round(message.start);
       if (!(total > 0) || !(start >= 0) || (!at && start >= total) || !message.scan) return false;
       if (message.scan !== scan || !data || data.length !== total) {
-        if (!data || data.length !== total) {
+        if (at) {
+          // A path, not rows: over the scan before, a star or a sparse point list could not be told from it (11-17).
+          data = new Float32Array(total).fill(NaN);
+        } else if (!data || data.length !== total) {
           const seed = under();
           data = seed && seed.length === total ? Float32Array.from(seed) : new Float32Array(total).fill(NaN);
         }
@@ -40,7 +43,7 @@ export function createLiveImage() {
         received = 0;
       }
       if (at) {
-        // Each visit where the beam was: a revisit paints over its position, an unvisited one keeps what is there.
+        // Each visit where the beam was: a revisit paints over its position, an unvisited one stays blank.
         const visits = Math.min(values.length, at.length, Math.round(message.count));
         let low = Infinity, high = 0;
         for (let i = 0; i < visits; i++) {
