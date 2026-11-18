@@ -2655,6 +2655,7 @@ function Show4DSTEM() {
   const [frontendVirtualImage, setFrontendVirtualImage] = React.useState<{ bytes: DataView; over: DataView | null } | null>(null);
   const [viProductLabels] = useModelState<string[]>("vi_product_labels");
   const [unvisitedBytes] = useModelState<DataView>("unvisited_bytes");
+  const [dose] = useModelState<number | null>("dose_e_per_A2");
   // Positions a sparse path never visited (a star, random points): drawn blank, whatever image is in view, and so is
   // the pattern at such a position (the scan holds the mean pattern there, which was never measured).
   const unvisited = React.useMemo(() => unvisitedMask(unvisitedBytes, shapeRows, shapeCols),
@@ -9706,6 +9707,8 @@ function Show4DSTEM() {
           {/* VI Stats Bar: stats on left, Auto/Smooth toggles on right edge */}
           {showStats && !viPanelLoading && <Subscribe store={viDisplayStore}>{({ stats: viStats }) => viStats.length === 4 && (
             <Box sx={statsBarSx}>
+              {dose != null && Number.isFinite(dose) && <Typography sx={statsShownSx}
+                title={`Electron dose ${dose} e⁻/Å²: mean counts per scan position ÷ (counts per electron × scan step area)`}>Dose <Box component="span" sx={statsValueSx}>{dose >= 100 ? dose.toFixed(0) : dose >= 1 ? dose.toFixed(1) : dose.toPrecision(2)} e⁻/Å²</Box></Typography>}
               <Typography sx={statsShownSx} title={`Mean ${viStats[0]}`}>Mean <Box component="span" sx={statsValueSx}>{formatMean(viStats[0], viStats[3])}</Box></Typography>
               <Typography sx={statsShownSx}>Min <Box component="span" sx={statsValueSx}>{formatStat(viStats[1])}</Box></Typography>
               <Typography sx={statsShownSx}>Max <Box component="span" sx={statsValueSx}>{formatStat(viStats[2])}</Box></Typography>
