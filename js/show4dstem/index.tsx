@@ -98,7 +98,7 @@ import { createPaintOver, paintedOver } from "./paintOver";
 import { blankUnvisited, blankUnvisitedDetail, unvisitedMask, unvisitedPattern } from "./unvisited";
 import { streamedProductsOf, type ProductImageMessage } from "./streamedProducts";
 import {
-  createLiveRows, floatValues, liveInfo, liveShownImage, sameLiveInfo, sampledValues,
+  createLiveRows, floatValues, liveImageAvailable, liveInfo, liveShownImage, sameLiveInfo, sampledValues,
   type LiveFrame, type LiveInfo, type RowsMessage,
 } from "./liveRows";
 
@@ -2416,6 +2416,12 @@ function Show4DSTEM() {
   const liveImagePositions = React.useMemo(() => createLiveImage(), []);
   const [preview, setPreview] = React.useState<LiveInfo | null>(
     () => liveInfo(model.get("live_phase_preview") as LiveFrame | undefined));
+  const dismissFrozenLive = React.useCallback(() => {
+    const frame = model.get("live_phase_preview") as LiveFrame | undefined;
+    if (!frame?.frozen) return;
+    model.set("live_phase_preview", {});
+    model.save_changes();
+  }, [model]);
   const livePatternRef = React.useRef<DataView | null>(null);
   const [livePattern, setLivePattern] = React.useState<DataView | null>(null);
   const [liveImageTick, setLiveImageTick] = React.useState(0);
@@ -2462,6 +2468,7 @@ function Show4DSTEM() {
       changed();
     };
     const onPattern = () => {
+      if ((model.get("live_phase_preview") as LiveFrame | undefined)?.frozen) return;
       const pattern = model.get("live_pattern") as DataView | undefined;
       if (!pattern?.byteLength) return;
       livePatternRef.current = pattern;
@@ -2502,8 +2509,7 @@ function Show4DSTEM() {
     if (!preview) return null;
     const sends = (name: string) => {
       if (name === "roi") return true;
-      const image = liveRows.get(name, preview.total, preview.cols);
-      return Boolean(image && (image.scan === preview.scan || (name === "Direct" && preview.mode === "Direct")));
+      return liveImageAvailable(liveRows.get(name, preview.total, preview.cols), preview);
     };
     return liveShownImage(viSource, liveShownRef.current, sends);
   }, [liveImageTick, liveRows, preview, viSource]);
@@ -2671,9 +2677,10 @@ function Show4DSTEM() {
     const from = chosenFrameIndex(scanChoice.pending(), streamSourceIds, shown);
     const source = streamSourceIds[typeof value === "function" ? value(from) : value];
     if (source === undefined) return;
+    dismissFrozenLive();
     scanChoice.choose(source, streamSourceIds[shown]);
     setChosenSource(scanChoice.pending());
-  }, [model, scanChoice, setFrameIdxState, streamSourceIds]);
+  }, [dismissFrozenLive, model, scanChoice, setFrameIdxState, streamSourceIds]);
   React.useEffect(() => {
     scanChoice.shown(streamSourceIds[frameIdx]);
     setChosenSource(scanChoice.pending());
@@ -2701,6 +2708,10 @@ function Show4DSTEM() {
   // Scans of different sizes: one group per size, one button each (11-16)
   const [sizeGroups] = useModelState<string[]>("size_groups");
   const [sizeGroup, setSizeGroup] = useModelState<number>("size_group");
+  const chooseSizeGroup = (index: number) => {
+    dismissFrozenLive();
+    setSizeGroup(index);
+  };
   const [framePlaying, setFramePlaying] = useModelState<boolean>("frame_playing");
   const [frameLoop, setFrameLoop] = useModelState<boolean>("frame_loop");
   const [frameFps, setFrameFps] = useModelState<number>("frame_fps");
@@ -4864,13 +4875,14 @@ function Show4DSTEM() {
     });
     if (preview?.mode === "Direct") add("Direct");
     preview?.images.forEach(add);
+    if (liveRowImage) add(liveRowImage.name);
     if (webgpuDpcReady) {
       add("DPC_row");
       add("DPC_col");
       add("iDPC");
     }
     return out;
-  }, [viProductLabels, webgpuDpcReady, preview]);
+  }, [viProductLabels, webgpuDpcReady, preview, liveRowImage]);
   const activeViSource = React.useMemo(() => {
     return viSource === "roi" || viProductSourceOptions.includes(viSource) ? viSource : "roi";
   }, [viProductSourceOptions, viSource]);
@@ -8340,13 +8352,16 @@ function Show4DSTEM() {
 
   const handleHtmlExportSelect = useLatestCallback(handleHtmlExportSelectLatest);
   const dpResetDisabled = dpZoom === 1 && dpPanX === 0 && dpPanY === 0 && roiCenterCol === brightFieldCenterColPx && roiCenterRow === brightFieldCenterRowPx;
+  const displayedTitle = streaming && preview && isLiveFrame(preview.scan) && !title?.startsWith("Live · frame ")
+    ? `Live · frame ${preview.scan.slice("live_".length)}`
+    : title || "4D-STEM Explorer";
   // The toolbar and control rows re-render only when their inputs change: a
   // drag that streams new pattern or image bytes leaves their MUI styles alone.
   const titleHeading = React.useMemo(() => (
     showTitle && <Typography variant="h6" sx={{ ...themedTypography.title, mb: `${SPACING.SM}px`, display: "flex", alignItems: "center", minWidth: 0 }}>
       {/* One line beside narrow panels: the full title is on hover. */}
-      <span title={title || "4D-STEM Explorer"} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {title || "4D-STEM Explorer"}</span>
+      <span title={displayedTitle} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {displayedTitle}</span>
       <RenderPathBadge colors={themeColors} />
       {nFrames > 1 && !streaming && !isLiveFrame(frameNames?.[frameIdx]) && !titleNamesScan(title, frameNames?.[frameIdx])
         && <span style={{ fontWeight: "normal", fontSize: 13, marginLeft: 8, opacity: 0.7 }}>({frameLabels && frameLabels.length > frameIdx ? frameLabels[frameIdx] : `${frameDimLabel} ${frameIdx + 1}/${nFrames}`})</span>}
@@ -8377,7 +8392,7 @@ function Show4DSTEM() {
       </Box>} theme={themeInfo.theme} />}
     </Typography>
   ), [
-    detCols, detRows, frameDimLabel, frameIdx, frameLabels, frameNames, kCalibrated, kPixelSize, kPixelUnit,
+    detCols, detRows, displayedTitle, frameDimLabel, frameIdx, frameLabels, frameNames, kCalibrated, kPixelSize, kPixelUnit,
     keyboardShortcutItems, nFrames, panelChromeVisible, pixelSize, scanUnit, shapeCols, shapeRows,
     showTitle, streaming, themeColors, themeInfo, themedTypography, title
   ]);
@@ -8909,14 +8924,14 @@ function Show4DSTEM() {
   // hidden in place, so nothing moves when a scan starts or ends. Embedded in a host panel the row is under the
   // title, above the pattern and the image, on one line, its room kept from the first scan on (11-18: under the
   // image it was below the fold of the scanning GUI); elsewhere it is under the image, no wider than it.
-  const scanChoiceHidden = streaming || keptFrames <= 1;
+  const scanChoiceHidden = (streaming && !preview?.frozen) || keptFrames <= 1;
   const scanChoiceRows = controlsVisible && (nFrames > 1 || embedded) && (<Box data-show4dstem-scan-rows aria-hidden={scanChoiceHidden || undefined}
         sx={scanChoiceHidden ? { visibility: "hidden", pointerEvents: "none" } : undefined}>
         <Box sx={{ ...controlRow, columnGap: `${SPACING.XS}px`, rowGap: "2px", ...(embedded ? { mb: `${SPACING.XS}px`, flexWrap: "nowrap" } : { mt: `${SPACING.XS}px` }), border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
           <Typography sx={{ ...themedTypography.label, fontSize: 10, flexShrink: 0 }}>View</Typography>
           <Select
             value={viewMode}
-            onChange={(event) => setViewMode(String(event.target.value))}
+            onChange={(event) => { dismissFrozenLive(); setViewMode(String(event.target.value)); }}
             size="small"
             inputProps={{ "aria-label": "Show4DSTEM view mode" }}
             sx={{ ...themedSelect, minWidth: 72, fontSize: 10, ...(embedded ? { flexShrink: 0 } : {}) }}
@@ -9034,13 +9049,16 @@ function Show4DSTEM() {
       {/* HEADER */}
       {titleHeading}
       {embedded && scanChoiceRows}
+      {preview?.frozen && keptFrames > 0 && !sizeGroups?.length && (
+        <Button size="small" sx={compactButton} onClick={dismissFrozenLive}>Show retained scan</Button>
+      )}
       {sizeGroups && sizeGroups.length > 1 && (
         <Box role="tablist" aria-label="Scan size" sx={{ display: "flex", flexWrap: "wrap", gap: "4px", mb: `${SPACING.SM}px` }}>
           {sizeGroups.map((label, index) => (
             <Box key={label} role="tab" tabIndex={0} aria-selected={index === sizeGroup}
               title="The scans of this size: one grid shares one scan and detector size"
-              onClick={() => setSizeGroup(index)}
-              onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSizeGroup(index); } }}
+              onClick={() => chooseSizeGroup(index)}
+              onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); chooseSizeGroup(index); } }}
               sx={{ px: "8px", py: "2px", fontSize: 12, borderRadius: "3px", cursor: "pointer", userSelect: "none",
                     border: `1px solid ${index === sizeGroup ? themeColors.accent : themeColors.border}`,
                     bgcolor: index === sizeGroup ? themeColors.accent : "transparent",

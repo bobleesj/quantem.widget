@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  binRows, createLiveRows, floatValues, liveInfo, liveShownImage, sameLiveInfo, sampledValues,
+  binRows, createLiveRows, floatValues, liveImageAvailable, liveInfo, liveShownImage, sameLiveInfo, sampledValues,
 } from "./liveRows";
 
 const rows = (scan: string, image: string, first: number, values: number[], extra: object = {}) =>
@@ -8,6 +8,18 @@ const rows = (scan: string, image: string, first: number, values: number[], extr
    new Float32Array(values)] as const;
 
 describe("live image rows", () => {
+  it.each(["COM_row", "COM_col", "DPC", "Direct"])("holds %s pixels until the next Live frame has rows", name => {
+    const live = createLiveRows();
+    live.write(...rows("live_1", name, 0, [1, 2, 3, 4, 5, 6]));
+    const image = live.get(name, 3, 2)!;
+    const next = liveInfo({ scan: "live_2", total: 3, cols: 2, detRows: 4, detCols: 4 })!;
+    expect(liveImageAvailable(image, next)).toBe(true);
+    expect(liveImageAvailable(image, { ...next, scan: "series_1" })).toBe(false);
+    expect(sameLiveInfo(next, { ...next, frozen: true })).toBe(false);
+    live.write(...rows("live_2", name, 0, [7, 8]));
+    expect(Array.from(image.data)).toEqual([7, 8, 3, 4, 5, 6]);
+  });
+
   it("writes each message's rows where they belong and remembers which rows changed", () => {
     const live = createLiveRows();
     expect(live.write(...rows("a", "COM_row", 0, [1, 2]))).toBe(true);
@@ -99,7 +111,7 @@ describe("the scan arriving", () => {
     const frame = { scan: "a", rows: 8, cols: 4, total: 8, detRows: 2, detCols: 2, mode: "Direct", com_unit: "mrad" };
     const info = liveInfo(frame)!;
     expect(info).toEqual({ scan: "a", total: 8, cols: 4, detRows: 2, detCols: 2, mode: "Direct", comUnit: "mrad",
-      images: [], diffractionOnly: false, sourceId: "" });
+      images: [], diffractionOnly: false, sourceId: "", frozen: false });
     expect(sameLiveInfo(info, liveInfo({ ...frame, rows: 3 }))).toBe(true);
     expect(sameLiveInfo(info, liveInfo({ ...frame, scan: "b" }))).toBe(false);
     expect(liveInfo({})).toBeNull();

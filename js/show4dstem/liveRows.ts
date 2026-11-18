@@ -6,6 +6,8 @@
  *  float32 buffer of `rows * upsample` by `cols * upsample` values (`rows` scan rows starting at `first_row`).
  *  `under: true` marks rows drawn beneath the scan (the image before it), which do not count as measured.
  *  Rows not received yet keep what was there: a new scan paints over the last one. */
+import { isLiveFrame } from "./viewLabels";
+
 export type RowsMessage = {
   type?: string; scan: string; image: string; first_row: number; rows: number; cols: number; total: number;
   upsample?: number; under?: boolean;
@@ -25,14 +27,14 @@ export type LiveRowImage = {
 export type LiveFrame = {
   rows?: number; cols?: number; total?: number; detRows?: number; detCols?: number; mode?: string;
   upsample?: number; scan?: string; com_unit?: string; images?: string[];
-  diffraction_only?: boolean; source_id?: string;
+  diffraction_only?: boolean; source_id?: string; frozen?: boolean;
   phase?: DataView; dp?: DataView; roi?: DataView; com_row?: DataView; com_col?: DataView; dpc?: DataView;
 };
 
 /** What the view needs to know about the scan arriving; it changes once per scan, not with every row. */
 export type LiveInfo = {
   scan: string; total: number; cols: number; detRows: number; detCols: number; mode: string; comUnit: string; images: string[];
-  diffractionOnly: boolean; sourceId: string;
+  diffractionOnly: boolean; sourceId: string; frozen: boolean;
 };
 
 /** The frame's description without its pixels; null when no scan is arriving. */
@@ -43,14 +45,14 @@ export function liveInfo(frame: LiveFrame | undefined | null): LiveInfo | null {
   return { scan: String(frame.scan ?? ""), total: Math.round(frame.total), cols: Math.round(frame.cols),
            detRows: Math.round(frame.detRows), detCols: Math.round(frame.detCols), mode: String(frame.mode ?? ""),
            comUnit: String(frame.com_unit ?? ""), images, diffractionOnly: Boolean(frame.diffraction_only),
-           sourceId: frame.source_id ?? "" };
+           sourceId: frame.source_id ?? "", frozen: Boolean(frame.frozen) };
 }
 
 export function sameLiveInfo(a: LiveInfo | null, b: LiveInfo | null): boolean {
   if (!a || !b) return a === b;
   return a.scan === b.scan && a.total === b.total && a.cols === b.cols && a.detRows === b.detRows
     && a.detCols === b.detCols && a.mode === b.mode && a.comUnit === b.comUnit
-    && a.diffractionOnly === b.diffractionOnly && a.sourceId === b.sourceId
+    && a.diffractionOnly === b.diffractionOnly && a.sourceId === b.sourceId && a.frozen === b.frozen
     && a.images.length === b.images.length && a.images.every((name, index) => name === b.images[index]);
 }
 
@@ -163,6 +165,14 @@ export function createLiveRows() {
 }
 
 export type LiveRows = ReturnType<typeof createLiveRows>;
+
+/** A same-size Live frame keeps the preceding Live pixels while its own rows are in flight. */
+export function liveImageAvailable(image: LiveRowImage | null, preview: LiveInfo): boolean {
+  if (!image) return false;
+  return image.scan === preview.scan
+    || (image.name === "Direct" && preview.mode === "Direct")
+    || (image.measured > 0 && isLiveFrame(image.scan) && isLiveFrame(preview.scan));
+}
 
 /** The image the view shows while a scan arrives: the operator's choice when this scan has rows of it, else the
  *  image shown before while it has data (no black panel while the new choice has nothing yet), else the detector
