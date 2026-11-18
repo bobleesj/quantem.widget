@@ -2395,9 +2395,6 @@ function Show4DSTEM() {
   // Model State (synced with Python)
   // ─────────────────────────────────────────────────────────────────────────
   const [liveStream] = useModelState<boolean>("live_phase_stream");
-  // The live view sits in a narrow column beside the scan controls: its panels touch and it starts at
-  // the column's left edge, so the images get every pixel.
-  const panelGap = liveStream ? 0 : PANEL_GAP;
   const [viSource, setViSource] = useModelState<string>("vi_source");
   // The scan arriving. Its pixels never pass through React state: a new pattern or new rows are written into
   // arrays kept here and drawn once per animation frame, and the component renders only when the scan itself
@@ -2630,6 +2627,11 @@ function Show4DSTEM() {
   // Frame animation state (5D time/tilt series)
   const [frameIdx, setFrameIdxState] = useModelState<number>("frame_idx");
   const [streamSourceIds = []] = useModelState<string[]>("_stream_source_ids");
+  // A streamed view (scans arriving, a live phase) sits in a narrow column beside the scan controls: its panels touch
+  // and it has no padding, so the images get every pixel and no page background shows between them (11-18: a white
+  // line between the pattern and the image when no Direct phase streamed, the only case the gap was removed for).
+  const liveLayout = !!liveStream || streamSourceIds.length > 0 || streaming;
+  const panelGap = liveLayout ? 0 : PANEL_GAP;
   React.useEffect(() => {
     streamedProducts.keep(streamSourceIds);
     setStreamedProductsVersion(streamedProducts.version());
@@ -8932,7 +8934,7 @@ function Show4DSTEM() {
       onMouseDownCapture={handleRootMouseDownCapture}
       onDragOver={onLocalDragOver}
       onDrop={onLocalDrop}
-      sx={{ p: "4px", ...(liveStream ? { pl: 0 } : {}), bgcolor: themeColors.bg, color: themeColors.text, outline: "none", borderRadius: "2px", width: "100%", maxWidth: "100%", boxSizing: "border-box", "@media (max-width: 700px)": { p: 0, overflowX: "hidden", ".jp-OutputArea-output &, .jp-OutputArea-child &": { width: "calc(100vw - 96px)", maxWidth: "calc(100vw - 96px)" } } }}
+      sx={{ p: "4px", ...(liveLayout ? { p: 0 } : {}), bgcolor: themeColors.bg, color: themeColors.text, outline: "none", borderRadius: "2px", width: "100%", maxWidth: "100%", boxSizing: "border-box", "@media (max-width: 700px)": { p: 0, overflowX: "hidden", ".jp-OutputArea-output &, .jp-OutputArea-child &": { width: "calc(100vw - 96px)", maxWidth: "calc(100vw - 96px)" } } }}
     >
       <input
         ref={h5LocalInputRef}
