@@ -4952,7 +4952,12 @@ function Show4DSTEM() {
   const selectedViSource = React.useMemo(() => {
     return viSource === "roi" || viProductSourceOptions.includes(viSource) ? viSource : "roi";
   }, [viProductSourceOptions, viSource]);
-  const hoverPreset = !offline && !compareMode && !preview?.frozen && isHoverPreset(hoverSource) ? hoverSource : null;
+  // The preset clicked last is the image in view: hovering its own button previews nothing (2026-11-18, the operator at
+  // the microscope: resting on the selected button during Live swapped the arriving rows for a preview, back and forth)
+  const [clickedPreset, setClickedPreset] = React.useState<HoverPreset | null>(null);
+  const hoveringSelected = selectedViSource === "roi" && hoverSource === clickedPreset;
+  const hoverPreset = !offline && !compareMode && !preview?.frozen && !hoveringSelected && isHoverPreset(hoverSource)
+    ? hoverSource : null;
   const hoverPresetImage = usePresetPreview(
     model, hoverPreset, preview?.scan, frameIdx, streamSourceIds[frameIdx] ?? "", shapeRows, shapeCols, detRows, detCols);
   const hoverProduct = compareMode || requestedHoverProduct === selectedViSource ? null : requestedHoverProduct;
@@ -9313,7 +9318,8 @@ function Show4DSTEM() {
               columnGap: embedded ? "8px" : "12px" }}>
               {HOVER_PRESETS.map((preset) => (
                 <Typography key={preset} component="button" type="button" {...previewEvents(preset)}
-                  onClick={() => { setHoverSource(null); requestViPreset(preset); }}
+                  aria-pressed={selectedViSource === "roi" && clickedPreset === preset}
+                  onClick={() => { setHoverSource(null); setClickedPreset(preset); requestViPreset(preset); }}
                   sx={viSourceButtonSx(preset)}>{preset.toUpperCase()}</Typography>
               ))}
               {viProductSourceOptions.map((source) => (
