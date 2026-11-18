@@ -153,6 +153,69 @@ function isDpcGpuSource(source: string): source is DpcGpuSource {
 
 type Show4DSTEMModel = ReturnType<typeof useModel>;
 
+const HOVER_PRESETS = ["bf", "abf", "adf"] as const;
+type HoverPreset = typeof HOVER_PRESETS[number];
+
+function isHoverPreset(source: string | null): source is HoverPreset {
+  return HOVER_PRESETS.some(preset => preset === source);
+}
+
+/** One read-only preset reduction at a time, scoped to this view and hover. */
+function usePresetPreview(
+  model: Show4DSTEMModel, preset: HoverPreset | null, scan: string | undefined, frame: number, sourceId: string,
+  rows: number, cols: number, detRows: number, detCols: number,
+): DataView | null {
+  const view = React.useMemo(detectorViewId, []);
+  const request = React.useRef(0);
+  const pending = React.useRef(0);
+  const onResult = React.useRef<((request: number, bytes?: DataView) => void) | null>(null);
+  const scanRef = React.useRef(scan);
+  scanRef.current = scan;
+  const context = preset ? [preset, scan ? "live" : sourceId || frame, rows, cols, detRows, detCols].join("|") : "";
+  const [preview, setPreview] = React.useState<{ context: string; bytes: DataView } | null>(null);
+  React.useEffect(() => {
+    if (!preset || !rows || !cols) return;
+    let current = 0;
+    let timer = 0;
+    let tried = 0;
+    const send = () => {
+      if (!pending.current) {
+        pending.current = current = ++request.current;
+        tried++;
+        const frame = Number(model.get("frame_idx") ?? 0);
+        model.send({ type: "show4dstem_preset_preview", view, request: current, preset,
+          scan: scanRef.current ?? null, frame, source_id: model.get("_stream_source_ids")?.[frame] ?? "",
+          shape: [rows, cols, detRows, detCols] });
+      }
+      timer = window.setTimeout(send, 250);
+    };
+    onResult.current = (id, bytes) => {
+      if (id !== current) return;
+      if (bytes?.byteLength === rows * cols * 4) setPreview({ context, bytes });
+      if (!scanRef.current && (bytes?.byteLength || tried >= 2)) window.clearTimeout(timer);
+    };
+    timer = window.setTimeout(send, 50);
+    return () => {
+      window.clearTimeout(timer);
+      onResult.current = null;
+      setPreview(null);
+    };
+  }, [model, view, context, preset, rows, cols, detRows, detCols]);
+  // Release a request even if the pointer leaves before its result arrives.
+  React.useEffect(() => {
+    const receive = (message: { type?: string; view?: string; request?: number }, buffers?: DataView[]) => {
+      if (message.type === "show4dstem_preset_preview_result" && message.view === view
+          && message.request && message.request === pending.current) {
+        pending.current = 0;
+        onResult.current?.(message.request, buffers?.[0]);
+      }
+    };
+    model.on("msg:custom", receive);
+    return () => model.off("msg:custom", receive);
+  }, [model, view]);
+  return context && preview?.context === context ? preview.bytes : null;
+}
+
 type ViProductMaps = { bytes: DataView; productIndex: number; frames: number; pixels: number };
 
 /**
@@ -2405,6 +2468,8 @@ function Show4DSTEM() {
   // ─────────────────────────────────────────────────────────────────────────
   const [liveStream] = useModelState<boolean>("live_phase_stream");
   const [viSource, setViSource] = useModelState<string>("vi_source");
+  const [hoverSource, setHoverSource] = React.useState<string | null>(null);
+  const requestedHoverProduct = hoverSource && !isHoverPreset(hoverSource) ? hoverSource : null;
   // The scan arriving. Its pixels never pass through React state: a new pattern or new rows are written into
   // arrays kept here and drawn once per animation frame, and the component renders only when the scan itself
   // changes (its name, size or kind) or, a few times a second, for what reads the image (stats, histogram).
@@ -2505,15 +2570,16 @@ function Show4DSTEM() {
   // Which image shows: the operator's choice when this scan sends it, else the one shown before while it has
   // data, else the detector image. Read again with every tick: rows arrive outside React.
   const liveShownRef = React.useRef<string | null>(null);
-  const liveShown = React.useMemo(() => {
-    if (!preview) return null;
+  const [liveShown, selectedLiveImage] = React.useMemo(() => {
+    if (!preview) return [null, null];
     const sends = (name: string) => {
       if (name === "roi") return true;
       return liveImageAvailable(liveRows.get(name, preview.total, preview.cols), preview);
     };
-    return liveShownImage(viSource, liveShownRef.current, sends);
-  }, [liveImageTick, liveRows, preview, viSource]);
-  liveShownRef.current = liveShown;
+    const selected = liveShownImage(viSource, liveShownRef.current, sends);
+    return [requestedHoverProduct && sends(requestedHoverProduct) ? requestedHoverProduct : selected, selected];
+  }, [liveImageTick, liveRows, preview, requestedHoverProduct, viSource]);
+  liveShownRef.current = selectedLiveImage;
   const liveRowImage = React.useMemo(
     () => preview && liveShown && liveShown !== "roi" ? liveRows.get(liveShown, preview.total, preview.cols) : null,
     [liveImageTick, liveRows, liveShown, preview]);
@@ -2540,7 +2606,7 @@ function Show4DSTEM() {
   // this changes, never because rows arrived.
   const liveDrawn = liveRowImage ? liveRowImage.data : liveDetectorArray;
   // The chosen image is not sent for this scan (a scan without a fit has no Direct phase).
-  const liveMissing = preview && liveShown && viSource !== liveShown && viSource !== "roi"
+  const liveMissing = preview && liveShown && viSource !== liveShown && viSource !== "roi" && liveShown !== requestedHoverProduct
     && !(viSource === "Direct" && preview.mode === "Direct") ? viSource : null;
   // A scan is arriving: the view shows it, and the controls that choose another scan wait.
   const streaming = liveImage !== null;
@@ -4883,9 +4949,32 @@ function Show4DSTEM() {
     }
     return out;
   }, [viProductLabels, webgpuDpcReady, preview, liveRowImage]);
-  const activeViSource = React.useMemo(() => {
+  const selectedViSource = React.useMemo(() => {
     return viSource === "roi" || viProductSourceOptions.includes(viSource) ? viSource : "roi";
   }, [viProductSourceOptions, viSource]);
+  const hoverPreset = !offline && !compareMode && !preview?.frozen && isHoverPreset(hoverSource) ? hoverSource : null;
+  const hoverPresetImage = usePresetPreview(
+    model, hoverPreset, preview?.scan, frameIdx, streamSourceIds[frameIdx] ?? "", shapeRows, shapeCols, detRows, detCols);
+  const hoverProduct = compareMode || requestedHoverProduct === selectedViSource ? null : requestedHoverProduct;
+  const retainedHoverProduct = React.useMemo(() => hoverProduct && !streaming
+    ? viProductFrameView(model, shapeRows, shapeCols, hoverProduct) : null,
+    [hoverProduct, streaming, model, frameIdx, shapeRows, shapeCols, viProductLabels,
+      viProductMapFrames, viProductMapsBytes, viProductStreamedLabels, streamedProductsVersion]);
+  const shownHoverProduct = hoverProduct && (retainedHoverProduct || liveRowImage?.name === hoverProduct)
+    ? hoverProduct : null;
+  const activeViSource = shownHoverProduct ?? (hoverPresetImage ? "roi" : selectedViSource);
+  const hoverLabel = hoverPresetImage ? hoverPreset?.toUpperCase() : undefined;
+  const imageSourceLabel = hoverLabel ?? viSourceLabel(activeViSource);
+  const previewEvents = (source: string) => ({
+    onPointerEnter: (event: React.PointerEvent<HTMLButtonElement>) => {
+      if (event.pointerType === "mouse" && !event.buttons) setHoverSource(source);
+    },
+    onPointerLeave: () => setHoverSource(previous => previous === source ? null : previous),
+    onFocus: (event: React.FocusEvent<HTMLButtonElement>) => {
+      if (event.currentTarget.matches(":focus-visible")) setHoverSource(source);
+    },
+    onBlur: () => setHoverSource(previous => previous === source ? null : previous),
+  });
   const [flipPhaseContrast, setFlipPhaseContrast] = React.useState(false);
   const canFlipPhaseContrast = activeViSource === "Direct" && !compareMode;
   const reversePhaseLut = canFlipPhaseContrast && flipPhaseContrast;
@@ -4964,6 +5053,9 @@ function Show4DSTEM() {
   // never black. The live preview's rows already keep what was under them. A notebook viewer draws NaN as before.
   const paintOver = React.useMemo(() => createPaintOver(), []);
   const displayedVirtualImageBytes = React.useMemo(() => {
+    if (hoverPresetImage || retainedHoverProduct) {
+      return blankUnvisited(hoverPresetImage ?? retainedHoverProduct, unvisited, shapeRows, shapeCols);
+    }
     if (liveImage || compareMode) return receivedVirtualImageBytes;
     const kind = activeViSource === "roi"
       ? `roi:${roiMode}:${storedRoiRadius}:${storedRoiRadiusInner}:${roiWidth}:${roiHeight}:${detRows}x${detCols}`
@@ -4971,7 +5063,7 @@ function Show4DSTEM() {
     // unvisited positions stay blank: painting over would fill them with the scan before
     return blankUnvisited(paintedOver(Boolean(embedded), paintOver, kind, shapeRows, shapeCols, receivedVirtualImageBytes),
                           unvisited, shapeRows, shapeCols);
-  }, [unvisited, activeViSource, compareMode, detCols, detRows, embedded, liveImage, paintOver, receivedVirtualImageBytes,
+  }, [unvisited, activeViSource, compareMode, detCols, detRows, embedded, hoverPresetImage, liveImage, paintOver, receivedVirtualImageBytes, retainedHoverProduct,
       roiHeight, roiMode, roiWidth, shapeCols, shapeRows, storedRoiRadius, storedRoiRadiusInner]);
   // The image in view at full resolution when it is k x the scan grid: the live Direct preview, or attach()'s
   // image of the shown scan. Hover, profile and FFT keep reading the scan-grid image above.
@@ -4981,7 +5073,7 @@ function Show4DSTEM() {
   const viDetailCacheRef = React.useRef<Map<string, UpsampledImage>>(new Map());
   const viDetailHeldRef = React.useRef<{ shape: string; image: UpsampledImage } | null>(null);
   const viDetailReceived = React.useMemo<UpsampledImage | null>(() => {
-    if (compareMode) return null;
+    if (compareMode || hoverPresetImage) return null;
     if (streaming) return liveDetail;
     const cache = viDetailCacheRef.current;
     const detail = viDetailState;
@@ -5005,7 +5097,7 @@ function Show4DSTEM() {
     }
     const held = viDetailHeldRef.current;
     return held && held.shape === shape && valid ? held.image : null;
-  }, [activeViSource, compareMode, frameIdx, frameNames, liveDetail, shapeCols, shapeRows, streaming, viDetailState]);
+  }, [activeViSource, compareMode, frameIdx, frameNames, hoverPresetImage, liveDetail, shapeCols, shapeRows, streaming, viDetailState]);
   const viDetail = React.useMemo(() => blankUnvisitedDetail(viDetailReceived, unvisited, shapeRows, shapeCols),
                                  [viDetailReceived, unvisited, shapeRows, shapeCols]);
   const viFactor = viDetail?.factor ?? 1;
@@ -6191,7 +6283,7 @@ function Show4DSTEM() {
     const height = viDetail ? viDetail.rows : shapeRows;
     const factor = viDetail ? viDetail.factor : 1;
     // The array rows are written into while a scan arrives, else the image in state.
-    const filtered = viDetail ? viDetail.data : streaming && liveDrawn ? liveDrawn : rawVirtualImageRef.current;
+    const filtered = viDetail ? viDetail.data : streaming && liveDrawn && !hoverPresetImage ? liveDrawn : rawVirtualImageRef.current;
     if (filtered.length < width * height) return;
     const log = viScaleMode === "log";
 
@@ -6317,7 +6409,7 @@ function Show4DSTEM() {
   // `liveDrawn` and not the image in state: while a scan arrives the state's view changes with every tick, and
   // the rows are drawn from their animation frame.
   React.useEffect(() => drawViOffscreen(false),
-    [activeViSource, streaming ? liveDrawn : displayedVirtualImageBytes, liveShown, compareMode, shapeRows, shapeCols, viDetail, viGpuVersion, viDisplayLut, viDisplayLutKey, viVminPct, viVmaxPct, viScaleMode, traitViVmin, traitViVmax, viPercentiles]);
+    [activeViSource, streaming && !hoverPresetImage ? liveDrawn : displayedVirtualImageBytes, liveShown, compareMode, shapeRows, shapeCols, viDetail, viGpuVersion, viDisplayLut, viDisplayLutKey, viVminPct, viVmaxPct, viScaleMode, traitViVmin, traitViVmax, viPercentiles]);
 
   // Present resident reductions directly, including while the pointer is held.
   // Offscreen bitmap snapshots can be black and can lag the latest detector. The
@@ -6471,7 +6563,7 @@ function Show4DSTEM() {
   React.useLayoutEffect(paintViCanvas,
     [activeViSource, liveImage, compareMode, viDetail, viFactor, viGpuRetainedReady, viOffscreenVersion, viZoom, viPanX, viPanY, viSmooth]);
   // What one animation frame draws while positions arrive: the detector image as it is now.
-  drawLiveImageRef.current = streaming && !compareMode ? () => drawViOffscreen(true) : null;
+  drawLiveImageRef.current = streaming && !compareMode && !hoverPresetImage ? () => drawViOffscreen(true) : null;
 
   // Compute FFT (expensive and async: only re-run on data/GPU changes)
   const fftSpectrumRef = React.useRef<{ real: Float32Array; imag: Float32Array;
@@ -9219,15 +9311,16 @@ function Show4DSTEM() {
           {controlsVisible && !dpPanelLoading && (dpStats?.length === 4 || hasViProductSources) && (
             <Box role="group" aria-label="Image source" sx={{ ...statsBarSx, mt: 0, minHeight: 0,
               columnGap: embedded ? "8px" : "12px" }}>
-              {(["bf", "abf", "adf"] as const).map((preset) => (
-                <Typography key={preset} component="button" type="button" onClick={() => requestViPreset(preset)}
+              {HOVER_PRESETS.map((preset) => (
+                <Typography key={preset} component="button" type="button" {...previewEvents(preset)}
+                  onClick={() => { setHoverSource(null); requestViPreset(preset); }}
                   sx={viSourceButtonSx(preset)}>{preset.toUpperCase()}</Typography>
               ))}
               {viProductSourceOptions.map((source) => (
-                <Typography key={source} component="button" type="button"
-                  aria-pressed={activeViSource === source}
-                  onClick={() => setViSource(source)}
-                  sx={viSourceButtonSx(source, activeViSource === source)}>
+                <Typography key={source} component="button" type="button" {...previewEvents(source)}
+                  aria-pressed={selectedViSource === source}
+                  onClick={() => { setHoverSource(null); setViSource(source); }}
+                  sx={viSourceButtonSx(source, selectedViSource === source)}>
                   {viSourceLabel(source)}
                 </Typography>
               ))}
@@ -9287,9 +9380,9 @@ function Show4DSTEM() {
           {/* VI Header */}
           <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ ...panelHeaderSx, flexWrap: "nowrap", ...hideBetweenPanelsOnMobileSx }}>
             <Stack direction="row" alignItems="center" spacing={`${SPACING.SM}px`} sx={{ minWidth: 0, flexWrap: "nowrap" }}>
-              <Typography noWrap title={`${compareMode ? "Multiple " : ""}${viSourceLabel(activeViSource)}${viFactor > 1 ? ` upsampled ${viFactor}×` : ""} | ${shapeRows}×${shapeCols}`}
+              <Typography noWrap title={`${compareMode ? "Multiple " : ""}${imageSourceLabel}${viFactor > 1 ? ` upsampled ${viFactor}×` : ""} | ${shapeRows}×${shapeCols}`}
                 sx={{ ...themedTypography.label, color: themeColors.textMuted, minWidth: 0 }}>
-                {viSourceLabel(activeViSource)}{viFactor > 1 ? ` ${viFactor}×` : ""}{compareMode ? ` · ${shapeRows}×${shapeCols}` : ` | ${shapeRows}×${shapeCols} | ${detRows}×${detCols}`}
+                {imageSourceLabel}{viFactor > 1 ? ` ${viFactor}×` : ""}{compareMode ? ` · ${shapeRows}×${shapeCols}` : ` | ${shapeRows}×${shapeCols} | ${detRows}×${detCols}`}
               </Typography>
               {controlsVisible && compareMode && activeComparePageCount > 1 && (
                 <Box sx={{ display: "flex", alignItems: "center", gap: 0.35, flexShrink: 0 }}>

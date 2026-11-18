@@ -830,6 +830,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self.on_msg(self._handle_detector_request)
         self.on_msg(self._handle_detector_radius_request)
         self.on_msg(self._handle_position_request)
+        self.on_msg(self._handle_preset_preview)
         self.observe(self._on_scan_position_change, names=["pos_row", "pos_col"])
         self.observe(self._on_roi_change, names=["roi_center_col", "roi_center_row", "roi_radius", "roi_radius_inner",
                                                  "roi_active", "roi_mode", "roi_width", "roi_height"])
@@ -1149,7 +1150,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 return
         self.unobserve_all()                        # nothing answers the front end: the last images stay as they are
         for handler in (self._handle_frontend_ready_msg, self._handle_detector_request,
-                        self._handle_detector_radius_request, self._handle_position_request):
+                        self._handle_detector_radius_request, self._handle_position_request,
+                        self._handle_preset_preview):
             self.on_msg(handler, remove=True)
         note = "scan released: picture only"
         self.title = f"{self.title} · {note}" if self.title and note not in self.title else (self.title or note)
@@ -2747,6 +2749,60 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             with self.hold_sync():
                 self.apply_preset(name)
                 self._preset_request = ""
+
+    def _handle_preset_preview(self, _widget, content, _buffers) -> None:
+        """Return a temporary detector sum without changing the selected image or detector ROI."""
+        if not isinstance(content, dict) or content.get("type") != "show4dstem_preset_preview":
+            return
+        reply = {"type": "show4dstem_preset_preview_result", "view": content.get("view"),
+                 "request": content.get("request")}
+        image = None
+        if self._stream_lock.acquire(blocking=False):
+            try:
+                image = self._preset_preview_pixels(content)
+            except (LookupError, ValueError, RuntimeError, MemoryError):
+                pass  # A stream source may leave while a preview is requested.
+            finally:
+                self._stream_lock.release()
+        self.send(reply, buffers=[image] if image is not None else [])
+
+    def _preset_preview_pixels(self, request: dict) -> bytes | memoryview | None:
+        """Read the current source on its existing detector session, or a cached retained preset."""
+        name = request.get("preset")
+        shape = [self.shape_rows, self.shape_cols, self.det_rows, self.det_cols]
+        if (
+            self._data is None or self._multiple_view_active() or not isinstance(name, str) or name not in PRESET_RADII
+            or request.get("shape") != shape or request.get("frame") != self.frame_idx
+        ):
+            return None
+        if self._stream_source_ids and request.get("source_id") != self._stream_source_ids[self.frame_idx]:
+            return None
+        live = self.live_phase_preview
+        current = str(live.get("scan") or "")
+        requested = str(request.get("scan") or "")
+        transient = current.startswith("live_") and requested.startswith("live_")
+        if live.get("frozen") or (current != requested and not transient):
+            return None
+        if live:
+            # The transient row header can be a frame ahead of the latest readable detector source.
+            follower = self._stream_follower
+            if follower is None or self.frame_idx >= len(follower.shown_sources):
+                return None
+            source = str(follower.shown_sources[self.frame_idx].metadata.get("series") or "")
+            if source != current and not (transient and source.startswith("live_")):
+                return None
+        elif name in self._preset_images:
+            return self._preset_images[name]
+        center = (self.bright_field_center_row_px, self.bright_field_center_col_px)
+        mask = preset_mask(name, (self.det_rows, self.det_cols), center, self.bright_field_radius_px)
+        if mask is None:
+            return None
+        with self._session_lock:
+            image = np.ascontiguousarray(self._compute.masked_sum(mask), dtype=np.float32)
+        pixels = memoryview(image).cast("B")
+        if not live:
+            self._preset_images[name] = pixels
+        return pixels
 
     def _on_roi_change(self, change=None) -> None:
         """React to a detector ROI edit: recompute the image in view unless a batched update or a product map is showing.

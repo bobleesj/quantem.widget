@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from quantem.widget import Show4DSTEM
+from quantem.widget.show4dstem.detector import preset_mask
 
 CONTEXT = "frame_idx vi_source view_mode compare_page_idx roi_mode roi_radius roi_radius_inner roi_width roi_height"
 RADIUS_CONTEXT = "frame_idx vi_source view_mode compare_page_idx roi_mode roi_center_row roi_center_col"
@@ -17,6 +18,27 @@ def request(viewer, center, seq=1):
 def radius_request(viewer, radii, seq=1):
     return {"type": "show4dstem_detector_radius", "version": 1, "view": "first", "epoch": 0,
             "seq": seq, "radii": radii, "context": [getattr(viewer, key) for key in RADIUS_CONTEXT.split()]}
+
+
+def test_preset_preview_returns_exact_counts_without_committing_the_roi(viewer):
+    widget, values_t, _ = viewer
+    widget.view_mode = "single"
+    state = (widget.vi_source, list(widget.roi_center), widget.roi_mode, bytes(widget.virtual_image_bytes))
+    replies = []
+    widget.send = lambda content, buffers=None: replies.append((content, buffers))
+    content = {"type": "show4dstem_preset_preview", "view": "test", "request": 1,
+               "preset": "adf", "frame": 0, "scan": None, "shape": [5, 7, 16, 16]}
+    widget._handle_preset_preview(widget, content, [])
+    reply, buffers = replies[-1]
+    assert reply == {"type": "show4dstem_preset_preview_result", "view": "test", "request": 1}
+    mask = preset_mask("adf", (16, 16), (7.5, 7.5), 3)
+    expected = values_t[0, ..., torch.from_numpy(mask)].sum(-1)
+    actual = torch.frombuffer(bytearray(buffers[0]), dtype=torch.float32).reshape(5, 7)
+    torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+    assert (widget.vi_source, list(widget.roi_center), widget.roi_mode, bytes(widget.virtual_image_bytes)) == state
+    widget.frame_idx = 1
+    widget._handle_preset_preview(widget, content, [])
+    assert replies[-1][1] == []
 
 
 @pytest.fixture
