@@ -308,6 +308,10 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     # One byte per scan position of the shown scan, 1 where its path never went (``visits_per_position`` 0 in
     # its metadata: a star or random path kept on its grid); the page draws those positions blank. Empty otherwise.
     unvisited_bytes = traitlets.Bytes(b"").tag(sync=True)
+    #: The shown scan's electron dose, e-/A^2 (None when not known): its mean counts per scan position over the counts
+    #: per electron (the scan's ``counts_per_electron``, 1 for a counting detector such as the ARINA) times the scan
+    #: step's area. A user's calcDose (11-18): dose = sum(PACBED) Nx^2 / (ADU FOV^2), the same quantity.
+    dose_e_per_A2 = traitlets.Float(None, allow_none=True).tag(sync=True)
     vi_source = traitlets.Unicode("roi").tag(sync=True)
     vi_product_labels = traitlets.List(traitlets.Unicode(), default_value=[]).tag(sync=True)
     vi_product_map_frames = traitlets.Int(0).tag(sync=True)
@@ -849,6 +853,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self.observe(self._on_frame_idx_change, names=["frame_idx"])
         self.observe(self._update_unvisited, names=["frame_idx", "n_frames", "shape_rows", "shape_cols"])
         self._update_unvisited()
+        self.observe(self._update_dose, names=["frame_idx", "n_frames", "shape_rows", "shape_cols", "scan_sampling_A"])
+        self._update_dose()
         self.observe(self._on_preset_request, names=["_preset_request"])
         self.observe(self._on_compare_config_change, names=["view_mode", "compare_max_panels", "n_frames",
                                                             "compare_group_mode", "compare_page_idx",
@@ -1403,6 +1409,37 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                     if index is None:
                         raise ValueError("This scan is no longer available; refresh the scan list.")
                     self.frame_idx = index
+
+    def dose(self, frame_idx: int | None = None) -> float | None:
+        """The electron dose of a scan in e-/A^2: mean counts per scan position / (counts per electron x step area).
+
+        The mean diffraction pattern comes from the detector session (quantem.gpu keeps the running count total, so
+        this is one sum of a detector-sized array on the GPU). None without a scan step, or for a display grid made
+        from an off-grid path (``display_pitch``: its pixels repeat visits).
+
+        Examples
+        --------
+        >>> viewer.dose()        # e-/A^2 of the shown scan  # doctest: +SKIP
+        """
+        frame_idx = int(self.frame_idx if frame_idx is None else frame_idx)
+        if self._data is None or len(self.scan_sampling_A) != 2 or min(self.scan_sampling_A) <= 0:
+            return None
+        metadata = getattr(self._frame_source(frame_idx), "metadata", None) or {}
+        if "display_pitch" in metadata:
+            return None
+        per_electron = float(metadata.get("counts_per_electron", 1.0) or 1.0)
+        mean = self._session(frame_idx).mean_pattern()
+        total = float(mean.sum(dtype=np.float64)) if hasattr(mean, "sum") else float(np.sum(np.asarray(mean), dtype=np.float64))
+        row_A, col_A = (float(value) for value in self.scan_sampling_A)
+        return total / (per_electron * row_A * col_A)
+
+    def _update_dose(self, _change=None) -> None:
+        """The shown scan's dose for the stats row (left of Mean); None when it cannot be known."""
+        try:
+            value = self.dose() if 0 <= int(self.frame_idx) < max(1, int(self.n_frames)) else None
+        except Exception:                          # a scan still arriving or released: no number rather than a wrong one
+            value = None
+        self.dose_e_per_A2 = None if value is None or not np.isfinite(value) else float(value)
 
     def _update_unvisited(self, _change=None) -> None:
         """Send the positions of the shown scan its path never visited, read from its ``visits_per_position``."""

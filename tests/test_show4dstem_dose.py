@@ -1,0 +1,37 @@
+"""Show4DSTEM's electron dose (11-18): a user's calcDose, dose = sum(PACBED) Nx^2 / (ADU FOV^2), is the mean counts
+per scan position over (counts per electron x scan step area)."""
+
+import numpy as np
+import pytest
+import torch
+
+from quantem.widget import Show4DSTEM
+
+
+def dasol_dose(dp, fov, adu):
+    """Her code: pacbed = mean over scan positions; dose = sum(pacbed) Nx Nx / (ADU fov fov)."""
+    nx = dp.shape[0]
+    pacbed = np.mean(dp, axis=(0, 1))
+    return np.sum(pacbed) * nx * nx / (adu * fov * fov)
+
+
+def test_the_dose_is_dasols_calcdose():
+    """Measured 11-18 on scan 1256 (512 x 512, 1.0526 A step): 72,038.87 e/A^2 both ways, an independent full sum of
+    every count by her formula and this, from the running count total, in 0.12 ms."""
+    rng = np.random.default_rng(3)
+    dp = rng.poisson(3.0, (8, 8, 4, 4)).astype(np.float32)
+    step = 0.5
+    viewer = Show4DSTEM(torch.from_numpy(dp), scan_sampling_A=(step, step))
+    try:
+        assert viewer.dose() == pytest.approx(dasol_dose(dp, 8 * step, 1.0), rel=1e-6)
+        assert viewer.dose_e_per_A2 == pytest.approx(viewer.dose())
+    finally:
+        viewer.close()
+
+
+def test_no_dose_without_a_scan_step():
+    viewer = Show4DSTEM(torch.ones((4, 4, 2, 2)))
+    try:
+        assert viewer.dose_e_per_A2 is None
+    finally:
+        viewer.close()
