@@ -1425,9 +1425,12 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             return {}
         index = int(self.frame_idx if frame_idx is None else frame_idx)
         try:
-            metadata = getattr(self._frame_source(index), "metadata", None)
+            source = self._frame_source(index)
         except (IndexError, KeyError, TypeError):
             return {}
+        metadata = getattr(source, "metadata", None)
+        if not isinstance(metadata, dict):          # a live scan is an AcquisitionView: its acquisition holds it
+            metadata = getattr(getattr(source, "source", None), "metadata", None)
         return metadata if isinstance(metadata, dict) else {}
 
     def dose(self, frame_idx: int | None = None) -> float | None:
@@ -1444,7 +1447,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         frame_idx = int(self.frame_idx if frame_idx is None else frame_idx)
         if self._data is None or len(self.scan_sampling_A) != 2 or min(self.scan_sampling_A) <= 0:
             return None
-        metadata = getattr(self._frame_source(frame_idx), "metadata", None) or {}
+        metadata = self.frame_metadata(frame_idx)
         if "display_pitch" in metadata:
             return None
         per_electron = float(metadata.get("counts_per_electron", 1.0) or 1.0)

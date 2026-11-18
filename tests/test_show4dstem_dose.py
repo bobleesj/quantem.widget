@@ -46,3 +46,17 @@ def test_source_lines_and_frame_metadata():
     assert (viewer.source_folder, viewer.source_file) == ("", "")
     viewer.source_folder, viewer.source_file = "/data/live/2026-11-18", "not saved (live)"
     assert isinstance(viewer.frame_metadata(), dict)
+
+
+def test_frame_metadata_reads_a_live_scans_acquisition(monkeypatch):
+    """A live scan is an AcquisitionView without metadata of its own: its acquisition (``.source``) holds it
+    (measured on Buffle 11-18: the folder and file lines stayed empty)."""
+    from types import SimpleNamespace
+
+    import numpy as np
+    from quantem.widget import Show4DSTEM
+
+    viewer = Show4DSTEM(np.zeros((4, 4, 8, 8), np.float32))
+    view = SimpleNamespace(source=SimpleNamespace(metadata={"series": "series_1440"}))
+    monkeypatch.setattr(viewer, "_frame_source", lambda index: view)
+    assert viewer.frame_metadata()["series"] == "series_1440"
