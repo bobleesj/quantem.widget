@@ -39,7 +39,7 @@ def test_other_scans_bring_their_size_into_view_as_before():
     follower.of_shown_size([grid])
     smaller = Scan((256, 256, 192, 192), complete=False)
     assert follower.of_shown_size([grid, smaller]) == [smaller]
-    frame = Scan((1, 65536, 192, 192), complete=False, visits=(256, 256))     # a Live frame of another size
+    frame = Scan((1, 16384, 192, 192), complete=False, visits=(128, 128))     # a Live frame of another size
     assert follower.of_shown_size([grid, smaller, frame]) == [frame]
     _, first = _follower()
     only = Scan((1, 4096, 192, 192), complete=False, visits=(64, 64))
