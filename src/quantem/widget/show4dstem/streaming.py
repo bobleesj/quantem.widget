@@ -21,9 +21,17 @@ STREAM_FOLLOW_PAUSE_S = 1.5
 STREAM_RETRY_S = 1.0
 
 
+#: A MAPED tilt's scan name: series time, place in the series, tilt in mrad and the 0/90 pair's rotation.
+MAPED_TILT = re.compile(r"^maped_\d{8}-\d{6}_(\d+)of(\d+)_x-?[\d.]+_y-?[\d.]+mrad(?:_rot(\d+(?:\.\d+)?))?$")
+
+
 def short_scan_name(name) -> str:
-    """A scan's name as the viewer prints it: its number ("41" for "series_41", "41_rot90" for "series_41_rot90");
-    any other name unchanged. The same rule as the page's shortScanName (js/show4dstem/viewLabels.ts)."""
+    """A scan's name as the viewer prints it: its number ("41" for "series_41", "41_rot90" for "series_41_rot90"), a
+    MAPED tilt's place ("tilt 7/7" for "maped_20261118-223651_7of7_x0.0_y0.0mrad"; its file line names the whole
+    tilt); any other name unchanged. The same rule as the page's shortScanName (js/show4dstem/viewLabels.ts)."""
+    tilt = MAPED_TILT.match(str(name))
+    if tilt:
+        return f"tilt {tilt[1]}/{tilt[2]}" + (f" rot{tilt[3]}" if tilt[3] else "")
     return re.sub(r"^series_(\d+)", r"\1", str(name))
 
 
