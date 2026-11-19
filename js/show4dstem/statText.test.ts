@@ -14,7 +14,9 @@ describe("stats line", () => {
     expect(formatStat(0)).toBe("0");
     expect(formatStat(0.187)).toBe("0.187");
     expect(formatStat(19)).toBe("19.00");
-    expect(formatStat(2.73e-5)).toBe("2.73e-5");
+    expect(formatStat(2.73e-5)).toBe("2.73×10⁻⁵");
+    expect(formatStat(13600)).toBe("1.36×10⁴");
+    expect(formatStat(-27700)).toBe("-2.77×10⁴");
   });
 
   it("reads a mean far below the spread as zero", () => {
@@ -23,9 +25,9 @@ describe("stats line", () => {
   });
 
   it("keeps a mean that is small but real", () => {
-    expect(formatMean(2.73e-5, 0.041)).toBe("2.73e-5");
+    expect(formatMean(2.73e-5, 0.041)).toBe("2.73×10⁻⁵");
     expect(formatMean(1.31, 2.53)).toBe("1.31");
-    expect(formatMean(2.44e-11, 0)).toBe("2.44e-11");
+    expect(formatMean(2.44e-11, 0)).toBe("2.44×10⁻¹¹");
   });
 
   it("writes a large dose as two digits and a power of ten", () => {

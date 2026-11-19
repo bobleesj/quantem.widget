@@ -115,7 +115,7 @@ describe("the scan arriving", () => {
     const frame = { scan: "a", rows: 8, cols: 4, total: 8, detRows: 2, detCols: 2, mode: "Direct", com_unit: "mrad" };
     const info = liveInfo(frame)!;
     expect(info).toEqual({ scan: "a", total: 8, cols: 4, detRows: 2, detCols: 2, mode: "Direct", comUnit: "mrad",
-      images: [], diffractionOnly: false, sourceId: "", frozen: false });
+      images: [], diffractionOnly: false, sourceId: "", frozen: false, dpcRotationDeg: null });
     expect(sameLiveInfo(info, liveInfo({ ...frame, rows: 3 }))).toBe(true);
     expect(sameLiveInfo(info, liveInfo({ ...frame, scan: "b" }))).toBe(false);
     expect(liveInfo({})).toBeNull();
