@@ -18,6 +18,9 @@ export function createLiveImage() {
   let received = 0;
   let version = 0;
   let changedFrom = Infinity, changedTo = 0;
+  // The last image of each size: a scan of another size than the one before it (512 x 512 after Live at 128 x 128)
+  // starts on the last image of its own size, not on nothing (11-18: it built up over black).
+  const lastOfSize = new Map<number, Float32Array>();
   return {
     /** Write one batch. `under` gives the image to start a new scan on when there is no scan before of
      *  this size (the rows received so far over the previous image), or null. False for a batch that cannot be used. */
@@ -31,8 +34,11 @@ export function createLiveImage() {
           // A path, not rows: over the scan before, a star or a sparse point list could not be told from it (11-17).
           data = new Float32Array(total).fill(NaN);
         } else if (!data || data.length !== total) {
-          const seed = under();
-          data = seed && seed.length === total ? Float32Array.from(seed) : new Float32Array(total).fill(NaN);
+          if (data) lastOfSize.set(data.length, data);
+          const kept = lastOfSize.get(total);
+          const seed = kept ? null : under();
+          data = kept ?? (seed && seed.length === total ? Float32Array.from(seed) : new Float32Array(total).fill(NaN));
+          lastOfSize.delete(total);
         }
         scan = message.scan;
         generation = firstGeneration = message.generation;
@@ -69,6 +75,8 @@ export function createLiveImage() {
       version += 1;
       return true;
     },
+    /** Forget the images kept for other sizes: scans were cleared, and the next scan is not drawn over them. */
+    forget() { lastOfSize.clear(); },
     scan: () => scan,
     data: () => data,
     /** Positions of this scan (and detector area) written so far. */

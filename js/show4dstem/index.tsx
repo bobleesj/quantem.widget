@@ -2550,7 +2550,8 @@ function Show4DSTEM() {
       } else if (content?.type === "live_image_rows") {
         if (liveRows.write(content as RowsMessage, floatValues(buffers?.[0]))) changed();
       } else if (content?.type === "live_image_clear") {
-        liveRows.clear();
+liveRows.clear();
+        liveImagePositions.forget();
         changed();
       }
     };

@@ -21,6 +21,19 @@ describe("live image positions", () => {
     expect(Array.from(live.data()!)).toEqual([1, 9, 9, 9, 9, 9]);
   });
 
+  it("draws a scan of another size over the last image of its own size", () => {
+    const live = createLiveImage();
+    live.write(...batch("a", 1, 0, [1, 2, 3, 4, 5, 6]));                 // a scan
+    live.write(...batch("live_1", 1, 0, [9, 9], 2));                      // Live, smaller
+    live.write(...batch("b", 1, 0, [7, 8]));                              // the next scan
+    expect(Array.from(live.data()!)).toEqual([7, 8, 3, 4, 5, 6]);
+    live.write(...batch("live_2", 1, 0, [5], 2));                         // and Live again: over its last frame
+    expect(Array.from(live.data()!)).toEqual([5, 9]);
+    live.forget();                                                        // scans cleared
+    live.write(...batch("c", 1, 0, [1]));
+    expect(Number.isNaN(live.data()![1])).toBe(true);
+  });
+
   it("draws a new scan over the scan before, never over nothing", () => {
     const live = createLiveImage();
     live.write(...batch("a", 1, 0, [1, 2, 3, 4, 5, 6]));
