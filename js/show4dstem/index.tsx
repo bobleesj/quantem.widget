@@ -2,7 +2,7 @@
 import { captureGpuCanvas } from "./captureGpuCanvas";
 import { createLatestFrameQueue } from "./latestFrameQueue";
 import { chosenFrameIndex, createScanChoice } from "./scanChoice";
-import { formatMean, formatStat } from "./statText";
+import { formatDose, formatMean, formatStat } from "./statText";
 import { isLiveFrame, keptScanCount, positionLabelAnchor, shortScanName, titleNamesScan } from "./viewLabels";
 import { createLiveImage, positionIndices, positionValues, type PositionsMessage } from "./liveImagePositions";
 import {
@@ -9727,7 +9727,7 @@ function Show4DSTEM() {
           {showStats && !viPanelLoading && <Subscribe store={viDisplayStore}>{({ stats: viStats }) => viStats.length === 4 && (
             <Box sx={statsBarSx}>
               {dose != null && Number.isFinite(dose) && <Typography sx={statsShownSx}
-                title={`Electron dose ${dose} e⁻/Å²: mean counts per scan position ÷ (counts per electron × scan step area)`}>Dose <Box component="span" sx={statsValueSx}>{dose >= 100 ? dose.toFixed(0) : dose >= 1 ? dose.toFixed(1) : dose.toPrecision(2)} e⁻/Å²</Box></Typography>}
+                title={`Electron dose ${Math.round(dose).toLocaleString("en-US")} e⁻/Å²: mean counts per scan position ÷ (counts per electron × scan step area)`}>Dose <Box component="span" sx={statsValueSx}>{formatDose(dose)} e⁻/Å²</Box></Typography>}
               <Typography sx={statsShownSx} title={`Mean ${viStats[0]}`}>Mean <Box component="span" sx={statsValueSx}>{formatMean(viStats[0], viStats[3])}</Box></Typography>
               <Typography sx={statsShownSx}>Min <Box component="span" sx={statsValueSx}>{formatStat(viStats[1])}</Box></Typography>
               <Typography sx={statsShownSx}>Max <Box component="span" sx={statsValueSx}>{formatStat(viStats[2])}</Box></Typography>

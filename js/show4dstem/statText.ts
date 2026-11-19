@@ -19,3 +19,16 @@ export function formatStat(value: number | null | undefined): string {
 export function formatMean(mean: number | null | undefined, std: number | null | undefined): string {
   return mean !== null && mean !== undefined && std !== null && std !== undefined && std > 0 && Math.abs(mean) < std * 1e-6 ? "0" : formatStat(mean);
 }
+
+const SUPERSCRIPT = "⁰¹²³⁴⁵⁶⁷⁸⁹";
+
+/** The electron dose as a microscopist writes it: two digits and a power of ten from 1000 up ("3.4×10⁵"), so
+ *  the size is read at a glance (344612 was a number to count the digits of); smaller doses stay plain. */
+export function formatDose(dose: number): string {
+  if (!Number.isFinite(dose)) return "–";
+  if (dose < 1) return dose.toPrecision(2);
+  if (dose < 100) return dose.toFixed(1);
+  if (dose < 1000) return dose.toFixed(0);
+  const [mantissa, exponent] = dose.toExponential(1).split("e+");
+  return `${mantissa}×10${[...exponent].map((digit) => SUPERSCRIPT[Number(digit)]).join("")}`;
+}
