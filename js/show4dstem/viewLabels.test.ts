@@ -45,5 +45,7 @@ describe("viewer labels", () => {
     const tilt = "maped_20261118-222131_7of7_x0.0_y0.0mrad";
     expect(titleNamesScan(`Live · ${tilt} · 262,144/262,144 ✓ · 7 kept`, tilt)).toBe(true);
     expect(titleNamesScan(`Live · ${tilt} · 7 kept`, "maped_20261118-222131_5of7_x-8.5_y-14.7mrad")).toBe(false);
+    expect(titleNamesScan("Live · tilt 7/7 · 262,144/262,144 ✓ · 7 kept", "tilt 7/7")).toBe(true);
+    expect(titleNamesScan("Live · tilt 7/7 · 7 kept", "tilt 7/70")).toBe(false);
   });
 });

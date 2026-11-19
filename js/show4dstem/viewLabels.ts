@@ -1,5 +1,11 @@
-/** A scan's name as the viewer prints it: its number ("41" for "series_41"); any other name unchanged. */
+/** A MAPED tilt's scan name: series time, place in the series, tilt in mrad and the 0/90 pair's rotation. */
+const MAPED_TILT = /^maped_\d{8}-\d{6}_(\d+)of(\d+)_x-?[\d.]+_y-?[\d.]+mrad(?:_rot(\d+(?:\.\d+)?))?$/;
+
+/** A scan's name as the viewer prints it: its number ("41" for "series_41"), a MAPED tilt's place ("tilt 7/7");
+ *  any other name unchanged. */
 export function shortScanName(name: string): string {
+  const tilt = MAPED_TILT.exec(name);
+  if (tilt) return `tilt ${tilt[1]}/${tilt[2]}` + (tilt[3] ? ` rot${tilt[3]}` : "");
   return name.replace(/^series_(\d+)/, "$1");
 }
 
@@ -29,8 +35,8 @@ export function positionLabelAnchor(
   return { x, y };
 }
 
-/** True when the title already names this scan as one of its words ("Live · series_13 · …" names "series_13", not "series_1";
+/** True when the title already names this scan, as whole words ("Live · series_13 · …" names "series_13", not "series_1";
  *  a MAPED tilt's name keeps its dots and dashes: "maped_20261118-222131_7of7_x0.0_y0.0mrad"). */
 export function titleNamesScan(title: string | undefined, name: string | undefined): boolean {
-  return Boolean(title && name) && title!.split(/\s+/).includes(name!);
+  return Boolean(title && name) && ` ${title!.replace(/\s+/g, " ")} `.includes(` ${name!} `);
 }

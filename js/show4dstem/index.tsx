@@ -8478,7 +8478,7 @@ function Show4DSTEM() {
       <span title={displayedTitle} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {displayedTitle}</span>
       <RenderPathBadge colors={themeColors} />
-      {nFrames > 1 && !streaming && !isLiveFrame(frameNames?.[frameIdx]) && !titleNamesScan(title, frameNames?.[frameIdx])
+      {nFrames > 1 && !streaming && !isLiveFrame(frameNames?.[frameIdx]) && !titleNamesScan(title, frameNames?.[frameIdx]) && !titleNamesScan(title, frameLabels?.[frameIdx])
         && <span style={{ fontWeight: "normal", fontSize: 13, marginLeft: 8, opacity: 0.7 }}>({frameLabels && frameLabels.length > frameIdx ? frameLabels[frameIdx] : `${frameDimLabel} ${frameIdx + 1}/${nFrames}`})</span>}
       {panelChromeVisible && <InfoTooltip text={<Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
         <MetadataSection rows={[
