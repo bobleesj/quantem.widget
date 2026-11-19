@@ -9,7 +9,7 @@ from quantem.widget.show4dstem.streaming import StreamFollower
 class Scan:
     def __init__(self, shape, complete=True, visits=False):
         self.shape, self.complete = shape, complete
-        self.metadata = {"scan_positions": [0]} if visits else {}
+        self.metadata = {"scan_positions": [0], "scan_positions_shape": list(visits)} if visits else {}
 
 
 def _follower():
@@ -21,14 +21,14 @@ def test_the_image_in_view_stays_while_a_visits_scan_arrives_completes_or_is_abo
     viewer, follower = _follower()
     grid = Scan((512, 512, 192, 192))
     assert follower.of_shown_size([grid]) == [grid]
-    arriving = Scan((1, 262144, 192, 192), complete=False, visits=True)
+    arriving = Scan((1, 262144, 192, 192), complete=False, visits=(512, 512))
     assert follower.of_shown_size([grid, arriving]) == [grid]
     assert follower.arriving is arriving and viewer.size_groups == []      # counted in the title; no size tab for it
     arriving.complete = True                                # whole, its grid not made yet
     assert follower.of_shown_size([grid, arriving]) == [grid] and follower.arriving is None
     its_grid = Scan((512, 512, 192, 192))
     assert follower.of_shown_size([grid, arriving, its_grid]) == [grid, its_grid]
-    second = Scan((1, 262144, 192, 192), complete=False, visits=True)
+    second = Scan((1, 262144, 192, 192), complete=False, visits=(512, 512))
     assert follower.of_shown_size([grid, arriving, its_grid, second]) == [grid, its_grid]
     assert follower.of_shown_size([grid, arriving, its_grid]) == [grid, its_grid]      # aborted: the image is still there
 
@@ -39,6 +39,8 @@ def test_other_scans_bring_their_size_into_view_as_before():
     follower.of_shown_size([grid])
     smaller = Scan((256, 256, 192, 192), complete=False)
     assert follower.of_shown_size([grid, smaller]) == [smaller]
+    frame = Scan((1, 65536, 192, 192), complete=False, visits=(256, 256))     # a Live frame of another size
+    assert follower.of_shown_size([grid, smaller, frame]) == [frame]
     _, first = _follower()
-    only = Scan((1, 4096, 192, 192), complete=False, visits=True)
+    only = Scan((1, 4096, 192, 192), complete=False, visits=(64, 64))
     assert first.of_shown_size([only]) == [only]            # nothing else to show
