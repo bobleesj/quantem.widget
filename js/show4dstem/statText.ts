@@ -1,3 +1,8 @@
+/** A complete set of measured [mean, min, max, std] values, including an all-zero image. */
+export function hasImageStats(stats: readonly number[] | null | undefined): stats is readonly number[] {
+  return stats?.length === 4 && stats.every(Number.isFinite);
+}
+
 /** A statistic as the stats line shows it: two or three decimals, scientific notation for very small or large values. */
 export function formatStat(value: number | null | undefined): string {
   // No statistic yet (the scans in view were just replaced by those of another size): a dash, never a throw

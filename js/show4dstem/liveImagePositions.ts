@@ -75,8 +75,17 @@ export function createLiveImage() {
       version += 1;
       return true;
     },
-    /** Forget the images kept for other sizes: scans were cleared, and the next scan is not drawn over them. */
-    forget() { lastOfSize.clear(); },
+    /** Discard the active image and its underlays when the scan memory is cleared. */
+    forget() {
+      lastOfSize.clear();
+      scan = null;
+      generation = firstGeneration = -1;
+      data = null;
+      received = 0;
+      changedFrom = Infinity;
+      changedTo = 0;
+      version += 1;
+    },
     scan: () => scan,
     data: () => data,
     /** Positions of this scan (and detector area) written so far. */

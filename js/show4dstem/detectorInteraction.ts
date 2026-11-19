@@ -1,5 +1,17 @@
 export type DetectorRoiMode = "point" | "circle" | "square" | "rect" | "annular" | "off";
 
+/** Identify the preset matching a detector centered on the bright-field disk, including edge-clipped ADF. */
+export function detectorPreset(
+  mode: string, inner: number, outer: number, diskRadius: number, reach: number,
+): "bf" | "abf" | "adf" | null {
+  const radius = Math.max(1, diskRadius);
+  if (mode === "circle" && outer === radius) return "bf";
+  if (mode !== "annular") return null;
+  if (inner === radius / 2 && outer === radius) return "abf";
+  if (inner === radius && reach - radius >= 1 && outer === Math.min(2 * radius, reach)) return "adf";
+  return null;
+}
+
 type DetectorResizeGeometry = {
   radius?: number;
   radiusInner?: number;

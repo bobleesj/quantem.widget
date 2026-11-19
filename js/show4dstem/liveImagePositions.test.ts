@@ -30,6 +30,10 @@ describe("live image positions", () => {
     live.write(...batch("live_2", 1, 0, [5], 2));                         // and Live again: over its last frame
     expect(Array.from(live.data()!)).toEqual([5, 9]);
     live.forget();                                                        // scans cleared
+    expect(live.data()).toBeNull();
+    expect(live.scan()).toBeNull();
+    live.write(...batch("live_3", 1, 0, [3], 2));                       // same size as the cleared active image
+    expect(Number.isNaN(live.data()![1])).toBe(true);
     live.write(...batch("c", 1, 0, [1]));
     expect(Number.isNaN(live.data()![1])).toBe(true);
   });

@@ -91,12 +91,12 @@ test("FFT reads the selected current comparison panel, not the single-image stre
   const factory = memo.arguments[0] as ts.ArrowFunction;
   const select = new Function("comparisonImageView", "compareMode", "displayedCompareVirtualImageBytes",
     "comparePanelIndices", "frameIdx", "shapeRows", "shapeCols", "frontendVirtualImageBytes",
-    "virtualImageBytes", "activeViSource", "liveImage", "blankUnvisited", "unvisited",
+    "virtualImageBytes", "activeViSource", "liveImage", "restoringLive", "blankUnvisited", "unvisited",
     `return (${factory.getText(tree)})();`);
   const placeholder = new DataView(new Float32Array([NaN, NaN]).buffer);
   const original = new DataView(new Float32Array([99, 3, 4, 1, 2, 99]).buffer, 4, 16);
-  const read = (stack: DataView, indices: number[], frame: number, multiple = true) => select(
-    comparisonImageView, multiple, stack, indices, frame, 1, 2, null, placeholder, "roi", null,
+  const read = (stack: DataView, indices: number[], frame: number, multiple = true, restoring = false) => select(
+    comparisonImageView, multiple, stack, indices, frame, 1, 2, null, placeholder, "roi", null, restoring,
     blankUnvisited, null,
   ) as DataView;
   const selected = read(original, [1, 0], 0);
@@ -106,6 +106,7 @@ test("FFT reads the selected current comparison panel, not the single-image stre
   const next = read(updated, [0, 1], 0);
   expect([...new Float32Array(next.buffer, next.byteOffset, 2)]).toEqual([5, 6]);
   expect(read(updated, [0, 1], 0, false)).toBe(placeholder);
+  expect(read(updated, [0, 1], 0, false, true)).toBeNull();
   expect(comparisonImageView(updated, [0, 1], 2, 1, 2)).toBeNull();
   expect(comparisonImageView(new DataView(new ArrayBuffer(0)), [0], 0, 1, 2)).toBeNull();
 });

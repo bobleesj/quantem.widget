@@ -121,8 +121,7 @@ class StreamFollower:
             # is looked at, so the visits never take an image's place in the view
             # (whatever its grid's size: it is drawn at its own size over the image in view; with a rule for equal
             # sizes only, a 1024 x 1024 scan after 512 x 512 ones began blank, its first pass over black)
-            record = getattr(newest, "metadata", None) or {}
-            visits = (shapes[-1][0] == 1 and record.get("scan_positions") is not None
+            visits = (self._raw_visits(newest, shapes[-1])
                       and self.shown_shape is not None and self.shown_shape[0] != 1)
             if visits and self.shown_shape in shapes:
                 seen = self.newest_source
@@ -130,8 +129,9 @@ class StreamFollower:
             else:
                 self.shown_shape = shapes[-1]
         self.newest_source = seen
-        # the size tabs name the sizes that have something to show: not the one of a scan still arriving alone
-        listed = [shape for source, shape in zip(sources, shapes) if source is not self.arriving]
+        # Offer the gridded result in the size tabs once it is available.
+        listed = [shape for source, shape in zip(sources, shapes)
+                  if shape == self.shown_shape or not self._raw_visits(source, shape)]
         self.size_shapes = list(dict.fromkeys(reversed(listed)))
         several = len(self.size_shapes) > 1
         labels = [_size_label(shape, listed.count(shape)) for shape in self.size_shapes] if several else []
@@ -141,6 +141,12 @@ class StreamFollower:
         if viewer.size_group != index:
             viewer.size_group = index
         return [source for source, shape in zip(sources, shapes) if shape == self.shown_shape]
+
+    @staticmethod
+    def _raw_visits(source, shape: tuple) -> bool:
+        if not shape or shape[0] != 1:
+            return False
+        return (getattr(source, "metadata", None) or {}).get("scan_positions") is not None
 
     def choose_size(self, change) -> None:
         """A size tab was clicked: the scans of that size come into view at the next refresh."""
@@ -218,17 +224,19 @@ class StreamFollower:
                 return True
             with self.lock, viewer._defer_stream_observers():
                 sources = self.snapshot()
+                if self.partial:
+                    # Detector headers can announce a new size before its first pattern.
+                    # Leave the previous acquisition drawable until the new size has pixels.
+                    sources = [source for source in sources if source.received]
+                switch_size = False
                 if not sources:
                     self.of_shown_size(sources)         # no scans: no size tabs
                 if sources:
                     # One viewer holds one scan and detector shape: a scan of another size replaces the others and
                     # the scans of its size are shown (2026-11-16: a 256 x 256 scan after 512 x 512 ones stopped the
                     # live page: 'Live sessions must share scan/detector shape')
-                    kept = self.of_shown_size(sources)
-                    if self.shown_sources and _shape_of(self.shown_sources[-1]) != self.shown_shape:
-                        viewer._replace_stream_sources(self.shown_sources, [])
-                        self.shown_sources, self.previous, self.initialized = [], None, False
-                    sources = kept
+                    sources = self.of_shown_size(sources)
+                    switch_size = bool(self.shown_sources and _shape_of(self.shown_sources[-1]) != self.shown_shape)
                 shown = len(self.shown_sources)
                 if not sources:
                     if self.shown_sources:
@@ -239,18 +247,10 @@ class StreamFollower:
                         # the next completed scan may have another shape: it sets the geometry again
                         self.initialized = False
                     return not complete
-                if not self.initialized and self.partial and not sources[0].received:
-                    return not complete
-                if (self.partial and self.shown_sources and sources[-1] is not self.shown_sources[-1]
-                        and not sources[-1].received):
-                    # The next scan has no pattern yet: the last one stays shown until its first arrives. Shown at
-                    # once, the probe read a position not yet received and the pattern went black between scans
-                    # (the operator, 11-18).
-                    return not complete
-                if viewer._data is None:
+                if viewer._data is None or switch_size:
                     with viewer.hold_sync(), viewer.hold_trait_notifications():
-                        viewer._replace_stream_sources([], sources, labels=self.labels)
-                        if not self.initialized:
+                        viewer._replace_stream_sources(self.shown_sources, sources, labels=self.labels)
+                        if not self.initialized or switch_size:
                             viewer._initialize_stream_geometry(sources[0], self.options)
                             self.initialized = True
                     self.previous = None
@@ -302,23 +302,7 @@ class StreamFollower:
                     self.follow_probe(sources[shown - 1])
                 viewer.refresh()
                 if self.partial:
-                    current = arriving if arriving is not None else sources[shown - 1]
-                    grid_of = current.metadata.get("grid_of")
-                    scan = grid_of or current.metadata.get("series", shown)
-                    # One short line that never wraps beside a control panel; the counts are in the stats bar.
-                    done = " ✓" if current.received == current.total else ""
-                    counts = f"{current.received:,}/{current.total:,}{done}"
-                    visits = current.metadata.get("scan_positions")
-                    if grid_of and visits is not None:
-                        counts = f"{len(visits):,} visits"
-                    frame = live_frame_number(scan)
-                    if frame is not None:
-                        # a Live frame replaces the one before and is never kept: no count of kept scans
-                        viewer.title = f"Live · frame {frame} · {counts}"
-                    else:
-                        kept = sum(live_frame_number(source.metadata.get("series", "")) is None
-                                   for source in sources[:shown])
-                        viewer.title = f"Live · {short_scan_name(scan)} · {counts} · {kept} kept"
+                    self.update_title()
                 else:
                     viewer.title = self.options.get("title") or getattr(self.recording, "title", None) or self.title
                 self.previous = progress
@@ -335,6 +319,28 @@ class StreamFollower:
             if force:
                 raise
             return False
+
+    def update_title(self) -> None:
+        """Name the arriving visit scan or the dataset selected in the viewer."""
+        viewer = self.viewer
+        index = viewer.frame_idx
+        if not self.partial or not 0 <= index < len(self.shown_sources):
+            return
+        current = self.arriving if self.arriving is not None else self.shown_sources[index]
+        grid_of = current.metadata.get("grid_of")
+        scan = grid_of or current.metadata.get("series", index + 1)
+        done = " ✓" if current.received == current.total else ""
+        counts = f"{current.received:,}/{current.total:,}{done}"
+        visits = current.metadata.get("scan_positions")
+        if grid_of and visits is not None:
+            counts = f"{len(visits):,} visits"
+        frame = live_frame_number(scan)
+        if frame is not None:
+            viewer.title = f"Live · frame {frame} · {counts}"
+        else:
+            kept = sum(live_frame_number(source.metadata.get("series", "")) is None
+                       for source in self.shown_sources)
+            viewer.title = f"Live · {short_scan_name(scan)} · {counts} · {kept} kept"
 
     def follow_probe(self, current) -> None:
         """Point the diffraction pattern at the newest arrived pattern of the scan being received, unless the

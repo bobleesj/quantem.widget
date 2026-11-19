@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { formatNumber } from "../format";
-import { formatDose, formatMean, formatStat } from "./statText";
+import { formatDose, formatMean, formatStat, hasImageStats } from "./statText";
 
 describe("stats line", () => {
+  it("needs real values before showing a row and keeps measured zeros", () => {
+    expect(hasImageStats(null)).toBe(false);
+    expect(hasImageStats([])).toBe(false);
+    expect(hasImageStats([0, 0, Infinity, NaN])).toBe(false);
+    expect(hasImageStats([0, 0, 0, 0])).toBe(true);
+  });
+
   it("shows a dash for a statistic that is not there yet, and never throws", () => {
     expect(formatStat(undefined)).toBe("–");
     expect(formatStat(null)).toBe("–");

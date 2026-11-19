@@ -11,10 +11,14 @@ import { isLiveFrame } from "./viewLabels";
 export type RowsMessage = {
   type?: string; scan: string; image: string; first_row: number; rows: number; cols: number; total: number;
   upsample?: number; under?: boolean;
+  completed_direct_generation?: string;
+  /** A raw CoM row delta and its float32 mean and calibration scale for the measured prefix. */
+  com_centering?: [mean: number, scale: number];
 };
 
 export type LiveRowImage = {
   name: string; scan: string; rows: number; cols: number; factor: number;
+  completedGeneration?: string;
   /** rows * factor by cols * factor */
   data: Float32Array;
   /** rows by cols: `data` itself at factor 1, else the mean over each factor x factor block */
@@ -28,13 +32,28 @@ export type LiveFrame = {
   rows?: number; cols?: number; total?: number; detRows?: number; detCols?: number; mode?: string;
   upsample?: number; scan?: string; com_unit?: string; images?: string[];
   diffraction_only?: boolean; source_id?: string; frozen?: boolean; dpc_rotation_deg?: number;
+  visit_path?: boolean;
+  region?: [row0: number, col0: number, row1: number, col1: number];
+  point?: boolean;
+  source_received_utc?: string;
+  scan_sampling_A?: [row: number, col: number];
+  completed_direct_generation?: string;
+  completed_direct_failed?: boolean;
   phase?: DataView; dp?: DataView; roi?: DataView; com_row?: DataView; com_col?: DataView; dpc?: DataView;
+  waiting_for_direct_stripes?: boolean;
 };
 
 /** What the view needs to know about the scan arriving; it changes once per scan, not with every row. */
 export type LiveInfo = {
   scan: string; total: number; cols: number; detRows: number; detCols: number; mode: string; comUnit: string; images: string[];
   diffractionOnly: boolean; sourceId: string; frozen: boolean;
+  visitPath?: boolean;
+  regional?: boolean;
+  sourceReceivedUtc?: string;
+  scanSamplingA?: [row: number, col: number];
+  completedGeneration?: string;
+  completedDirectFailed?: boolean;
+  waitingForDirectStripes: boolean;
   /** The rotation DPC was integrated with (degrees), from the receiver; null when not known. */
   dpcRotationDeg: number | null;
 };
@@ -44,10 +63,20 @@ export function liveInfo(frame: LiveFrame | undefined | null): LiveInfo | null {
   if (!frame?.detRows || !frame.detCols || !frame.total || !frame.cols) return null;
   const images = FRAME_IMAGES.filter(([field, name]) => name !== "roi"
     && (frame[field] || (Array.isArray(frame.images) && frame.images.includes(name)))).map(([, name]) => name);
+  const sampling = frame.scan_sampling_A;
+  const calibrated = Array.isArray(sampling) && sampling.length === 2
+    && sampling.every(step => Number.isFinite(step) && step > 0);
   return { scan: String(frame.scan ?? ""), total: Math.round(frame.total), cols: Math.round(frame.cols),
            detRows: Math.round(frame.detRows), detCols: Math.round(frame.detCols), mode: String(frame.mode ?? ""),
            comUnit: String(frame.com_unit ?? ""), images, diffractionOnly: Boolean(frame.diffraction_only),
            sourceId: frame.source_id ?? "", frozen: Boolean(frame.frozen),
+           ...(frame.visit_path && { visitPath: true }),
+           ...(frame.region?.length === 4 && !frame.point && { regional: true }),
+           ...(frame.source_received_utc && { sourceReceivedUtc: frame.source_received_utc }),
+           ...(calibrated && { scanSamplingA: sampling }),
+           completedGeneration: frame.completed_direct_generation,
+           ...(frame.completed_direct_failed && { completedDirectFailed: true }),
+           waitingForDirectStripes: Boolean(frame.waiting_for_direct_stripes),
            dpcRotationDeg: typeof frame.dpc_rotation_deg === "number" && Number.isFinite(frame.dpc_rotation_deg)
              ? frame.dpc_rotation_deg : null };
 }
@@ -57,6 +86,12 @@ export function sameLiveInfo(a: LiveInfo | null, b: LiveInfo | null): boolean {
   return a.scan === b.scan && a.total === b.total && a.cols === b.cols && a.detRows === b.detRows
     && a.detCols === b.detCols && a.mode === b.mode && a.comUnit === b.comUnit
     && a.diffractionOnly === b.diffractionOnly && a.sourceId === b.sourceId && a.frozen === b.frozen
+    && a.visitPath === b.visitPath && a.regional === b.regional
+    && a.sourceReceivedUtc === b.sourceReceivedUtc
+    && a.scanSamplingA?.[0] === b.scanSamplingA?.[0] && a.scanSamplingA?.[1] === b.scanSamplingA?.[1]
+    && a.completedGeneration === b.completedGeneration
+    && a.completedDirectFailed === b.completedDirectFailed
+    && a.waitingForDirectStripes === b.waitingForDirectStripes
     && a.dpcRotationDeg === b.dpcRotationDeg
     && a.images.length === b.images.length && a.images.every((name, index) => name === b.images[index]);
 }
@@ -93,7 +128,18 @@ const FRAME_IMAGES: [keyof LiveFrame, string][] = [
   ["roi", "roi"], ["com_row", "COM_row"], ["com_col", "COM_col"], ["dpc", "DPC"],
 ];
 
+type ComRows = {
+  scan: string;
+  cols: number;
+  total: number;
+  values: Float32Array;
+  measured: number;
+  mean: number;
+  scale: number;
+};
+
 export function createLiveRows() {
+  const rawCom = new Map<string, ComRows>();
   const images = new Map<string, LiveRowImage>();
   const dirty = new Map<string, [number, number]>();
   let version = 0;
@@ -108,6 +154,12 @@ export function createLiveRows() {
     const factor = Math.max(1, Math.round(message.upsample ?? 1));
     if (!values || !message.image || !message.scan || !(total > 0) || !(cols > 0) || !(first >= 0) || !(count > 0)
         || first + count > total || values.length < count * factor * cols * factor) return false;
+    const centering = message.com_centering;
+    const previous = rawCom.get(message.image);
+    const sameRaw = previous?.scan === message.scan && previous.cols === cols && previous.total === total;
+    if (centering && ((message.image !== "COM_row" && message.image !== "COM_col")
+        || factor !== 1 || message.under || !Number.isFinite(centering[0]) || !Number.isFinite(centering[1])
+        || (first > 0 && (!sameRaw || previous.measured !== first)))) return false;
     let image = images.get(message.image);
     if (!image || image.rows !== total || image.cols !== cols || image.factor !== factor) {
       const data = new Float32Array(total * factor * cols * factor).fill(NaN);
@@ -120,9 +172,31 @@ export function createLiveRows() {
     }
     const width = cols * factor;
     const length = count * factor * width;
-    image.data.set(values.length === length ? values : values.subarray(0, length), first * factor * width);
+    const received = values.length === length ? values : values.subarray(0, length);
+    if (centering) {
+      const [mean, scale] = centering;
+      const raw = sameRaw ? previous : {
+        scan: message.scan, cols, total, values: new Float32Array(total * cols), measured: 0, mean, scale,
+      };
+      raw.values.set(received, first * cols);
+      const changedFrom = raw.mean === mean && raw.scale === scale ? first : 0;
+      const end = first + count;
+      // Round after subtraction to match NumPy's float32 operation order.
+      // Rows beyond the acquired prefix keep their previous image or NaN.
+      for (let index = changedFrom * cols; index < end * cols; index++) {
+        image.data[index] = Math.fround(raw.values[index] - mean) * scale;
+      }
+      Object.assign(raw, { measured: end, mean, scale });
+      rawCom.set(message.image, raw);
+      image.measured = end;
+      mark(message.image, changedFrom, end);
+      return true;
+    }
+    rawCom.delete(message.image);
+    image.data.set(received, first * factor * width);
     if (factor > 1) binRows(image.data, image.grid, cols, factor, first, first + count);
     if (!message.under) image.measured = Math.max(image.measured, first + count);
+    image.completedGeneration = message.completed_direct_generation;
     mark(message.image, first, first + count);
     return true;
   };
@@ -163,7 +237,12 @@ export function createLiveRows() {
       return rows;
     },
     /** Forget every image: scans were cleared, and the next scan is not drawn over them. */
-    clear() { images.clear(); dirty.clear(); version += 1; },
+    clear() { rawCom.clear(); images.clear(); dirty.clear(); version += 1; },
+    forget(name: string) {
+      rawCom.delete(name);
+      if (images.delete(name)) version += 1;
+      dirty.delete(name);
+    },
     /** Counts every write: a drawing is current while this has not changed. */
     version: () => version,
   };
@@ -174,6 +253,11 @@ export type LiveRows = ReturnType<typeof createLiveRows>;
 /** A same-size Live frame keeps the preceding Live pixels while its own rows are in flight. */
 export function liveImageAvailable(image: LiveRowImage | null, preview: LiveInfo): boolean {
   if (!image) return false;
+  // A Region always streams detector data, even if its rectangle has the same shape as the last Full phase.
+  if (image.name === "Direct" && preview.regional) return false;
+  if (image.name === "Direct" && (image.completedGeneration || preview.completedGeneration)) {
+    return Boolean(image.completedGeneration && image.completedGeneration === preview.completedGeneration);
+  }
   return image.scan === preview.scan
     || (image.name === "Direct" && preview.mode === "Direct")
     || (image.measured > 0 && isLiveFrame(image.scan) && isLiveFrame(preview.scan));

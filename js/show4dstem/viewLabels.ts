@@ -14,6 +14,20 @@ export function isLiveFrame(name: string | undefined): boolean {
   return /^live_\d+$/.test(name ?? "");
 }
 
+/** Separate the changing frame number from the Live heading so its width can be held steady. */
+export function splitLiveFrameTitle(title: string): { frame: string; detail: string } | null {
+  const match = /^Live · frame (\d+)( · .*|)$/.exec(title);
+  return match ? { frame: match[1], detail: match[2] } : null;
+}
+
+/** The region map shows its retained full field until a regional image arrives. */
+export function virtualImageGridLabel(
+  rows: number, cols: number, regionMapSize: number | null, showingRegion: boolean,
+): string {
+  if (regionMapSize !== null && !showingRegion) return `${regionMapSize}×${regionMapSize}`;
+  return `${rows}×${cols}`;
+}
+
 /** The scans a viewer keeps: its scans less the Live frame, which is never kept. */
 export function keptScanCount(names: string[] | undefined, count: number): number {
   return Math.max(0, count - (names ?? []).filter(isLiveFrame).length);
@@ -39,4 +53,63 @@ export function positionLabelAnchor(
  *  a MAPED tilt's name keeps its dots and dashes: "maped_20261118-222131_7of7_x0.0_y0.0mrad"). */
 export function titleNamesScan(title: string | undefined, name: string | undefined): boolean {
   return Boolean(title && name) && ` ${title!.replace(/\s+/g, " ")} `.includes(` ${name!} `);
+}
+
+export type PreviewSource = {
+  scan?: string;
+  received_utc?: string;
+  file?: string;
+  folder?: string;
+};
+
+/** Match the scan segment of the Python or browser Live title, including a retained scan's grid. */
+function liveTitleNamesScan(title: string, scan: string | undefined): boolean {
+  if (!scan) return false;
+  const name = title.split(" · ", 2)[1];
+  if (isLiveFrame(scan)) return name === `frame ${scan.slice("live_".length)}`;
+  return name === shortScanName(scan) || name === shortScanName(scan.replace(/_grid$/, ""));
+}
+
+function incomingSaveStatus(title: string): string {
+  const progress = title.split(" · ", 3)[2];
+  const counts = /^(\d[\d,]*)\/(\d[\d,]*)$/.exec(progress ?? "");
+  return counts && counts[1] !== counts[2] ? "not saved (live)" : "";
+}
+
+/** The file follows the scan named in the heading, even before the first preview rows are drawn. */
+export function sourcePathForView(
+  preview: { scan: string; sourceReceivedUtc?: string } | null,
+  previewSource: PreviewSource | undefined,
+  retainedFolder: string,
+  retainedFile: string,
+  retainedMatches = true,
+  heading?: { title: string; retainedScan?: string; showingPreview: boolean },
+): string {
+  const liveTitle = heading?.title.startsWith("Live · ") ? heading.title : "";
+  if (preview && (!heading || heading.showingPreview || (liveTitle && liveTitleNamesScan(liveTitle, preview.scan)))) {
+    if (!preview.sourceReceivedUtc || preview.scan !== previewSource?.scan
+        || preview.sourceReceivedUtc !== previewSource.received_utc) return incomingSaveStatus(liveTitle);
+    retainedFolder = previewSource.folder ?? "";
+    retainedFile = previewSource.file ?? "";
+  } else if (!retainedMatches || (liveTitle && !liveTitleNamesScan(liveTitle, heading?.retainedScan))) {
+    return incomingSaveStatus(liveTitle);
+  }
+  if (!retainedFile) return "";
+  if (retainedFile.startsWith("not saved")) return retainedFile;
+  return retainedFolder ? `${retainedFolder}/${retainedFile}` : retainedFile;
+}
+
+/** The fast diffraction trait has no scan ID. Only a point frame carrying the displayed
+ * pattern in its own payload can identify that pattern's specimen position. */
+export function diffractionPositionLabel(
+  frame: {point?: boolean; region?: number[]; dp?: DataView} | null | undefined,
+  displayed: DataView | null,
+  row: number, col: number,
+): string {
+  if (!frame?.point) return `DP at (${Math.round(row)}, ${Math.round(col)})`;
+  const area = frame.region;
+  if (displayed && displayed === frame.dp && area?.length === 4 &&
+      area.every(n => Number.isInteger(n) && n >= 0) && area[2] === area[0]+1 && area[3] === area[1]+1)
+    return `Point diffraction at (${area[0]}, ${area[1]})`;
+  return "Point diffraction";
 }
