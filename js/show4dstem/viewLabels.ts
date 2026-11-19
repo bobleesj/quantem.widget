@@ -29,7 +29,8 @@ export function positionLabelAnchor(
   return { x, y };
 }
 
-/** True when the title already names this scan as one of its words ("Live · series_13 · …" names "series_13", not "series_1"). */
+/** True when the title already names this scan as one of its words ("Live · series_13 · …" names "series_13", not "series_1";
+ *  a MAPED tilt's name keeps its dots and dashes: "maped_20261118-222131_7of7_x0.0_y0.0mrad"). */
 export function titleNamesScan(title: string | undefined, name: string | undefined): boolean {
-  return Boolean(title && name) && title!.split(/[^A-Za-z0-9_]+/).includes(name!);
+  return Boolean(title && name) && title!.split(/\s+/).includes(name!);
 }
