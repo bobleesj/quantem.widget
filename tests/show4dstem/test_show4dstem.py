@@ -178,6 +178,24 @@ def test_stream_opens_on_the_first_acquisition_and_appends_the_rest_as_they_comp
             acquisition.close()
 
 
+def test_stream_selects_the_arriving_visits_and_then_the_assembled_grid():
+    from types import SimpleNamespace
+
+    from quantem.widget.show4dstem.streaming import StreamFollower
+
+    viewer = SimpleNamespace(size_groups=[], size_group=0)
+    previous = SimpleNamespace(shape=(8, 8, 16, 16), complete=True)
+    visits = SimpleNamespace(shape=(144, 1, 16, 16), complete=False)
+    grid = SimpleNamespace(shape=(12, 12, 16, 16), complete=True)
+    follower = StreamFollower(viewer, object(), [previous], labels=None, refresh_s=0.05, options={})
+
+    assert follower.of_shown_size([previous]) == [previous]
+    assert follower.of_shown_size([previous, visits]) == [visits]
+    assert viewer.size_group == 0
+    assert follower.of_shown_size([previous, grid]) == [grid]
+    assert viewer.size_group == 0
+
+
 def test_an_attached_phase_stays_with_its_scan_as_a_stream_grows(tmp_path, accelerator):
     """attach("Direct", ...) puts a scan's phase beside its detector images; scans that arrive later show none (NaN)
     until theirs is attached, and each keeps its own."""
@@ -883,14 +901,17 @@ def test_presets_stop_at_the_detector_edge_and_refuse_a_ring_beyond_it(capsys):
         assert 8.5 < radius < 9.5 and (widget.bright_field_center_row_px, widget.bright_field_center_col_px) == (15.5, 15.5)
         capsys.readouterr()
         widget.apply_preset("adf")
+        assert widget._detector_preset_revision == 1
         assert (widget.roi_radius_inner, widget.roi_radius) == (pytest.approx(radius), 16.0)  # the edge, not 2x the radius
         assert f"ADF outer radius is 16.0 px, the detector edge, not {2 * radius:.1f} px" in capsys.readouterr().out
         widget.apply_preset("haadf")  # 2x the radius is past the edge: refused, the ROI stays on ADF
+        assert widget._detector_preset_revision == 1
         assert (widget.roi_mode, widget.roi_radius_inner, widget.roi_radius) == ("annular", pytest.approx(radius), 16.0)
         printed = capsys.readouterr().out
         assert f"HAADF starts {2 * radius:.1f} px from the bright-field centre, but this detector reaches 16.0 px" in printed
         assert "haadf" not in widget._preset_images
         widget.apply_preset("bf")
+        assert widget._detector_preset_revision == 2
         assert (widget.roi_radius_inner, widget.roi_radius) == (0.0, pytest.approx(radius)) and capsys.readouterr().out == ""
     finally:
         widget.close()

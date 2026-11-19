@@ -56,3 +56,49 @@ def test_each_resize_grip_follows_a_finger(widget, jupyter, open_page, browser_o
     assert [error for error in page.errors if "debugger session" not in error] == [], page.errors
     # The finger moved 60 px right and down; each grip (the panel's corner) follows by most of it.
     assert all(dx >= 30 for dx in moved), f"{widget}: grips moved {moved} px under a 60 px finger drag"
+
+
+def test_embedded_show4dstem_can_shrink_a_panel_below_the_desktop_minimum(jupyter, open_page, browser_out):
+    notebook = "finger_resize_show4dstem_portrait.ipynb"
+    jupyter.write_notebook(notebook, """
+import ipywidgets as widgets
+import numpy as np
+from quantem.widget import Show4DSTEM
+
+viewer = Show4DSTEM(np.ones((8, 8, 32, 32), np.float32), device="cpu", embedded=True,
+                    dp_panel_width_px=320, vi_panel_width_px=900)
+viewer.layout.flex = "1 1 auto"
+viewer.layout.min_width = "0"
+widgets.HBox([widgets.HTML("ARINA", layout=widgets.Layout(flex="0 0 246px")), viewer],
+             layout=widgets.Layout(width="100%"))
+""")
+    page = jupyter.open(open_page, notebook, "finger-show4dstem-portrait", webgpu=True,
+                        ready="[data-show4dstem-resize=vi]", out=browser_out, collapse_input=True)
+    page.set_viewport_size({"width": 768, "height": 1024})
+    if page.locator("#jp-left-stack").is_visible():
+        page.keyboard.press("ControlOrMeta+b")
+    cdp = page.context.new_cdp_session(page)
+    cdp.send("Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 5})
+    canvas_widths = """() => ['diffraction-pattern', 'virtual-image'].map(name =>
+      document.querySelector('[data-quantem-scientific-output="show4dstem-' + name + '"]').getBoundingClientRect().width)"""
+    page.wait_for_function(f"() => ({canvas_widths})().every(width => width > 160 && width < 240)")
+    fitted = page.evaluate(canvas_widths)
+    for index in range(2):
+        if index:
+            jupyter.run_in_kernel(notebook, "viewer.dp_panel_width_px = 320; viewer.vi_panel_width_px = 900")
+            page.wait_for_function(f"width => ({canvas_widths})()[0] === width", arg=fitted[0])
+        x, y, reachable = page.evaluate(GRIP_AT, index)
+        assert reachable
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]})
+        for step in range(1, 8):
+            location = {"x": x - 5 * step, "y": y - 5 * step}
+            cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [location]})
+            page.wait_for_timeout(12)
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+        page.wait_for_function(f"([index, fitted]) => ({canvas_widths})()[index] < fitted", arg=[index, fitted[index]])
+        boxes = page.locator('[data-quantem-scientific-output="show4dstem-diffraction-pattern"], '
+                             '[data-quantem-scientific-output="show4dstem-virtual-image"]').evaluate_all(
+            "elems => elems.map(e => { const b = e.getBoundingClientRect(); return [b.top, b.left, b.right]; })"
+        )
+        assert abs(boxes[0][0] - boxes[1][0]) < 32  # The compact toolbars can take different heights.
+        assert boxes[0][2] <= boxes[1][1] + 1 and boxes[1][2] <= 768, boxes

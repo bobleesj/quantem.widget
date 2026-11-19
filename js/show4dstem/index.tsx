@@ -1,15 +1,19 @@
+import { measuredPointDose } from "./pointDose";
+import { LiveScanRegion, type RegionImage } from "./liveScanRegion";
 /// <reference types="@webgpu/types" />
 import { captureGpuCanvas } from "./captureGpuCanvas";
 import { createLatestFrameQueue } from "./latestFrameQueue";
 import { chosenFrameIndex, createScanChoice } from "./scanChoice";
-import { formatDose, formatMean, formatStat } from "./statText";
-import { isLiveFrame, keptScanCount, positionLabelAnchor, shortScanName, titleNamesScan } from "./viewLabels";
+import { formatDose, formatMean, formatStat, hasImageStats } from "./statText";
+import { diffractionPositionLabel, isLiveFrame, keptScanCount, positionLabelAnchor, shortScanName, splitLiveFrameTitle, sourcePathForView, titleNamesScan, virtualImageGridLabel, type PreviewSource } from "./viewLabels";
 import { createLiveImage, positionIndices, positionValues, type PositionsMessage } from "./liveImagePositions";
 import {
   CONTRAST_PERCENTILES, chosenPercentiles, contrastRangeChoice, handlePositions, percentilesLabel,
   percentilesOfChoice, type Percentiles,
 } from "./contrastRange";
 import { createDpPointerOwner } from "./dpPointerOwner";
+import { createPanelPan, isPanelPan, schedulePanelView, zoomPanelAt } from "./panelPan";
+import { createPreviewHover } from "./previewHover";
 import * as React from "react";
 import { createRender, useModelState, useModel } from "@anywidget/react";
 import { readSettledCompareHistogram } from "./settledHistogram";
@@ -27,6 +31,7 @@ import IconButton from "@mui/material/IconButton";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import PauseIcon from "@mui/icons-material/Pause";
 import StopIcon from "@mui/icons-material/Stop";
+import PanToolOutlinedIcon from "@mui/icons-material/PanToolOutlined";
 import FastRewindIcon from "@mui/icons-material/FastRewind";
 import FastForwardIcon from "@mui/icons-material/FastForward";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
@@ -84,6 +89,7 @@ import { Histogram } from "../shared/Histogram";
 import { Subscribe, ValueStore, useChangedState } from "../shared/valueStore";
 import {
   CIRCLE_HANDLE_ANGLE,
+  detectorPreset,
   canvasToMask,
   clampDetectorCenter,
   grabDetector,
@@ -155,6 +161,7 @@ type Show4DSTEMModel = ReturnType<typeof useModel>;
 
 const HOVER_PRESETS = ["bf", "abf", "adf"] as const;
 type HoverPreset = typeof HOVER_PRESETS[number];
+type HoverPrefix = { source: string; scan: string; start: number; stop: number; at?: boolean; total?: number };
 
 function isHoverPreset(source: string | null): source is HoverPreset {
   return HOVER_PRESETS.some(preset => preset === source);
@@ -168,7 +175,7 @@ function usePresetPreview(
   const view = React.useMemo(detectorViewId, []);
   const request = React.useRef(0);
   const pending = React.useRef(0);
-  const onResult = React.useRef<((request: number, bytes?: DataView) => void) | null>(null);
+  const onResult = React.useRef<((request: number, buffers?: DataView[], prefix?: HoverPrefix) => void) | null>(null);
   const scanRef = React.useRef(scan);
   scanRef.current = scan;
   const context = preset ? [preset, scan ? "live" : sourceId || frame, rows, cols, detRows, detCols].join("|") : "";
@@ -178,6 +185,8 @@ function usePresetPreview(
     let current = 0;
     let timer = 0;
     let tried = 0;
+    let latest: { source: string; scan: string; received: number; image: Float32Array } | null = null;
+    let refreshMs = 250;
     const send = () => {
       if (!pending.current) {
         pending.current = current = ++request.current;
@@ -185,13 +194,39 @@ function usePresetPreview(
         const frame = Number(model.get("frame_idx") ?? 0);
         model.send({ type: "show4dstem_preset_preview", view, request: current, preset,
           scan: scanRef.current ?? null, frame, source_id: model.get("_stream_source_ids")?.[frame] ?? "",
+          prefix: true, after_source: latest?.source, after: latest?.received,
           shape: [rows, cols, detRows, detCols] });
       }
-      timer = window.setTimeout(send, 250);
+      timer = window.setTimeout(send, refreshMs);
     };
-    onResult.current = (id, bytes) => {
+    onResult.current = (id, buffers, prefix) => {
       if (id !== current) return;
-      if (bytes?.byteLength === rows * cols * 4) setPreview({ context, bytes });
+      const bytes = buffers?.[0];
+      if (prefix) {
+        const { source, scan, start, stop } = prefix;
+        const limit = prefix.at ? prefix.total ?? 0 : rows * cols;
+        if (!Number.isInteger(start) || !Number.isInteger(stop) || start < 0 || stop <= start || stop > limit) return;
+        const values = positionValues(bytes, stop - start);
+        const at = prefix.at ? positionIndices(buffers?.[1], stop - start) : null;
+        if (prefix.at && !at) return;
+        if (!values || (start > 0 && (latest?.source !== source || latest.received !== start))) return;
+        if (start === 0) {
+          const image = latest && isLiveFrame(latest.scan) && isLiveFrame(scan)
+            ? latest.image.slice() : new Float32Array(rows * cols).fill(NaN);
+          latest = { source, scan, received: 0, image };
+        }
+        if (!latest) return;
+        if (at) {
+          for (let index = 0; index < at.length; index++) latest.image[at[index]] = values[index];
+        } else {
+          latest.image.set(values, start);
+        }
+        latest.received = stop;
+        refreshMs = 50;
+        setPreview({ context, bytes: new DataView(latest.image.buffer) });
+      } else if (bytes?.byteLength === rows * cols * 4) {
+        setPreview({ context, bytes });
+      }
       if (!scanRef.current && (bytes?.byteLength || tried >= 2)) window.clearTimeout(timer);
     };
     timer = window.setTimeout(send, 50);
@@ -203,11 +238,11 @@ function usePresetPreview(
   }, [model, view, context, preset, rows, cols, detRows, detCols]);
   // Release a request even if the pointer leaves before its result arrives.
   React.useEffect(() => {
-    const receive = (message: { type?: string; view?: string; request?: number }, buffers?: DataView[]) => {
+    const receive = (message: { type?: string; view?: string; request?: number; prefix?: HoverPrefix }, buffers?: DataView[]) => {
       if (message.type === "show4dstem_preset_preview_result" && message.view === view
           && message.request && message.request === pending.current) {
         pending.current = 0;
-        onResult.current?.(message.request, buffers?.[0]);
+        onResult.current?.(message.request, buffers, message.prefix);
       }
     };
     model.on("msg:custom", receive);
@@ -1199,8 +1234,8 @@ function drawProfileOverlay(
  * it so they agree with the WebGPU image on signed data (DPC, phase); a log of
  * the clamped value would map every negative pixel to zero.
  */
-function displayLogScale(values: Float32Array): Float32Array {
-  const scaled = new Float32Array(values.length);
+function displayLogScale(values: Float32Array, buffer?: Float32Array | null): Float32Array {
+  const scaled = buffer && buffer.length >= values.length ? buffer.subarray(0, values.length) : new Float32Array(values.length);
   for (let i = 0; i < values.length; i++) scaled[i] = displayLog(values[i]);
   return scaled;
 }
@@ -2454,9 +2489,56 @@ function useLatestCallback<A extends unknown[], R>(fn: (...args: A) => R): (...a
   return React.useCallback((...args: A) => ref.current(...args), []);
 }
 
+function useProfileSamples(
+  points: { row: number; col: number }[], pixels: DataView | null | undefined,
+  rows: number, cols: number, span: number, source: string,
+  publish: (data: Float32Array | null) => void,
+) {
+  const queue = React.useRef<ReturnType<typeof createLatestFrameQueue> | null>(null);
+  const sample = useLatestCallback(async (current: () => boolean) => {
+    if (points.length !== 2 || pixels?.byteLength !== rows * cols * 4) return;
+    const [first, last] = points;
+    const data = new Float32Array(pixels.buffer, pixels.byteOffset, rows * cols);
+    const result = await sampleLineProfileBrowser(data, cols, rows, first.row, first.col, last.row, last.col, span);
+    if (current()) publish(result);
+  });
+  React.useLayoutEffect(() => {
+    const sampler = createLatestFrameQueue(sample, error => console.error("[Show4DSTEM] Line profile failed", error));
+    queue.current = sampler;
+    return () => { sampler.close(); queue.current = null; };
+  }, [sample]);
+  React.useLayoutEffect(() => { queue.current?.invalidate(); }, [source, rows, cols]);
+  React.useEffect(() => {
+    if (points.length === 2 && pixels?.byteLength === rows * cols * 4) {
+      queue.current?.request();
+    } else {
+      queue.current?.invalidate();
+      publish(null);
+    }
+  }, [points, pixels, rows, cols, span, source, publish]);
+}
+
 // ============================================================================
 // Main Component
 // ============================================================================
+type LiveDetectorView = {
+  scan: string;
+  mode: string;
+  active: boolean;
+  preset?: string;
+  centerRow: number;
+  centerCol: number;
+  radius: number;
+  inner: number;
+  width: number;
+  height: number;
+  bfRow: number;
+  bfCol: number;
+  bfRadius: number;
+  samplingMrad: number[];
+  samplingInvA: number[];
+};
+
 function Show4DSTEM() {
   // Direct model access for batched updates
   const model = useModel();
@@ -2469,6 +2551,8 @@ function Show4DSTEM() {
   const [liveStream] = useModelState<boolean>("live_phase_stream");
   const [viSource, setViSource] = useModelState<string>("vi_source");
   const [hoverSource, setHoverSource] = React.useState<string | null>(null);
+  const previewHover = React.useMemo(() => createPreviewHover(setHoverSource), []);
+  React.useEffect(() => previewHover.cancel, [previewHover]);
   const requestedHoverProduct = hoverSource && !isHoverPreset(hoverSource) ? hoverSource : null;
   // The scan arriving. Its pixels never pass through React state: a new pattern or new rows are written into
   // arrays kept here and drawn once per animation frame, and the component renders only when the scan itself
@@ -2495,6 +2579,7 @@ function Show4DSTEM() {
   const liveImageUnderRef = React.useRef<Float32Array | null>(null);
   React.useEffect(() => {
     let frame = 0, drawnRows = -1, drawnPositions = -1, patternDrawn = true, ticked = 0, settle = 0;
+    let lastCompleteGeneration: string | undefined;
     const tick = () => {
       setLivePattern(livePatternRef.current);
       setLiveImageTick(count => count + 1);
@@ -2522,6 +2607,12 @@ function Show4DSTEM() {
     const onFrame = () => {
       const next = model.get("live_phase_preview") as LiveFrame | undefined;
       const info = liveInfo(next);
+      if (info?.completedGeneration !== lastCompleteGeneration) {
+        // Whole phases and the existing stripes are separate sources, even
+        // when their scan dimensions and user-selected source are unchanged.
+        liveRows.forget("Direct");
+        lastCompleteGeneration = info?.completedGeneration;
+      }
       if (info) {
         liveRows.writeFrame(next);
         // The frame's own pattern shows until the first of the fast ones is there.
@@ -2548,10 +2639,18 @@ function Show4DSTEM() {
         if (values && (!message.at || at)
             && liveImagePositions.write(message, values, () => liveImageUnderRef.current, at)) changed();
       } else if (content?.type === "live_image_rows") {
-        if (liveRows.write(content as RowsMessage, floatValues(buffers?.[0]))) changed();
+        const message = content as RowsMessage;
+        if (message.com_centering && model.get("live_phase_preview")?.scan !== message.scan) return;
+        if (message.completed_direct_generation &&
+            message.completed_direct_generation !== model.get("live_phase_preview")?.completed_direct_generation) return;
+        if (liveRows.write(message, floatValues(buffers?.[0]))) {
+          if (message.completed_direct_generation) setLiveImageTick(count => count + 1);
+          changed();
+        }
       } else if (content?.type === "live_image_clear") {
-liveRows.clear();
+        liveRows.clear();
         liveImagePositions.forget();
+        liveImageUnderRef.current = null;
         changed();
       }
     };
@@ -2559,6 +2658,12 @@ liveRows.clear();
     model.on("change:live_phase_preview", onFrame);
     model.on("change:live_pattern", onPattern);
     model.on("msg:custom", receive);
+    if (typeof model.get("live_com_subscription") === "string") {
+      // A fresh view needs its own raw prefix, even when a stopped scan has
+      // not published any new rows since the preceding view closed.
+      model.set("live_com_subscription", Math.random().toString(36));
+      model.save_changes();
+    }
     return () => {
       model.off("change:live_phase_preview", onFrame);
       model.off("change:live_pattern", onPattern);
@@ -2577,7 +2682,9 @@ liveRows.clear();
       if (name === "roi") return true;
       return liveImageAvailable(liveRows.get(name, preview.total, preview.cols), preview);
     };
-    const selected = liveShownImage(viSource, liveShownRef.current, sends);
+    const wantsCompletedDirect = viSource === "Direct" && (preview.completedGeneration || preview.waitingForDirectStripes);
+    const selected = wantsCompletedDirect && !sends("Direct")
+      ? "roi" : liveShownImage(viSource, liveShownRef.current, sends);
     return [requestedHoverProduct && sends(requestedHoverProduct) ? requestedHoverProduct : selected, selected];
   }, [liveImageTick, liveRows, preview, requestedHoverProduct, viSource]);
   liveShownRef.current = selectedLiveImage;
@@ -2588,7 +2695,11 @@ liveRows.clear();
   const liveDetectorArray = React.useMemo(() => {
     if (!preview) return null;
     const data = liveImagePositions.data();
-    if (liveImagePositions.scan() === preview.scan && data && data.length === preview.total * preview.cols) return data;
+    const previous = liveImagePositions.scan();
+    // While the next Live frame's first positions are in transit, the completed detector
+    // image is still the background. A slower row preview can be several rows behind.
+    if (data && data.length === preview.total * preview.cols
+        && (previous === preview.scan || (isLiveFrame(previous ?? undefined) && isLiveFrame(preview.scan)))) return data;
     return liveRows.get("roi", preview.total, preview.cols)?.grid ?? null;
   }, [liveImagePositions, liveImageTick, liveRows, preview]);
   const liveImagePositionsShown = Boolean(preview && liveShown === "roi" && liveDetectorArray
@@ -2611,6 +2722,9 @@ liveRows.clear();
     && !(viSource === "Direct" && preview.mode === "Direct") ? viSource : null;
   // A scan is arriving: the view shows it, and the controls that choose another scan wait.
   const streaming = liveImage !== null;
+  // A remounted view may have the frozen descriptor before the kernel resends its rows.
+  const restoringLive = !streaming && Boolean(preview?.frozen && !preview.diffractionOnly);
+  const showingLivePreview = streaming || restoringLive;
   // A Direct phase sent k x the scan grid is drawn at full resolution.
   const liveDetail = React.useMemo<UpsampledImage | null>(() => liveRowImage && liveRowImage.factor > 1
     ? { data: liveRowImage.data, factor: liveRowImage.factor, rows: liveRowImage.rows * liveRowImage.factor,
@@ -2623,16 +2737,32 @@ liveRows.clear();
   const [savedShapeCols] = useModelState<number>("shape_cols");
   const [savedDetRows] = useModelState<number>("det_rows");
   const [savedDetCols] = useModelState<number>("det_cols");
+  const [savedLiveDetectorView] = useModelState<LiveDetectorView>("live_detector_view");
+  const [storedDetectorPreset] = useModelState<string>("_detector_preset_name");
+  const liveDetectorView = showingLivePreview && preview && savedLiveDetectorView?.scan === preview.scan
+    && (preview.detRows !== savedDetRows || preview.detCols !== savedDetCols)
+    ? savedLiveDetectorView : undefined;
+  // The Python model owns the retained detector. Live visits may draw the
+  // same detector at another binning, so gestures are sent in model pixels.
+  const detectorScale = showingLivePreview && preview?.visitPath && savedDetRows > 1 && savedDetCols > 1
+    && preview.detRows / savedDetRows === preview.detCols / savedDetCols ? preview.detRows / savedDetRows : 1;
+  const detectorScaleRef = React.useRef(detectorScale);
+  detectorScaleRef.current = detectorScale;
 
   const [posRow, setPosRow] = useModelState<number>("pos_row");
   const [posCol, setPosCol] = useModelState<number>("pos_col");
-  const [roiCenterCol] = useModelState<number>("roi_center_col");
-  const [roiCenterRow] = useModelState<number>("roi_center_row");
+  const [storedRoiCenterCol] = useModelState<number>("roi_center_col");
+  const [storedRoiCenterRow] = useModelState<number>("roi_center_row");
+  const roiCenterCol = liveDetectorView?.centerCol ?? (storedRoiCenterCol + 0.5) * detectorScale - 0.5;
+  const roiCenterRow = liveDetectorView?.centerRow ?? (storedRoiCenterRow + 0.5) * detectorScale - 0.5;
   // Calibration under the .qem flat names, each [row, col]; an empty list is an uncalibrated axis pair.
   // The scale bars are horizontal, so they measure the column step, and an uncalibrated axis is drawn in pixels.
-  const [scanSamplingA] = useModelState<number[]>("scan_sampling_A");
-  const [detectorSamplingMrad] = useModelState<number[]>("detector_sampling_mrad");
-  const [detectorSamplingInvA] = useModelState<number[]>("detector_sampling_inv_A");
+  const [savedScanSamplingA] = useModelState<number[]>("scan_sampling_A");
+  const scanSamplingA = (showingLivePreview ? preview?.scanSamplingA : undefined) ?? savedScanSamplingA;
+  const [storedDetectorSamplingMrad] = useModelState<number[]>("detector_sampling_mrad");
+  const [storedDetectorSamplingInvA] = useModelState<number[]>("detector_sampling_inv_A");
+  const detectorSamplingMrad = liveDetectorView?.samplingMrad ?? storedDetectorSamplingMrad;
+  const detectorSamplingInvA = liveDetectorView?.samplingInvA ?? storedDetectorSamplingInvA;
   const scanCalibrated = scanSamplingA?.length === 2;
   const pixelSize = scanCalibrated ? scanSamplingA[1] : 1;
   const scanUnit = scanCalibrated ? "angstrom" : "px";
@@ -2644,16 +2774,18 @@ liveRows.clear();
   // only in GPU memory has the folder it will be saved into and "not saved (live)".
   const [sourceFolder] = useModelState<string>("source_folder");
   const [sourceFile] = useModelState<string>("source_file");
+  const [sourceSelection] = useModelState<string | null>("source_selection");
+  const [previewSource] = useModelState<PreviewSource>("preview_source");
   const [showTitle] = useModelState<boolean>("show_title");
 
-  const shapeRows = liveImage && preview ? preview.total : savedShapeRows;
-  const shapeCols = liveImage && preview ? preview.cols : savedShapeCols;
-  const detRows = liveImage && preview ? preview.detRows : savedDetRows;
-  const detCols = liveImage && preview ? preview.detCols : savedDetCols;
+  const shapeRows = showingLivePreview && preview ? preview.total : savedShapeRows;
+  const shapeCols = showingLivePreview && preview ? preview.cols : savedShapeCols;
+  const detRows = showingLivePreview && preview ? preview.detRows : savedDetRows;
+  const detCols = showingLivePreview && preview ? preview.detCols : savedDetCols;
   const [savedFrameBytes] = useModelState<DataView>("frame_bytes");
   // While a scan arrives its newest pattern comes on its own trait, many times a second; the preview's pattern (one
   // per batch of rows) shows until the first of those is there.
-  const receivedFrameBytes = liveImage && preview
+  const receivedFrameBytes = showingLivePreview && preview
     ? (livePattern && livePattern.byteLength === preview.detRows * preview.detCols * 4 ? livePattern : undefined)
     : savedFrameBytes;
   const [virtualImageBytes, setVirtualImageBytes] = useModelState<DataView>("virtual_image_bytes");
@@ -2661,14 +2793,17 @@ liveRows.clear();
   const [viProductLabels] = useModelState<string[]>("vi_product_labels");
   const [unvisitedBytes] = useModelState<DataView>("unvisited_bytes");
   const [dose] = useModelState<number | null>("dose_e_per_A2");
+  const [pointDoseValue] = useModelState<Parameters<typeof measuredPointDose>[0]>("point_dose");
+  const doseFrame = model.get("live_phase_preview");
+  const pointExposure = measuredPointDose(pointDoseValue, doseFrame);
   // Positions a sparse path never visited (a star, random points): drawn blank, whatever image is in view, and so is
   // the pattern at such a position (the scan holds the mean pattern there, which was never measured).
   const unvisited = React.useMemo(() => unvisitedMask(unvisitedBytes, shapeRows, shapeCols),
                                   [unvisitedBytes, shapeRows, shapeCols]);
   const frameBytes = React.useMemo(
-    () => (liveImage ? receivedFrameBytes : unvisitedPattern(receivedFrameBytes, unvisited, posRow * shapeCols + posCol,
+    () => (showingLivePreview ? receivedFrameBytes : unvisitedPattern(receivedFrameBytes, unvisited, posRow * shapeCols + posCol,
                                                              detRows * detCols)),
-    [liveImage, receivedFrameBytes, unvisited, posRow, posCol, shapeCols, detRows, detCols]);
+    [showingLivePreview, receivedFrameBytes, unvisited, posRow, posCol, shapeCols, detRows, detCols]);
   const [viProductMapFrames] = useModelState<number>("vi_product_map_frames");
   const [viProductMapsBytes] = useModelState<DataView>("vi_product_maps_bytes");
   const [viProductStreamedLabels] = useModelState<string[]>("vi_product_streamed");
@@ -2709,19 +2844,30 @@ liveRows.clear();
   const [storedRoiRadiusInner, setRoiRadiusInner] = useModelState<number>("roi_radius_inner");
   const [localRadii, setLocalRadii] = React.useState<[number, number] | null>(null);
   const localRadiiRef = React.useRef<[number, number] | null>(null);
-  const roiRadius = localRadii?.[0] ?? storedRoiRadius;
-  const roiRadiusInner = localRadii?.[1] ?? storedRoiRadiusInner;
-  const [roiMode, setRoiMode] = useModelState<string>("roi_mode");
-  const [roiWidth, setRoiWidth] = useModelState<number>("roi_width");
-  const [roiHeight, setRoiHeight] = useModelState<number>("roi_height");
+  const roiRadius = (preview?.frozen ? liveDetectorView?.radius : localRadii?.[0])
+    ?? liveDetectorView?.radius ?? storedRoiRadius * detectorScale;
+  const roiRadiusInner = (preview?.frozen ? liveDetectorView?.inner : localRadii?.[1])
+    ?? liveDetectorView?.inner ?? storedRoiRadiusInner * detectorScale;
+  const [storedRoiMode, setRoiMode] = useModelState<string>("roi_mode");
+  const [storedRoiWidth, setRoiWidth] = useModelState<number>("roi_width");
+  const [storedRoiHeight, setRoiHeight] = useModelState<number>("roi_height");
+  const roiMode = liveDetectorView?.mode ?? storedRoiMode;
+  const roiWidth = liveDetectorView?.width ?? storedRoiWidth;
+  const roiHeight = liveDetectorView?.height ?? storedRoiHeight;
 
   // VI min/max (viDataMin/viDataMax) are derived JS-side from virtual_image_bytes below.
   // Keeping them out of Python traits avoids a comm-message ordering race where
   // bytes from click N arrive with min/max from click N-1.
 
   // Detector calibration (for presets)
-  const [brightFieldCenterColPx] = useModelState<number>("bright_field_center_col_px");
-  const [brightFieldCenterRowPx] = useModelState<number>("bright_field_center_row_px");
+  const [storedBrightFieldRadiusPx] = useModelState<number>("bright_field_radius_px");
+  const [storedRoiActive] = useModelState<boolean>("roi_active");
+  const [storedBrightFieldCenterColPx] = useModelState<number>("bright_field_center_col_px");
+  const [storedBrightFieldCenterRowPx] = useModelState<number>("bright_field_center_row_px");
+  const brightFieldRadiusPx = liveDetectorView?.bfRadius ?? storedBrightFieldRadiusPx;
+  const roiActive = liveDetectorView?.active ?? storedRoiActive;
+  const brightFieldCenterColPx = liveDetectorView?.bfCol ?? storedBrightFieldCenterColPx;
+  const brightFieldCenterRowPx = liveDetectorView?.bfRow ?? storedBrightFieldCenterRowPx;
 
   // Frame animation state (5D time/tilt series)
   const [frameIdx, setFrameIdxState] = useModelState<number>("frame_idx");
@@ -2881,8 +3027,9 @@ liveRows.clear();
       context: interactionContext(model, detectorContext) });
   }, () => {
     if (dpRoiInteractiveRef.current || roiCenterPendingRef.current) return;
-    setLocalKRow(Number(model.get("roi_center_row")));
-    setLocalKCol(Number(model.get("roi_center_col")));
+    const scale = detectorScaleRef.current;
+    setLocalKRow((Number(model.get("roi_center_row")) + 0.5) * scale - 0.5);
+    setLocalKCol((Number(model.get("roi_center_col")) + 0.5) * scale - 0.5);
   }), [model]);
   React.useEffect(() => {
     const cancel = () => {
@@ -2902,6 +3049,9 @@ liveRows.clear();
   }, [model, centerRequests]);
   // Offline rendering still uses canonical local traits; live requests pipeline one computation.
   const writeRoiCenterModel = React.useCallback((row: number, col: number) => {
+    const scale = detectorScaleRef.current;
+    row = (row + 0.5) / scale - 0.5;
+    col = (col + 0.5) / scale - 0.5;
     if (!model.get("offline") && commLive && model.get("vi_source") === "roi"
         && centerRequests.request(row, col)) {
       return;
@@ -3015,14 +3165,15 @@ liveRows.clear();
     roiRadiusPendingRef.current = null;
     roiRadiusInnerPendingRef.current = null;
     if (Object.keys(updates).length) {
-      const outer = updates.roi_radius ?? localRadiiRef.current?.[0] ?? Number(model.get("roi_radius"));
-      const inner = updates.roi_radius_inner ?? localRadiiRef.current?.[1] ?? Number(model.get("roi_radius_inner"));
+      const scale = detectorScaleRef.current;
+      const outer = updates.roi_radius ?? localRadiiRef.current?.[0] ?? Number(model.get("roi_radius")) * scale;
+      const inner = updates.roi_radius_inner ?? localRadiiRef.current?.[1] ?? Number(model.get("roi_radius_inner")) * scale;
       if (!model.get("offline") && commLive && model.get("vi_source") === "roi"
-          && radiusRequests.request(outer, inner)) {
+          && radiusRequests.request(outer / scale, inner / scale)) {
         localRadiiRef.current = [outer, inner];
         setLocalRadii([outer, inner]);
       } else {
-        for (const [name, radius] of Object.entries(updates)) model.set(name, radius);
+        for (const [name, radius] of Object.entries(updates)) model.set(name, radius / scale);
         model.save_changes();
       }
     }
@@ -4899,7 +5050,7 @@ liveRows.clear();
   // The virtual image's statistics and histogram inputs change with every image. They live in one
   // store that the stats bar and the histogram read, so a new image re-renders those two only.
   const viDisplayStore = React.useMemo(() => new ValueStore<ViDisplayValues>({
-    stats: [0, 0, 0, 0], dataMin: 0, dataMax: 1, histogramData: null, histogramBins: null,
+    stats: [], dataMin: 0, dataMax: 1, histogramData: null, histogramBins: null,
   }), []);
   const setViStats = React.useCallback((stats: number[]) => viDisplayStore.update({ stats }), [viDisplayStore]);
   const setViDataMin = React.useCallback((dataMin: number) => viDisplayStore.update({ dataMin }), [viDisplayStore]);
@@ -4933,7 +5084,7 @@ liveRows.clear();
   const compareGridResizeCleanupRef = React.useRef<(() => void) | null>(null);
   const [compareHiddenMenuAnchor, setCompareHiddenMenuAnchor] = React.useState<HTMLElement | null>(null);
 
-  const compareMode = !liveImage && viewMode === "multiple" && nFrames > 1;
+  const compareMode = !showingLivePreview && viewMode === "multiple" && nFrames > 1;
   const viProductSourceOptions = React.useMemo(() => {
     const seen = new Set<string>();
     const out: string[] = [];
@@ -4942,13 +5093,13 @@ liveRows.clear();
       seen.add(source);
       out.push(source);
     };
-    (Array.isArray(viProductLabels) ? viProductLabels : []).forEach((label) => {
-      add(label);
-    });
+    if (!preview?.visitPath) {
+      (Array.isArray(viProductLabels) ? viProductLabels : []).forEach(add);
+    }
     if (preview?.mode === "Direct") add("Direct");
     preview?.images.forEach(add);
-    if (liveRowImage) add(liveRowImage.name);
-    if (webgpuDpcReady) {
+    if (liveRowImage && !preview?.visitPath) add(liveRowImage.name);
+    if (webgpuDpcReady && !preview?.visitPath) {
       add("DPC_row");
       add("DPC_col");
       add("iDPC");
@@ -4958,10 +5109,14 @@ liveRows.clear();
   const selectedViSource = React.useMemo(() => {
     return viSource === "roi" || viProductSourceOptions.includes(viSource) ? viSource : "roi";
   }, [viProductSourceOptions, viSource]);
-  // The preset clicked last is the image in view: hovering its own button previews nothing (2026-11-18, the operator at
-  // the microscope: resting on the selected button during Live swapped the arriving rows for a preview, back and forth)
-  const [clickedPreset, setClickedPreset] = React.useState<HoverPreset | null>(null);
-  const hoveringSelected = selectedViSource === "roi" && hoverSource === clickedPreset;
+  // Explicit choices keep their labels when a newer fit changes the reference disk.
+  const namedPreset = !offline && (liveDetectorView ? liveDetectorView.preset : storedDetectorPreset) || null;
+  const matchingPreset = roiCenterRow === brightFieldCenterRowPx && roiCenterCol === brightFieldCenterColPx
+    ? detectorPreset(roiMode, roiRadiusInner, roiRadius, brightFieldRadiusPx,
+        Math.min(roiCenterRow + 0.5, detRows - roiCenterRow - 0.5, roiCenterCol + 0.5, detCols - roiCenterCol - 0.5)) : null;
+  const selectedPreset = selectedViSource === "roi" && roiActive
+    ? isHoverPreset(namedPreset) ? namedPreset : matchingPreset : null;
+  const hoveringSelected = hoverSource === selectedPreset;
   const hoverPreset = !offline && !compareMode && !preview?.frozen && !hoveringSelected && isHoverPreset(hoverSource)
     ? hoverSource : null;
   const hoverPresetImage = usePresetPreview(
@@ -4975,16 +5130,22 @@ liveRows.clear();
     ? hoverProduct : null;
   const activeViSource = shownHoverProduct ?? (hoverPresetImage ? "roi" : selectedViSource);
   const hoverLabel = hoverPresetImage ? hoverPreset?.toUpperCase() : undefined;
-  const imageSourceLabel = hoverLabel ?? viSourceLabel(activeViSource);
+  const directPending = !compareMode && Boolean((preview?.completedGeneration || preview?.waitingForDirectStripes)
+    && activeViSource === "Direct" && liveRowImage?.name !== "Direct");
+  const directFallbackLabel = preview?.completedDirectFailed ? "ROI · Direct unavailable" : "ROI · Direct pending";
+  const imageSourceLabel = hoverLabel ?? (directPending ? directFallbackLabel : viSourceLabel(activeViSource));
   const previewEvents = (source: string) => ({
     onPointerEnter: (event: React.PointerEvent<HTMLButtonElement>) => {
-      if (event.pointerType === "mouse" && !event.buttons) setHoverSource(source);
+      if (event.pointerType === "mouse" && !event.buttons) previewHover.show(source);
     },
-    onPointerLeave: () => setHoverSource(previous => previous === source ? null : previous),
+    "data-preview-source": source,
+    onPointerLeave: (event: React.PointerEvent<HTMLButtonElement>) => {
+      if (event.pointerType === "mouse") previewHover.leave(source, event.currentTarget.parentElement, event.relatedTarget);
+    },
     onFocus: (event: React.FocusEvent<HTMLButtonElement>) => {
-      if (event.currentTarget.matches(":focus-visible")) setHoverSource(source);
+      if (event.currentTarget.matches(":focus-visible")) previewHover.show(source);
     },
-    onBlur: () => setHoverSource(previous => previous === source ? null : previous),
+    onBlur: () => previewHover.clear(source),
   });
   // Flip per phase image (2026-11-18, the operator): for DPC it chooses the other 180° branch of the least-curl rotation
   // (rotating by theta + 180 gives the negative phase), for Direct the displayed contrast; each image keeps its own.
@@ -5049,6 +5210,7 @@ liveRows.clear();
   ]);
   const receivedVirtualImageBytes = React.useMemo(() => {
     if (liveImage) return liveImage;
+    if (restoringLive) return null;
     // Multiple-mode streaming sends the current image stack, while the single
     // image trait can still contain its initial NaN placeholder. FFT and line
     // profiles must read the selected displayed panel, including live patches.
@@ -5062,6 +5224,7 @@ liveRows.clear();
   }, [
     unvisited,
     liveImage,
+    restoringLive,
     activeViSource,
     compareMode,
     comparePanelIndices,
@@ -5083,6 +5246,8 @@ liveRows.clear();
   // never black. The live preview's rows already keep what was under them. A notebook viewer draws NaN as before.
   const paintOver = React.useMemo(() => createPaintOver(), []);
   const displayedVirtualImageBytes = React.useMemo(() => {
+    if (restoringLive) return null;
+    if (hoverPresetImage && preview) return hoverPresetImage;
     if (hoverPresetImage || retainedHoverProduct) {
       return blankUnvisited(hoverPresetImage ?? retainedHoverProduct, unvisited, shapeRows, shapeCols);
     }
@@ -5093,7 +5258,7 @@ liveRows.clear();
     // unvisited positions stay blank: painting over would fill them with the scan before
     return blankUnvisited(paintedOver(Boolean(embedded), paintOver, kind, shapeRows, shapeCols, receivedVirtualImageBytes),
                           unvisited, shapeRows, shapeCols);
-  }, [unvisited, activeViSource, compareMode, detCols, detRows, embedded, hoverPresetImage, liveImage, paintOver, receivedVirtualImageBytes, retainedHoverProduct,
+  }, [unvisited, activeViSource, compareMode, detCols, detRows, embedded, hoverPresetImage, liveImage, paintOver, receivedVirtualImageBytes, restoringLive, retainedHoverProduct,
       roiHeight, roiMode, roiWidth, shapeCols, shapeRows, storedRoiRadius, storedRoiRadiusInner]);
   // The image in view at full resolution when it is k x the scan grid: the live Direct preview, or attach()'s
   // image of the shown scan. Hover, profile and FFT keep reading the scan-grid image above.
@@ -5103,7 +5268,7 @@ liveRows.clear();
   const viDetailCacheRef = React.useRef<Map<string, UpsampledImage>>(new Map());
   const viDetailHeldRef = React.useRef<{ shape: string; image: UpsampledImage } | null>(null);
   const viDetailReceived = React.useMemo<UpsampledImage | null>(() => {
-    if (compareMode || hoverPresetImage) return null;
+    if (compareMode || hoverPresetImage || restoringLive) return null;
     if (streaming) return liveDetail;
     const cache = viDetailCacheRef.current;
     const detail = viDetailState;
@@ -5127,7 +5292,7 @@ liveRows.clear();
     }
     const held = viDetailHeldRef.current;
     return held && held.shape === shape && valid ? held.image : null;
-  }, [activeViSource, compareMode, frameIdx, frameNames, hoverPresetImage, liveDetail, shapeCols, shapeRows, streaming, viDetailState]);
+  }, [activeViSource, compareMode, frameIdx, frameNames, hoverPresetImage, liveDetail, restoringLive, shapeCols, shapeRows, streaming, viDetailState]);
   const viDetail = React.useMemo(() => blankUnvisitedDetail(viDetailReceived, unvisited, shapeRows, shapeCols),
                                  [viDetailReceived, unvisited, shapeRows, shapeCols]);
   const viFactor = viDetail?.factor ?? 1;
@@ -5169,6 +5334,9 @@ liveRows.clear();
     return Math.max(SIDE_BY_SIDE_MIN, Math.floor((mainRowWidth - panelGap * (panels - 1)) / panels));
   }, [mainRowWidth, fftDocked, panelGap]);
   const fittedDpWidth = Math.min(dpPanelWidthPx || panelWidthPx || DP_DEFAULT_SIZE, sideBySideLimit);
+  const sharedImageRoom = mainRowWidth > 0
+    ? Math.max(SIDE_BY_SIDE_MIN, Math.floor((mainRowWidth - fittedDpWidth - panelGap * (fftDocked ? 2 : 1)) / (fftDocked ? 2 : 1)))
+    : CANVAS_SIZE;
   const compareGridFit = mainRowWidth > 0
     ? Math.max(SIDE_BY_SIDE_MIN, mainRowWidth - fittedDpWidth * (fftDocked ? 2 : 1) - panelGap * (fftDocked ? 2 : 1))
     : COMPARE_GRID_DEFAULT_WIDTH;
@@ -5280,16 +5448,15 @@ liveRows.clear();
   }, [fittedDpWidth]);
   React.useEffect(() => {
     // The image fills what the diffraction pattern leaves (shared with the FFT); a set width caps it.
-    const rest = mainRowWidth > 0
-      ? Math.max(SIDE_BY_SIDE_MIN, Math.floor((mainRowWidth - fittedDpWidth - panelGap * (fftDocked ? 2 : 1)) / (fftDocked ? 2 : 1)))
-      : CANVAS_SIZE;
     const cap = viPanelWidthPx || panelWidthPx;
     // Linked panels share the row; an independent image keeps its own width (up to the row) and wraps below.
-    const room = (syncResize || liveStream) ? rest : Math.max(rest, mainRowWidth || CANVAS_SIZE);
-    setViCanvasSize(cap ? Math.min(cap, room) : rest);
-  }, [viPanelWidthPx, panelWidthPx, mainRowWidth, fittedDpWidth, fftDocked, syncResize, liveStream, panelGap]);
+    const room = (syncResize || liveStream) ? sharedImageRoom : Math.max(sharedImageRoom, mainRowWidth || CANVAS_SIZE);
+    setViCanvasSize(cap ? Math.min(cap, room) : sharedImageRoom);
+  }, [viPanelWidthPx, panelWidthPx, mainRowWidth, sharedImageRoom, syncResize, liveStream]);
   const [isResizingCanvas, setIsResizingCanvas] = React.useState(false);
-  const [resizeCanvasStart, setResizeCanvasStart] = React.useState<{ x: number; y: number; size: number; panel: "dp" | "vi" } | null>(null);
+  const [resizeCanvasStart, setResizeCanvasStart] = React.useState<{
+    x: number; y: number; size: number; minSize: number; maxSize: number; panel: "dp" | "vi";
+  } | null>(null);
 
   // Export
   const [dpExportAnchor, setDpExportAnchor] = React.useState<HTMLElement | null>(null);
@@ -5559,7 +5726,6 @@ liveRows.clear();
   const profileBaseImageRef = React.useRef<ImageData | null>(null);
   const profileLayoutRef = React.useRef<ProfileLayout | null>(null);
   const profilePoints = profileLine || [];
-  const rawDpDataRef = React.useRef<Float32Array | null>(null);
   const dpClickStartRef = React.useRef<{ x: number; y: number } | null>(null);
   const [draggingDpProfileEndpoint, setDraggingDpProfileEndpoint] = React.useState<0 | 1 | null>(null);
   const [isDraggingDpProfileLine, setIsDraggingDpProfileLine] = React.useState(false);
@@ -5579,7 +5745,6 @@ liveRows.clear();
   const viProfileCanvasRef = React.useRef<HTMLCanvasElement>(null);
   const viProfileBaseImageRef = React.useRef<ImageData | null>(null);
   const viProfileLayoutRef = React.useRef<ProfileLayout | null>(null);
-  const rawViDataRef = React.useRef<Float32Array | null>(null);
 
   const viClickStartRef = React.useRef<{ x: number; y: number } | null>(null);
   const [draggingViProfileEndpoint, setDraggingViProfileEndpoint] = React.useState<0 | 1 | null>(null);
@@ -5603,6 +5768,17 @@ liveRows.clear();
   }), [themeColors]);
 
   // Compute VI canvas dimensions to respect aspect ratio of rectangular scans
+  const [regionMapSize, setRegionMapSize] = React.useState<number | null>(null);
+  const [pointTarget, setPointTarget] = React.useState(false);
+  const [showCumulativeDose, setShowCumulativeDose] = React.useState(false);
+  const setRegionMap = React.useCallback((size: number | null, point = false) => {
+    setRegionMapSize(size);
+    setPointTarget(point);
+  }, []);
+  const viGridLabel = virtualImageGridLabel(
+    shapeRows, shapeCols, pointTarget ? null : regionMapSize, showingLivePreview && !!preview?.regional,
+  );
+  const showingPointDose = pointTarget || Boolean(doseFrame?.point);
   const viCanvasWidth = shapeRows > shapeCols ? Math.round(viCanvasSize * (shapeCols / shapeRows)) : viCanvasSize;
   const viCanvasHeight = shapeCols > shapeRows ? Math.round(viCanvasSize * (shapeRows / shapeCols)) : viCanvasSize;
 
@@ -5613,9 +5789,10 @@ liveRows.clear();
     && (!compareMode || compareDpMode === "selected") && preview.sourceId
     && preview.sourceId === streamSourceIds[chosenFrameIdx]
     && preview.detRows === detRows && preview.detCols === detCols);
-  const liveDp = streaming || liveSelectedDp;
-  const displayedDpBytes = liveSelectedDp && livePattern?.byteLength === detRows * detCols * 4 ? livePattern
-    : !liveImage && usesViRoiDp ? viRoiDpBytes : frameBytes;
+  const liveDp = showingLivePreview || liveSelectedDp;
+  const selectedDpBytes = liveSelectedDp && livePattern?.byteLength === detRows * detCols * 4 ? livePattern
+    : !showingLivePreview && usesViRoiDp ? viRoiDpBytes : frameBytes;
+  const displayedDpBytes = selectedDpBytes?.byteLength === detRows * detCols * 4 ? selectedDpBytes : undefined;
 
   // DP stats (computed JS-side from frame_bytes, not 4 Python traits) and the
   // histogram input derive from the displayed pattern in the render that shows
@@ -5635,15 +5812,6 @@ liveRows.clear();
   dpDerivedRef.current = dpDerived;
   const dpStats = dpDerived.stats;
   const dpHistogramData = dpDerived.histogram;
-  React.useEffect(() => {
-    if (!displayedDpBytes) return;
-    const rawData = new Float32Array(displayedDpBytes.buffer, displayedDpBytes.byteOffset, displayedDpBytes.byteLength / 4);
-    // Store raw data for profile sampling
-    if (!rawDpDataRef.current || rawDpDataRef.current.length !== rawData.length) {
-      rawDpDataRef.current = new Float32Array(rawData.length);
-    }
-    rawDpDataRef.current.set(rawData);
-  }, [displayedDpBytes]);
 
   // GPU FFT state
   const gpuFFTRef = React.useRef<DisplayFFT | null>(null);
@@ -5722,6 +5890,11 @@ liveRows.clear();
   const dpViewRef = React.useRef({ zoom: 1, panX: 0, panY: 0, raf: 0 });
   const viViewRef = React.useRef({ zoom: 1, panX: 0, panY: 0, raf: 0 });
   const fftViewRef = React.useRef({ zoom: 1, panX: 0, panY: 0, raf: 0 });
+  const panelPan = React.useMemo(() => ({ dp: createPanelPan(), vi: createPanelPan() }), []);
+  const [dpPanTool, setDpPanTool] = React.useState(false);
+  const [viPanTool, setViPanTool] = React.useState(false);
+  React.useEffect(() => { if (dpZoom <= 1) setDpPanTool(false); }, [dpZoom]);
+  React.useEffect(() => { if (viZoom <= 1 || regionMapSize) setViPanTool(false); }, [viZoom, regionMapSize]);
   React.useEffect(() => { const view = dpViewRef.current; view.zoom = dpZoom; view.panX = dpPanX; view.panY = dpPanY; }, [dpZoom, dpPanX, dpPanY]);
   React.useEffect(() => { const view = viViewRef.current; view.zoom = viZoom; view.panX = viPanX; view.panY = viPanY; }, [viZoom, viPanX, viPanY]);
   React.useEffect(() => { const view = fftViewRef.current; view.zoom = fftZoom; view.panX = fftPanX; view.panY = fftPanY; }, [fftZoom, fftPanX, fftPanY]);
@@ -5860,6 +6033,8 @@ liveRows.clear();
   const dpUiRef = React.useRef<HTMLCanvasElement>(null);  // High-DPI UI overlay for scale bar
   const dpOffscreenRef = React.useRef<HTMLCanvasElement | null>(null);
   const dpImageDataRef = React.useRef<ImageData | null>(null);
+  const dpNeedsStagingRef = React.useRef(true);
+  const dpLogBufferRef = React.useRef<Float32Array | null>(null);
   const virtualGpuCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const virtualGpuCaptureRef = React.useRef<(() => Promise<HTMLCanvasElement>) | null>(null);
   const virtualGpuContextRef = React.useRef<{ engine: GPUColormapEngine; context: GPUCanvasContext } | null>(null);
@@ -5875,6 +6050,9 @@ liveRows.clear();
   const virtualOverlayRef = React.useRef<HTMLCanvasElement>(null);
   const viUiRef = React.useRef<HTMLCanvasElement>(null);  // High-DPI UI overlay for scale bar
   const viOffscreenRef = React.useRef<HTMLCanvasElement | null>(null);
+  const viOffscreenPhaseOriginRef = React.useRef("");
+  const viPhaseOriginLabelRef = React.useRef<HTMLSpanElement | null>(null);
+  const paintLiveRegion = React.useRef<((image: RegionImage) => void) | null>(null);
   const viImageDataRef = React.useRef<ImageData | null>(null);
   const fftCanvasRef = React.useRef<HTMLCanvasElement>(null);
   const fftOverlayRef = React.useRef<HTMLCanvasElement>(null);
@@ -5950,15 +6128,21 @@ liveRows.clear();
   // For DPC/direct ptychography product maps this is a view into vi_product_maps_bytes, so source
   // switching reuses the static map payload instead of asking Python to resend it.
   React.useEffect(() => {
-    if (!displayedVirtualImageBytes) return;
-    const numFloats = displayedVirtualImageBytes.byteLength / 4;
+    const numFloats = shapeRows * shapeCols;
+    // Dimensions and pixels can arrive in separate comm messages when Live
+    // restarts at a different size. Do not interpret the previous grid's bytes
+    // as the new one; the canvas keeps its last paint until matching data arrives.
+    if (displayedVirtualImageBytes?.byteLength !== numFloats * 4) {
+      rawVirtualImageRef.current = null;
+      if (!compareMode) setViStats([]);
+      return;
+    }
     const rawData = new Float32Array(displayedVirtualImageBytes.buffer, displayedVirtualImageBytes.byteOffset, numFloats);
 
     // Comm payloads are immutable. Retain their view for hover/profile and
     // copy only in operations that mutate their input (such as the FFT).
     rawVirtualImageRef.current = rawData;
     rawVirtualImageVersionRef.current += 1;
-    rawViDataRef.current = rawData;
 
     // Compute stats + min/max JS-side (replaces removed Python vi_stats / vi_data_min / vi_data_max traits).
     // Python sending bytes + 4 separate stat traits caused a comm-message ordering race on rapid
@@ -5979,7 +6163,7 @@ liveRows.clear();
       }
     }
 
-  }, [activeViSource, compareMode, displayedVirtualImageBytes]);
+  }, [activeViSource, compareMode, displayedVirtualImageBytes, setViStats, shapeCols, shapeRows]);
 
   // A kernel-backed notebook sends only its reduced image. Keep that scalar
   // image on the browser GPU too: presentation must not recolor 4K pixels on
@@ -6046,6 +6230,7 @@ liveRows.clear();
     if (!compareMode) return;
     const expectedFloats = Math.max(0, (comparePanelCount || 0) * shapeRows * shapeCols);
     if (!displayedCompareVirtualImageBytes || expectedFloats === 0 || displayedCompareVirtualImageBytes.byteLength < expectedFloats * 4) {
+      setViStats([]);
       return;
     }
     const rawData = new Float32Array(
@@ -6124,7 +6309,7 @@ liveRows.clear();
     }
     return () => { cancelled = true; };
   }, [activeViSource, compareMode, comparePanelCount, comparePanelIndices,
-    displayedCompareVirtualImageBytes, offline, shapeCols, shapeRows,
+    displayedCompareVirtualImageBytes, offline, setViStats, shapeCols, shapeRows,
     viScaleMode, ensureViGpuColormap]);
 
   React.useEffect(() => {
@@ -6188,19 +6373,28 @@ liveRows.clear();
 
   // Cheap: zoom/pan redraw is one drawImage from the cached offscreen canvas.
   const paintDpCanvas = () => {
-    const offscreen = dpOffscreenRef.current;
-    if (!offscreen || !dpCanvasRef.current) return;
+    const pixels = dpImageDataRef.current;
+    if (!pixels || !dpCanvasRef.current) return;
     const canvas = dpCanvasRef.current;
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) return;
     ctx.imageSmoothingEnabled = false;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
     const identity = dpZoom === 1 && dpPanX === 0 && dpPanY === 0;
-    const pixels = dpImageDataRef.current;
-    if (identity && pixels && pixels.width === canvas.width && pixels.height === canvas.height) {
+    if (identity && pixels.width === canvas.width && pixels.height === canvas.height) {
       // Exact pixel copy at identity view avoids unnecessary resampling.
       ctx.putImageData(pixels, 0, 0);
     } else {
+      const offscreen = dpOffscreenRef.current ?? (dpOffscreenRef.current = document.createElement("canvas"));
+      if (dpNeedsStagingRef.current) {
+        if (offscreen.width !== pixels.width) offscreen.width = pixels.width;
+        if (offscreen.height !== pixels.height) offscreen.height = pixels.height;
+        // The Chrome/NVIDIA canvas needs CPU backing for reliable pixel writes.
+        const staging = offscreen.getContext("2d", { willReadFrequently: true });
+        if (!staging) return;
+        staging.putImageData(pixels, 0, 0);
+        dpNeedsStagingRef.current = false;
+      }
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.save();
       ctx.translate(dpPanX, dpPanY);
       ctx.scale(dpZoom, dpZoom);
@@ -6210,6 +6404,21 @@ liveRows.clear();
   };
   // The DP UI overlay draws the colorbar from the limits cached below; it is declared further down.
   const drawDpUiRef = React.useRef<(() => void) | null>(null);
+  const paintedDp = React.useRef<DataView | null>(null);
+  const dpHeader = React.useRef<HTMLDivElement>(null);
+  const dpHeaderTitle = () => {
+    const label = diffractionPositionLabel(model.get("live_phase_preview"), paintedDp.current, localPosRow, localPosCol);
+    return `${label} · k (${Math.round(localKRow)}, ${Math.round(localKCol)})`;
+  };
+  const paintPointDpTitle = () => {
+    if (model.get("live_phase_preview")?.point && dpHeader.current) {
+      const title = dpHeaderTitle();
+      if (dpHeader.current.title !== title) dpHeader.current.title = title;
+    }
+  };
+  const dpPaintSettings = React.useMemo(() => Symbol(),
+    [detRows, detCols, dpColormap, dpVminPct, dpVmaxPct, dpScaleMode, traitDpVmin, traitDpVmax, dpPercentiles]);
+  const dpLastPaint = React.useRef<{ settings: symbol | null; canvas: HTMLCanvasElement | null }>({ settings: null, canvas: null });
 
   // Render DP with zoom (use summed DP when VI ROI is active)
   // Expensive: colormap + data processing → cached offscreen canvas, painted
@@ -6218,72 +6427,65 @@ liveRows.clear();
   // pattern is drawn by the same code from an animation frame (`fromFrame`), without a render: the histogram
   // handles and the overlay then wait for the component's next render.
   const renderDpPattern = (sourceBytes: DataView | null | undefined, fromFrame: boolean) => {
-    if (!sourceBytes || (fromFrame && sourceBytes.byteLength !== detRows * detCols * 4)) return;
+    if (sourceBytes?.byteLength !== detRows * detCols * 4) return;
 
     const lut = COLORMAPS[dpColormap] || COLORMAPS.inferno;
 
-    // Parse raw float32 data and apply scale transformation
     const rawData = new Float32Array(sourceBytes.buffer, sourceBytes.byteOffset, sourceBytes.byteLength / 4);
-    const scaled = dpScaleMode === "log" ? displayLogScale(rawData) : rawData;
-
-    const { min: dataMin, max: dataMax } = findDataRange(scaled);
+    const log = dpScaleMode === "log";
+    const values = log ? displayLogScale(rawData, dpLogBufferRef.current) : rawData;
+    if (log) dpLogBufferRef.current = values;
 
     let vmin: number, vmax: number;
     if (traitDpVmin != null && traitDpVmax != null) {
-      if (dpScaleMode === "log") {
-        vmin = displayLog(traitDpVmin);
-        vmax = displayLog(traitDpVmax);
-      } else {
-        vmin = traitDpVmin;
-        vmax = traitDpVmax;
-      }
+      vmin = log ? displayLog(traitDpVmin) : traitDpVmin;
+      vmax = log ? displayLog(traitDpVmax) : traitDpVmax;
     } else if (dpPercentiles) {
-      ({ vmin, vmax } = percentileClip(scaled, dpPercentiles[0], dpPercentiles[1]));
+      const { vmin: low, vmax: high, min, max } = percentileClip(values, dpPercentiles[0], dpPercentiles[1]);
+      vmin = low;
+      vmax = high;
       // The handles follow the percentiles, so the histogram shows what is drawn.
-      const handles = fromFrame ? null : handlePositions(vmin, vmax, dataMin, dataMax);
+      const handles = fromFrame ? null : handlePositions(vmin, vmax, min, max);
       if (handles && Math.abs(handles[0] - dpVminPct) > 0.5) setDpVminPct(handles[0]);
       if (handles && Math.abs(handles[1] - dpVmaxPct) > 0.5) setDpVmaxPct(handles[1]);
     } else {
-      ({ vmin, vmax } = sliderRange(dataMin, dataMax, dpVminPct, dpVmaxPct));
+      const { min, max } = findDataRange(values);
+      ({ vmin, vmax } = sliderRange(min, max, dpVminPct, dpVmaxPct));
     }
-
-    let offscreen = dpOffscreenRef.current;
-    if (!offscreen) {
-      offscreen = document.createElement("canvas");
-      dpOffscreenRef.current = offscreen;
-    }
-    const sizeChanged = offscreen.width !== detCols || offscreen.height !== detRows;
-    if (sizeChanged) {
-      offscreen.width = detCols;
-      offscreen.height = detRows;
-      dpImageDataRef.current = null;
-    }
-    // These small CPU-colored canvases need CPU backing: on the verified
-    // Chrome/NVIDIA raster path, default 2D writes can stay fully transparent
-    // while the context reports no loss. Select the backing on first use.
-    const offCtx = offscreen.getContext("2d", { willReadFrequently: true });
-    if (!offCtx) return;
 
     let imgData = dpImageDataRef.current;
-    if (!imgData) {
-      imgData = offCtx.createImageData(detCols, detRows);
+    if (imgData?.width !== detCols || imgData?.height !== detRows) {
+      imgData = new ImageData(detCols, detRows);
       dpImageDataRef.current = imgData;
     }
-    applyColormap(scaled, imgData.data, lut, vmin, vmax);
-    offCtx.putImageData(imgData, 0, 0);
+    applyColormap(values, imgData.data, lut, vmin, vmax);
+    dpNeedsStagingRef.current = true;
     // Cache colorbar range for the UI overlay (avoids recomputing findDataRange on every zoom/pan)
     dpColorbarVminRef.current = vmin;
     dpColorbarVmaxRef.current = vmax;
     paintDpCanvas();
     // A new DP render also updates cached colorbar limits, without an ROI edit.
     if (!fromFrame || showDpColorbar) drawDpUiRef.current?.();
+    paintedDp.current = sourceBytes;
+    dpLastPaint.current.settings = dpPaintSettings;
+    dpLastPaint.current.canvas = dpCanvasRef.current;
+    paintPointDpTitle();
   };
   // While a scan arrives the newest pattern may be newer than the one in state: never draw an older one over it.
   React.useLayoutEffect(() => {
     const newest = livePatternRef.current;
-    renderDpPattern(liveDp && newest && newest.byteLength === detRows * detCols * 4 ? newest : displayedDpBytes, false);
+    const matching = liveDp && newest?.byteLength === detRows * detCols * 4 ? newest : displayedDpBytes;
+    // Binning can resize the canvas before its new pattern arrives. Present
+    // the last coloured image until the payload matches the new dimensions.
+    if (!matching) paintDpCanvas();
+    else if (liveDp && matching === paintedDp.current && dpLastPaint.current.settings === dpPaintSettings
+             && dpLastPaint.current.canvas === dpCanvasRef.current && dpPercentiles == null) {
+      // Live stats and histograms update on a slower React tick. The matching
+      // pattern was already painted by the animation frame with these settings.
+      paintPointDpTitle();
+    } else renderDpPattern(matching, false);
   },
-    [displayedDpBytes, detRows, detCols, dpColormap, dpVminPct, dpVmaxPct, dpScaleMode, traitDpVmin, traitDpVmax, dpPercentiles, setDpVminPct, setDpVmaxPct, liveDp]);
+    [displayedDpBytes, dpPaintSettings, setDpVminPct, setDpVmaxPct, liveDp]);
   drawLivePatternRef.current = liveDp ? () => renderDpPattern(livePatternRef.current, true) : null;
 
   // useLayoutEffect prevents black flash when canvas dimensions change (resize)
@@ -6295,8 +6497,8 @@ liveRows.clear();
   // image is coloured again only when that range has moved.
   const viLivePaintRef = React.useRef<{ key: string; array: Float32Array; vmin: number; vmax: number; at: number } | null>(null);
   const viLiveSampleRef = React.useRef<Float32Array | null>(null);
+  const viLiveLogBufferRef = React.useRef<Float32Array | null>(null);
   const drawViOffscreen = (fromFrame: boolean) => {
-    if (!rawVirtualImageRef.current) return;
     // The GPU canvas is hidden while a live row preview is shown (viGpuVisible), so the preview is drawn here:
     // skipping it left BF, ABF and ADF black for the whole of every streamed scan.
     if (
@@ -6314,7 +6516,7 @@ liveRows.clear();
     const factor = viDetail ? viDetail.factor : 1;
     // The array rows are written into while a scan arrives, else the image in state.
     const filtered = viDetail ? viDetail.data : streaming && liveDrawn && !hoverPresetImage ? liveDrawn : rawVirtualImageRef.current;
-    if (filtered.length < width * height) return;
+    if (filtered?.length !== width * height) return;
     const log = viScaleMode === "log";
 
     // After the detector area moved during a scan, the positions not yet summed over the new area are on
@@ -6326,7 +6528,8 @@ liveRows.clear();
     const colouredRows = partlySummed ? Math.ceil(summed / width) : height;
 
     const paintKey = [width, height, viDisplayLutKey, viScaleMode, traitViVmin, traitViVmax, viPercentiles?.join("-"),
-      viVminPct, viVmaxPct, activeViSource, liveShown, liveImagePositionsShown ? liveImagePositions.generation() : ""].join("|");
+      viVminPct, viVmaxPct, activeViSource, liveShown, liveImagePositionsShown ? liveImagePositions.scan() : "",
+      liveImagePositionsShown ? liveImagePositions.generation() : ""].join("|");
     const before = viLivePaintRef.current?.key === paintKey && viLivePaintRef.current.array === filtered
       ? viLivePaintRef.current : null;
     const now = performance.now();
@@ -6372,12 +6575,8 @@ liveRows.clear();
       } else if (viPercentiles) {
         ({ vmin, vmax } = percentileClip(ranged, viPercentiles[0], viPercentiles[1]));
         const span = dataMax - dataMin;
-        // The handles follow the percentiles. While a scan arrives the effect that presents the same image on
-        // WebGPU reads them from every pixel and this draw from a sample: only one of the two may set them, or
-        // each moves the handles the other set, without end.
-        const presentedOnGpu = Boolean(viGpuImageRef.current && viGpuColormapRef.current && !viDetail
-          && activeViSource === viGpuImageRef.current.source);
-        if (span > 0 && !fromFrame && !(streaming && presentedOnGpu)) {
+        // The handles follow the percentiles of the visible canvas.
+        if (span > 0 && !fromFrame) {
           const lo = Math.max(0, Math.min(100, ((vmin - dataMin) / span) * 100));
           const hi = Math.max(0, Math.min(100, ((vmax - dataMin) / span) * 100));
           if (Math.abs(lo - viVminPct) > 0.5) setViVminPct(lo);
@@ -6430,22 +6629,49 @@ liveRows.clear();
     if (last > first) {
       const values = filtered.subarray(first * width, last * width);
       const whole = scaledWhole && first === 0 && last === height ? scaledWhole : null;
-      applyColormap(whole ?? (log ? displayLogScale(values) : values), imageData.data.subarray(first * width * 4, last * width * 4),
+      let scaled = whole ?? values;
+      if (log && !whole) {
+        const reuse = streaming && fromFrame && !rangeMoved;
+        if (reuse && (viLiveLogBufferRef.current?.length ?? 0) < values.length) {
+          viLiveLogBufferRef.current = new Float32Array(values.length);
+        }
+        scaled = displayLogScale(values, reuse ? viLiveLogBufferRef.current : null);
+      }
+      applyColormap(scaled, imageData.data.subarray(first * width * 4, last * width * 4),
         viDisplayLut, vmin, vmax);
       offCtx.putImageData(imageData, 0, 0, 0, first, width, last - first);
+      viOffscreenPhaseOriginRef.current = activeViSource === "Direct" && liveRowImage?.completedGeneration
+        ? ` · frame ${liveRowImage.scan.replace(/^live_/, "")}` : "";
+      if (paintLiveRegion.current && liveShown && !hoverPresetImage && !viDetail) {
+        const metadata = model.get("live_phase_preview");
+        const positionsShown = liveImagePositionsShown && filtered === liveImagePositions.data();
+        const drawnRows = positionsShown ? null : liveRows.get(liveShown, height, width);
+        const scan = positionsShown ? liveImagePositions.scan() : drawnRows?.scan;
+        if (metadata?.region && isLiveFrame(scan ?? undefined) && metadata.scan === scan && preview?.scan === scan
+            && (positionsShown || drawnRows?.data === filtered)) {
+          const positions = positionsShown ? liveImagePositions.received() : drawnRows!.measured * width;
+          paintLiveRegion.current({canvas: offscreen, region: metadata.region, fieldShape: metadata.field_shape, positions});
+        }
+      }
     }
-    if (fromFrame) paintViCanvas(); else setViOffscreenVersion(version => version + 1);
+    if (fromFrame) paintViCanvas([first, last]); else setViOffscreenVersion(version => version + 1);
   };
   // `liveDrawn` and not the image in state: while a scan arrives the state's view changes with every tick, and
   // the rows are drawn from their animation frame.
   React.useEffect(() => drawViOffscreen(false),
     [activeViSource, streaming && !hoverPresetImage ? liveDrawn : displayedVirtualImageBytes, liveShown, compareMode, shapeRows, shapeCols, viDetail, viGpuVersion, viDisplayLut, viDisplayLutKey, viVminPct, viVmaxPct, viScaleMode, traitViVmin, traitViVmax, viPercentiles]);
 
-  // Present resident reductions directly, including while the pointer is held.
+  // Present retained reductions directly, including while the pointer is held.
   // Offscreen bitmap snapshots can be black and can lag the latest detector. The
   // virtual_image_bytes trait is still populated afterward so stats, FFT,
   // profile, COPY fallback, and non-WebGPU paths keep working.
   React.useEffect(() => {
+    if (streaming) {
+      // The incremental canvas owns Live. Keep the retained canvas hidden
+      // until its first presentation after Live has ended.
+      setViGpuRetainedReady(false);
+      return;
+    }
     const gpuImage = viGpuImageRef.current;
     const engine = viGpuColormapRef.current;
     const raw = rawVirtualImageRef.current;
@@ -6546,6 +6772,7 @@ liveRows.clear();
   }, [
     activeViSource,
     compareMode,
+    streaming,
     displayedVirtualImageBytes,
     shapeRows,
     shapeCols,
@@ -6568,14 +6795,28 @@ liveRows.clear();
     setViVmaxPct,
   ]);
 
-  // Cheap: VI zoom/pan redraw is one drawImage from the cached offscreen canvas
-  const paintViCanvas = () => {
+  const paintViCanvas = (dirtyRows?: [first: number, last: number]) => {
     if (!liveImage && !compareMode && !viDetail && viGpuImageRef.current?.source === activeViSource && viGpuRetainedReady) return;
     const offscreen = viOffscreenRef.current;
     if (!offscreen || !virtualCanvasRef.current) return;
     const canvas = virtualCanvasRef.current;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    const markOrigin = () => {
+      const label = viPhaseOriginLabelRef.current;
+      const origin = viOffscreenPhaseOriginRef.current;
+      if (label && label.textContent !== origin) label.textContent = origin;
+    };
+    const pixels = viImageDataRef.current;
+    if (dirtyRows && viZoom === 1 && viPanX === 0 && viPanY === 0
+        && pixels?.width === canvas.width && pixels.height === canvas.height) {
+      // The matching canvas already holds the other rows. Update this strip
+      // directly at native resolution without copying the entire display.
+      const [first, last] = dirtyRows;
+      if (last > first) ctx.putImageData(pixels, 0, 0, 0, first, canvas.width, last - first);
+      markOrigin();
+      return;
+    }
     ctx.imageSmoothingEnabled = viSmooth;
     if (viSmooth) ctx.imageSmoothingQuality = "high";
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -6589,9 +6830,10 @@ liveRows.clear();
     // 1536 canvas, then jumped to full size.
     ctx.drawImage(offscreen, 0, 0, canvas.width, canvas.height);
     ctx.restore();
+    markOrigin();
   };
-  React.useLayoutEffect(paintViCanvas,
-    [activeViSource, liveImage, compareMode, viDetail, viFactor, viGpuRetainedReady, viOffscreenVersion, viZoom, viPanX, viPanY, viSmooth]);
+  React.useLayoutEffect(() => paintViCanvas(),
+    [activeViSource, streaming, compareMode, viDetail, viFactor, viGpuRetainedReady, viOffscreenVersion, viZoom, viPanX, viPanY, viSmooth]);
   // What one animation frame draws while positions arrive: the detector image as it is now.
   drawLiveImageRef.current = streaming && !compareMode && !hoverPresetImage ? () => drawViOffscreen(true) : null;
 
@@ -6914,30 +7156,15 @@ liveRows.clear();
       viRoiMode, localViRoiCenterRow, localViRoiCenterCol, viRoiRadius, viRoiWidth, viRoiHeight,
       isDraggingViRoi, isDraggingViRoiResize, isHoveringViRoiResize, viCanvasSize, viProfileActive, viProfilePoints, themeColors.accent, DPR]);
 
-  // ── DP Profile computation ──
+  // A drag and the stream can both change a profile. Only the latest pending
+  // sample needs a GPU submission, and a retired image cannot update its replacement.
+  const profileSource = liveScan ?? streamSourceIds[frameIdx] ?? String(frameIdx);
+  useProfileSamples(profilePoints, displayedDpBytes, detRows, detCols, profileWidth, profileSource, setProfileData);
+  useProfileSamples(viProfilePoints, displayedVirtualImageBytes, shapeRows, shapeCols, 1,
+    `${profileSource}:${activeViSource}`, setViProfileData);
   React.useEffect(() => {
-    if (profilePoints.length === 2 && rawDpDataRef.current) {
-      const p0 = profilePoints[0], p1 = profilePoints[1];
-      void sampleLineProfileBrowser(rawDpDataRef.current, detCols, detRows, p0.row, p0.col, p1.row, p1.col, profileWidth)
-        .then(setProfileData)
-        .catch(error => console.error("[Show4DSTEM] WebGPU DP profile failed", error));
-      if (!profileActive) setProfileActive(true);
-    } else {
-      setProfileData(null);
-    }
-  }, [profilePoints, profileWidth, frameBytes]);
-
-  // ── VI Profile computation ──
-  React.useEffect(() => {
-    if (viProfilePoints.length === 2 && rawViDataRef.current && shapeCols > 0 && shapeRows > 0) {
-      const p0 = viProfilePoints[0], p1 = viProfilePoints[1];
-      void sampleLineProfileBrowser(rawViDataRef.current, shapeCols, shapeRows, p0.row, p0.col, p1.row, p1.col, 1)
-        .then(setViProfileData)
-        .catch(error => console.error("[Show4DSTEM] WebGPU VI profile failed", error));
-    } else {
-      setViProfileData(null);
-    }
-  }, [viProfilePoints, displayedVirtualImageBytes, shapeCols, shapeRows]);
+    if (profilePoints.length === 2 && displayedDpBytes) setProfileActive(true);
+  }, [profilePoints, displayedDpBytes]);
 
   // ── Profile sparkline rendering ──
   React.useEffect(() => {
@@ -7064,6 +7291,7 @@ liveRows.clear();
     setPanY: React.Dispatch<React.SetStateAction<number>>,
     viewRef: React.RefObject<{ zoom: number; panX: number; panY: number; raf: number }>,
     canvasRef: React.RefObject<HTMLCanvasElement | null>,
+    bounded = false,
   ) => (event: React.WheelEvent<HTMLCanvasElement>) => {
     event.stopPropagation();
     const canvas = canvasRef.current;
@@ -7074,18 +7302,29 @@ liveRows.clear();
     const view = viewRef.current;
     const zoomFactor = event.deltaY > 0 ? 0.9 : 1.1;
     const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, view.zoom * zoomFactor));
-    const zoomRatio = newZoom / view.zoom;
     // Accumulate synchronously against the live ref (handles a burst of trackpad
     // wheel events within one frame correctly), flush to React state once per rAF.
-    view.zoom = newZoom;
-    view.panX = mouseX - (mouseX - view.panX) * zoomRatio;
-    view.panY = mouseY - (mouseY - view.panY) * zoomRatio;
-    if (view.raf === 0) {
-      view.raf = requestAnimationFrame(() => {
-        view.raf = 0;
-        setZoom(view.zoom); setPanX(view.panX); setPanY(view.panY);
-      });
+    zoomPanelAt(view, newZoom, mouseX, mouseY, bounded ? canvas : undefined);
+    schedulePanelView(view, ({ zoom, panX, panY }) => { setZoom(zoom); setPanX(panX); setPanY(panY); });
+  };
+
+  const beginPanelPan = (panel: "dp" | "vi", event: React.PointerEvent<HTMLCanvasElement>) => {
+    const view = (panel === "dp" ? dpViewRef : viViewRef).current;
+    if (!panelPan[panel].start(event, view, event.currentTarget)) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault();
+    setCursorInfo(null);
+  };
+
+  const movePanelPan = (panel: "dp" | "vi", event: PointerEvent | React.PointerEvent<HTMLCanvasElement>) => {
+    const pan = panelPan[panel];
+    if (!pan.active) return false;
+    const [viewRef, setZoom, setX, setY] = panel === "dp"
+      ? [dpViewRef, setDpZoom, setDpPanX, setDpPanY] : [viViewRef, setViZoom, setViPanX, setViPanY];
+    if (pan.move(event, viewRef.current)) {
+      schedulePanelView(viewRef.current, ({ zoom, panX, panY }) => { setZoom(zoom); setX(panX); setY(panY); });
     }
+    return true;
   };
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -7095,8 +7334,10 @@ liveRows.clear();
   // Helper: convert screen-pixel hit radius to image-pixel radius
   // handleRadius=6 CSS px drawn, hit area ~10 CSS px → convert to image coords
   const dpHitRadius = RESIZE_HIT_AREA_PX * Math.max(detCols, detRows) / canvasSize / dpZoom;
-  const activeRoiCenterCol = Number.isFinite(localKCol) ? localKCol : roiCenterCol;
-  const activeRoiCenterRow = Number.isFinite(localKRow) ? localKRow : roiCenterRow;
+  const activeRoiCenterCol = preview?.frozen && liveDetectorView ? liveDetectorView.centerCol
+    : Number.isFinite(localKCol) ? localKCol : roiCenterCol;
+  const activeRoiCenterRow = preview?.frozen && liveDetectorView ? liveDetectorView.centerRow
+    : Number.isFinite(localKRow) ? localKRow : roiCenterRow;
 
   // What a press grabs on the detector ROI: the inner half moves it, the outer
   // half and a hit margin past the edge resize it, a ring's inner handle
@@ -7185,8 +7426,8 @@ liveRows.clear();
       });
       if (!geometry) return false;
       if (roiMode === "rect") {
-        setRoiWidth(geometry.width!);
-        setRoiHeight(geometry.height!);
+        setRoiWidth(geometry.width! / detectorScaleRef.current);
+        setRoiHeight(geometry.height! / detectorScaleRef.current);
       } else {
         sendRoiRadius(geometry.radius!);
       }
@@ -7201,6 +7442,11 @@ liveRows.clear();
   ]);
 
   const handleDpMouseDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (panelPan.dp.active) return;
+    if (isPanelPan(event, dpPanTool)) {
+      if (!dpPointerOwner.active) beginPanelPan("dp", event);
+      return;
+    }
     const coords = getDpImageCoordsFromClient(event.clientX, event.clientY);
     if (!coords || !dpPointerOwner.start(event)) return;
     const { maskCol, maskRow } = coords;
@@ -7295,6 +7541,7 @@ liveRows.clear();
   };
 
   const handleDpMouseMove = (event: PointerEvent | React.PointerEvent<HTMLCanvasElement>) => {
+    if (movePanelPan("dp", event)) return;
     const pointerMove = dpPointerOwner.move(event);
     if (pointerMove === "ignore") return;
     if (pointerMove === "release") { handleDpMouseUp(event); return; }
@@ -7328,7 +7575,7 @@ liveRows.clear();
       const d0 = Math.sqrt((maskCol - p0.col) ** 2 + (maskRow - p0.row) ** 2);
       const d1 = Math.sqrt((maskCol - p1.col) ** 2 + (maskRow - p1.row) ** 2);
       if (draggingDpProfileEndpoint !== null) {
-        if (!rawDpDataRef.current) return;
+        if (!displayedDpBytes) return;
         const clampedRow = Math.max(0, Math.min(detRows - 1, maskRow));
         const clampedCol = Math.max(0, Math.min(detCols - 1, maskCol));
         const next = [
@@ -7336,18 +7583,12 @@ liveRows.clear();
           draggingDpProfileEndpoint === 1 ? { row: clampedRow, col: clampedCol } : profilePoints[1],
         ];
         setProfileLine(next);
-        void sampleLineProfileBrowser(rawDpDataRef.current, detCols, detRows, next[0].row, next[0].col, next[1].row, next[1].col, profileWidth)
-          .then(setProfileData)
-          .catch(error => console.error("[Show4DSTEM] WebGPU DP profile failed", error));
         return;
       }
       if (isDraggingDpProfileLine && dpProfileDragStartRef.current) {
-        if (!rawDpDataRef.current) return;
+        if (!displayedDpBytes) return;
         const next = dragProfileLine(dpProfileDragStartRef.current, maskRow, maskCol, detRows, detCols);
         setProfileLine(next);
-        void sampleLineProfileBrowser(rawDpDataRef.current, detCols, detRows, next[0].row, next[0].col, next[1].row, next[1].col, profileWidth)
-          .then(setProfileData)
-          .catch(error => console.error("[Show4DSTEM] WebGPU DP profile failed", error));
         return;
       }
       const nextHoveredEndpoint: 0 | 1 | null = d0 <= hitRadius ? 0 : d1 <= hitRadius ? 1 : null;
@@ -7392,6 +7633,7 @@ liveRows.clear();
   };
 
   const handleDpMouseUp = (event: PointerEvent | React.PointerEvent<HTMLCanvasElement>) => {
+    if (panelPan.dp.release(event)) return;
     if (!dpPointerOwner.release(event)) return;
     finishDpRoiInteraction();
     if (draggingDpProfileEndpoint !== null || isDraggingDpProfileLine) {
@@ -7413,7 +7655,7 @@ liveRows.clear();
       const dy = event.clientY - dpClickStartRef.current.y;
       if (Math.sqrt(dx * dx + dy * dy) < 3) {
         const canvas = dpOverlayRef.current;
-        if (canvas && rawDpDataRef.current) {
+        if (canvas && displayedDpBytes) {
           const rect = canvas.getBoundingClientRect();
           const screenX = (event.clientX - rect.left) * (canvas.width / rect.width);
           const screenY = (event.clientY - rect.top) * (canvas.height / rect.height);
@@ -7431,9 +7673,6 @@ liveRows.clear();
             } else {
               const p0 = profilePoints[0];
               setProfileLine([p0, point]);
-              void sampleLineProfileBrowser(rawDpDataRef.current, detCols, detRows, p0.row, p0.col, point.row, point.col, profileWidth)
-                .then(setProfileData)
-                .catch(error => console.error("[Show4DSTEM] WebGPU DP profile failed", error));
             }
           }
         }
@@ -7510,6 +7749,12 @@ liveRows.clear();
   const handleDpDoubleClick = () => setPanelView(dpViewRef, setDpZoom, setDpPanX, setDpPanY, 1, 0, 0);
 
   const handleViMouseDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (panelPan.vi.active) return;
+    if (isPanelPan(event, viPanTool)) {
+      if (!isDraggingVI && !isDraggingViRoi && !isDraggingViRoiResize
+          && draggingViProfileEndpoint === null && !isDraggingViProfileLine) beginPanelPan("vi", event);
+      return;
+    }
     // Capture the pointer so a touch/mouse probe-drag keeps receiving move/up
     // events even when the finger leaves the small canvas. Needed for mobile
     // parity: touchscreens deliver these as pointer events (mirrors DP #751).
@@ -7595,6 +7840,7 @@ liveRows.clear();
   };
 
   const handleViMouseMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (movePanelPan("vi", event)) return;
     const canvas = virtualOverlayRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -7703,6 +7949,7 @@ liveRows.clear();
   };
 
   const handleViMouseUp = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (panelPan.vi.active) { panelPan.vi.release(event); return; }
     flushScanPosition();
     if (draggingViProfileEndpoint !== null || isDraggingViProfileLine) {
       setDraggingViProfileEndpoint(null);
@@ -7996,8 +8243,18 @@ liveRows.clear();
   const handleCanvasResizeStart = (event: React.PointerEvent, panel: "dp" | "vi") => {
     event.stopPropagation();
     event.preventDefault();
+    // Use the same bounds as the fitted panels in a compact row. The desktop
+    // minimum can be wider than the panel already under the pointer.
+    const compact = sideBySideLimit < MIN_CANVAS_SIZE;
+    const minSize = compact ? SIDE_BY_SIDE_MIN : MIN_CANVAS_SIZE;
+    let maxSize = Infinity;
+    if (compact) {
+      if (syncResize || panel === "dp") maxSize = sideBySideLimit;
+      else if (liveStream) maxSize = sharedImageRoom;
+    }
     setIsResizingCanvas(true);
-    setResizeCanvasStart({ x: event.clientX, y: event.clientY, size: panel === "dp" ? canvasSize : viCanvasSize, panel });
+    setResizeCanvasStart({ x: event.clientX, y: event.clientY, size: panel === "dp" ? canvasSize : viCanvasSize,
+      minSize, maxSize, panel });
   };
 
   React.useEffect(() => {
@@ -8011,7 +8268,7 @@ liveRows.clear();
     const handleMouseMove = (event: MouseEvent) => {
       if (!resizeCanvasStart) return;
       const delta = Math.max(event.clientX - resizeCanvasStart.x, event.clientY - resizeCanvasStart.y);
-      latestSize = Math.max(MIN_CANVAS_SIZE, resizeCanvasStart.size + delta);
+      latestSize = Math.min(resizeCanvasStart.maxSize, Math.max(resizeCanvasStart.minSize, resizeCanvasStart.size + delta));
       if (!rafId) {
         rafId = requestAnimationFrame(() => {
           rafId = 0;
@@ -8150,9 +8407,8 @@ liveRows.clear();
     whiteSpace: "nowrap",
     flexShrink: 0,
   };
-  // While a scan streams its statistics change with every row and say little: they are hidden in place
-  // (the line keeps its height) and return with the Dataset rows.
-  const statsShownSx = streaming ? { ...statsTextSx, visibility: "hidden" as const } : statsTextSx;
+  // While a scan streams the statistics change with every row. Remove the row until the image settles.
+  const showSettledStats = showStats && !streaming;
   const viSourceButtonSx = (source: string, active = false) => {
     const color = viSourceDisplayColor(source, themeInfo.theme);
     return {
@@ -8167,6 +8423,9 @@ liveRows.clear();
       display: "inline-flex",
       alignItems: "center",
       whiteSpace: "nowrap",
+      position: "relative",
+      // Split the space between adjacent labels into two contiguous hover targets.
+      "&::after": { content: '""', position: "absolute", insetBlock: 0, insetInline: "calc(var(--source-gap) / -2)" },
       "&:hover": { color, opacity: 1, textDecoration: "underline" },
     };
   };
@@ -8457,7 +8716,7 @@ liveRows.clear();
       </Typography>
     </Box>
   ), [panelLoadingOverlaySx, panelLoadingTextSx]);
-  const dpPanelReady = Boolean(displayedDpBytes && displayedDpBytes.byteLength >= detRows * detCols * 4);
+  const dpPanelReady = Boolean(displayedDpBytes);
   const viPanelReady = Boolean(
     viGpuVisible
     || (displayedVirtualImageBytes && displayedVirtualImageBytes.byteLength >= shapeRows * shapeCols * 4),
@@ -8474,19 +8733,38 @@ liveRows.clear();
 
   const handleHtmlExportSelect = useLatestCallback(handleHtmlExportSelectLatest);
   const dpResetDisabled = dpZoom === 1 && dpPanX === 0 && dpPanY === 0 && roiCenterCol === brightFieldCenterColPx && roiCenterRow === brightFieldCenterRowPx;
-  const displayedTitle = streaming && preview && isLiveFrame(preview.scan) && !title?.startsWith("Live · frame ")
-    ? `Live · frame ${preview.scan.slice("live_".length)}`
-    : title || "4D-STEM Explorer";
+  const activePreview = showingLivePreview ? preview : null;
+  const previewTitle = activePreview && (isLiveFrame(activePreview.scan)
+    ? `Live · frame ${activePreview.scan.slice("live_".length)}`
+    : `Live · ${shortScanName(activePreview.scan)}`);
+  const canNamePreview = !title || title === "Waiting for acquisition" || title.startsWith("Live · ");
+  const displayedTitle = canNamePreview && previewTitle && title !== previewTitle && !title?.startsWith(`${previewTitle} · `)
+    ? previewTitle : title || "4D-STEM Explorer";
+  const shownSource = streamSourceIds[frameIdx];
+  const retainedMatches = sourceSelection == null || sourceSelection === (shownSource ?? "");
+  const displayedSource = sourcePathForView(preview, previewSource, sourceFolder, sourceFile, retainedMatches, {
+    title: displayedTitle, retainedScan: frameNames?.[frameIdx], showingPreview: showingLivePreview,
+  });
   // The toolbar and control rows re-render only when their inputs change: a
   // drag that streams new pattern or image bytes leaves their MUI styles alone.
+  const headingText = embedded && displayedTitle.startsWith("Live · ")
+    ? displayedTitle.replace(" ✓", "") : displayedTitle;
+  const liveFrameTitle = React.useMemo(() => splitLiveFrameTitle(headingText), [headingText]);
+  const renderPathInHelp = embedded && (streaming || displayedTitle.startsWith("Live · ") || displayedTitle === "Waiting for acquisition");
   const titleHeading = React.useMemo(() => (
-    showTitle && <Typography variant="h6" sx={{ ...themedTypography.title, mb: `${SPACING.SM}px`, display: "flex", alignItems: "center", minWidth: 0 }}>
-      {/* One line beside narrow panels: the full title is on hover, with the file it was saved to (not drawn: the
-          panel's Folder already says where scans go, and two path lines above the title were clutter, 11-18). */}
-      <span title={[displayedTitle, sourceFile && (sourceFile.startsWith("not saved") ? sourceFile
-                      : `${sourceFolder ? `${sourceFolder}/` : ""}${sourceFile}`)].filter(Boolean).join("\n")} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {displayedTitle}</span>
-      <RenderPathBadge colors={themeColors} />
+    showTitle && <Typography variant="h6" sx={{ ...themedTypography.title, mb: `${SPACING.SM}px`, display: "flex", flexWrap: liveFrameTitle ? "wrap" : "nowrap", alignItems: "center", minWidth: 0 }}>
+      <Box component="span" title={[displayedTitle, displayedSource].filter(Boolean).join("\n")}
+        sx={liveFrameTitle
+          ? { fontSize: 13, fontWeight: 500, lineHeight: "20px", color: themeColors.textMuted,
+              fontVariantNumeric: "tabular-nums", minWidth: 0, overflowWrap: "anywhere" }
+          : { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {liveFrameTitle ? <>
+          {"Live · frame "}
+          <Box component="span" sx={{ display: "inline-block", minWidth: "4ch" }}>{liveFrameTitle.frame}</Box>
+          {liveFrameTitle.detail}
+        </> : headingText}
+      </Box>
+      {!renderPathInHelp && <RenderPathBadge colors={themeColors} />}
       {nFrames > 1 && !streaming && !isLiveFrame(frameNames?.[frameIdx]) && !titleNamesScan(title, frameNames?.[frameIdx]) && !titleNamesScan(title, frameLabels?.[frameIdx])
         && <span style={{ fontWeight: "normal", fontSize: 13, marginLeft: 8, opacity: 0.7 }}>({frameLabels && frameLabels.length > frameIdx ? frameLabels[frameIdx] : `${frameDimLabel} ${frameIdx + 1}/${nFrames}`})</span>}
       {panelChromeVisible && <InfoTooltip text={<Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
@@ -8497,6 +8775,7 @@ liveRows.clear();
           ["Real space", pixelSize > 0 ? `${formatNumber(pixelSize)} ${unitSymbol(scanUnit)}/px` : ""],
           ["Diffraction", kCalibrated && kPixelSize > 0 ? `${formatNumber(kPixelSize)} ${unitSymbol(kPixelUnit)}/px` : "detector pixels"],
         ]} />
+        {renderPathInHelp && <Typography sx={{ fontSize: 11 }}>Display <RenderPathBadge colors={themeColors} /></Typography>}
         <Typography sx={{ fontSize: 11, fontWeight: "bold" }}>Controls</Typography>
         <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>DP: Diffraction pattern I(kx,ky) at scan position. Drag to move ROI center.</Typography>
         <Typography sx={{ fontSize: 11, lineHeight: 1.4 }}>Detector: ROI mask shape defines which DP pixels are integrated for the virtual image.</Typography>
@@ -8516,8 +8795,8 @@ liveRows.clear();
       </Box>} theme={themeInfo.theme} />}
     </Typography>
   ), [
-    detCols, detRows, displayedTitle, sourceFolder, sourceFile, frameDimLabel, frameIdx, frameLabels, frameNames, kCalibrated, kPixelSize, kPixelUnit,
-    keyboardShortcutItems, nFrames, panelChromeVisible, pixelSize, scanUnit, shapeCols, shapeRows,
+    detCols, detRows, displayedTitle, displayedSource, frameDimLabel, frameIdx, frameLabels, frameNames, kCalibrated, kPixelSize, kPixelUnit,
+    headingText, keyboardShortcutItems, liveFrameTitle, nFrames, panelChromeVisible, pixelSize, renderPathInHelp, scanUnit, shapeCols, shapeRows,
     showTitle, streaming, themeColors, themeInfo, themedTypography, title
   ]);
   const dpToolbarControls = React.useMemo(() => (
@@ -8539,6 +8818,10 @@ liveRows.clear();
           setIsHoveringDpProfileLine(false);
         }
       }} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Diffraction profile" } }} />
+      {dpZoom > 1 && <IconButton size="small" aria-label="Pan diffraction" title="Pan diffraction" aria-pressed={dpPanTool}
+        onClick={() => setDpPanTool(on => !on)} sx={{ p: 0.25, color: dpPanTool ? themeColors.accent : themeColors.textMuted }}>
+        <PanToolOutlinedIcon sx={{ fontSize: 14 }} />
+      </IconButton>}
       <Button size="small" sx={compactButton} disabled={dpResetDisabled} onClick={() => { setDpZoom(1); setDpPanX(0); setDpPanY(0); writeRoiCenterModel(brightFieldCenterRowPx, brightFieldCenterColPx); }}>Reset</Button>
       <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={async () => {
         const canvas = dpCanvasRef.current;
@@ -8801,7 +9084,7 @@ liveRows.clear();
   ), [
     brightFieldCenterColPx, brightFieldCenterRowPx, browserSourceAvailable, controlsVisible,
     currentPageReportCount, detailedReportScanBin, downloadDirectCalibration, dpCanvasRef, dpExportAnchor,
-    dpMoreAnchor, dpResetDisabled, estimateReportHtmlSize, exportEnabled, exportStatus, grantH5LocalFiles,
+    dpMoreAnchor, dpPanTool, dpResetDisabled, dpZoom, estimateReportHtmlSize, exportEnabled, exportStatus, grantH5LocalFiles,
     h5LocalFilesGranted, h5LocalSourceStatus, handleHtmlExportSelect, hasDirectCalibrationDownload,
     htmlExportBusy, interactiveHtmlPresets, localHtmlExportStatus, offline, profileActive, qemLocalFiles,
     qemSourceAvailable, reportDetectorBin, reportScanBin, requestDirect, setDpExportAnchor,
@@ -8814,6 +9097,20 @@ liveRows.clear();
     directStatusIsFailure, starredReportCount, themeColors, themeInfo, themedMenuProps, themedSelect,
     themedTypography, title, writeRoiCenterModel
   ]);
+  const flipPhaseControl = React.useMemo(() => canFlipPhaseContrast && (
+    <Box component="label" title={flipSource === "Direct" ? "Invert the displayed phase contrast"
+      : "The other 180° branch of the DPC rotation: the rotation is known modulo 180°, and this branch gives the opposite sign"}
+      sx={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+      <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Flip</Typography>
+      <Switch checked={flipChosen} onChange={(event) => setFlipPhaseContrast(event.target.checked)}
+        size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Flip phase contrast" } }} />
+      {dpcSource && shownDpcRotation != null && (
+        <Typography sx={{ ...themedTypography.label, fontSize: 10, fontVariantNumeric: "tabular-nums" }}
+          title="The scan-to-detector rotation DPC is integrated with: the calibration's, else the least-curl estimate (known modulo 180°). Flip shows the other branch.">
+          rot {shownDpcRotation.toFixed(1)}°</Typography>
+      )}
+    </Box>
+  ), [flipSource, canFlipPhaseContrast, dpcSource, flipChosen, setFlipPhaseContrast, shownDpcRotation, themedTypography]);
   const dpControlRows = React.useMemo(() => (
     <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: "1 1 220px", minWidth: 0, justifyContent: "center" }}>
       {/* Row 1: Detector + slider */}
@@ -8835,11 +9132,11 @@ liveRows.clear();
                 beginDpRoiInteraction();
                 if (roiMode === "annular") {
                   const [inner, outer] = value as number[];
-                  setRoiRadiusInner(Math.min(inner, outer - 1));
-                  setRoiRadius(Math.max(outer, inner + 1));
+                  setRoiRadiusInner(Math.min(inner, outer - 1) / detectorScale);
+                  setRoiRadius(Math.max(outer, inner + 1) / detectorScale);
                 } else {
                   const next = Array.isArray(value) ? value[0] : value;
-                  setRoiRadius(next);
+                  setRoiRadius(next / detectorScale);
                 }
                 requestCompareViLive();
               }}
@@ -8861,8 +9158,11 @@ liveRows.clear();
           {COLORMAP_OPTIONS}
         </Select>
         <ScaleToggle value={dpScaleMode} onChange={setDpScaleMode} name="Diffraction" />
-        <Typography sx={{ ...themedTypography.label, fontSize: 10 }} title="Colorbar">bar</Typography>
-        <Switch checked={showDpColorbar} onChange={(event) => setShowDpColorbar(event.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Diffraction colorbar" } }} />
+        <Box component="label" sx={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+          <Typography sx={{ ...themedTypography.label, fontSize: 10 }} title="Colorbar">bar</Typography>
+          <Switch checked={showDpColorbar} onChange={(event) => setShowDpColorbar(event.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Diffraction colorbar" } }} />
+        </Box>
+        {flipPhaseControl}
         {maskedPixels?.length ? <>
           <Typography sx={{ ...themedTypography.label, fontSize: 10 }} title={`The ${maskedPixels.length} detector pixels the mask excluded, filled with their neighbours\u2019 median`}>Masked</Typography>
           <Switch checked={!!showMaskedPixels} onChange={(event) => setShowMaskedPixels(event.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Masked detector pixels" } }} />
@@ -8870,25 +9170,11 @@ liveRows.clear();
       </Box>
     </Box>
   ), [
-    beginDpRoiInteraction, detCols, detRows, dpColormap, dpScaleMode, finishDpRoiInteraction,
+    beginDpRoiInteraction, detCols, detRows, dpColormap, dpScaleMode, finishDpRoiInteraction, flipPhaseControl,
     requestCompareViLive, roiMode, roiRadius, roiRadiusInner, roiVirtualDetectorActive, setDpColormap, setDpScaleMode, setRoiMode,
     setRoiRadius, setRoiRadiusInner, setShowDpColorbar, showDpColorbar, maskedPixels, showMaskedPixels, setShowMaskedPixels, themeColors, themedMenuProps,
     themedSelect, themedTypography
   ]);
-  const flipPhaseControl = React.useMemo(() => canFlipPhaseContrast && (
-    <Box component="label" title={flipSource === "Direct" ? "Invert the displayed phase contrast"
-      : "The other 180° branch of the DPC rotation: the rotation is known modulo 180°, and this branch gives the opposite sign"}
-      sx={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
-      <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Flip</Typography>
-      <Switch checked={flipChosen} onChange={(event) => setFlipPhaseContrast(event.target.checked)}
-        size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Flip phase contrast" } }} />
-      {dpcSource && shownDpcRotation != null && (
-        <Typography sx={{ ...themedTypography.label, fontSize: 10, fontVariantNumeric: "tabular-nums" }}
-          title="The scan-to-detector rotation DPC is integrated with: the calibration's, else the least-curl estimate (known modulo 180°). Flip shows the other branch.">
-          rot {shownDpcRotation.toFixed(1)}°</Typography>
-      )}
-    </Box>
-  ), [flipSource, canFlipPhaseContrast, dpcSource, flipChosen, setFlipPhaseContrast, shownDpcRotation, themedTypography]);
   const viToolbarControls = React.useMemo(() => (
     controlsVisible && <Stack
       direction="row"
@@ -8896,7 +9182,7 @@ liveRows.clear();
       alignItems="center"
       useFlexGap
       justifyContent="flex-end"
-      sx={{ flexWrap: canFlipPhaseContrast ? "wrap" : "nowrap", flexShrink: canFlipPhaseContrast ? 1 : 0, whiteSpace: "nowrap" }}
+      sx={{ flexWrap: "nowrap", flexShrink: 0, whiteSpace: "nowrap" }}
     >
       {compareMode && <>
         <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Cols</Typography>
@@ -8979,6 +9265,10 @@ liveRows.clear();
             setIsHoveringViProfileLine(false);
           }
         }} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Image profile" } }} />
+        {viZoom > 1 && !regionMapSize && <IconButton size="small" aria-label="Pan image" title="Pan image" aria-pressed={viPanTool}
+          onClick={() => setViPanTool(on => !on)} sx={{ p: 0.25, color: viPanTool ? themeColors.accent : themeColors.textMuted }}>
+          <PanToolOutlinedIcon sx={{ fontSize: 14 }} />
+        </IconButton>}
         <Button size="small" sx={compactButton} disabled={viZoom === 1 && viPanX === 0 && viPanY === 0} onClick={() => { setViZoom(1); setViPanX(0); setViPanY(0); }}>Reset</Button>
         <Button size="small" sx={{ ...compactButton, color: themeColors.accent }} onClick={async () => {
           let canvas: HTMLCanvasElement | null = null;
@@ -8996,11 +9286,11 @@ liveRows.clear();
       </>}
     </Stack>
   ), [
-    canFlipPhaseContrast, compareCols, compareHiddenCount, compareHiddenMenuAnchor, compareHiddenPanelItems, compareMode,
-    controlsVisible, flipPhaseControl, getActiveViCanvas, setCompareCols, setCompareHiddenMenuAnchor, setCompareHiddenPanels,
+    compareCols, compareHiddenCount, compareHiddenMenuAnchor, compareHiddenPanelItems, compareMode,
+    controlsVisible, getActiveViCanvas, regionMapSize, setCompareCols, setCompareHiddenMenuAnchor, setCompareHiddenPanels,
     setHoveredViProfileEndpoint, setIsHoveringViProfileLine, setShowFft, setViPanX, setViPanY,
     setViProfileActive, setViProfilePoints, setViZoom, showCompareFrame, showFft, themeColors,
-    themedMenuProps, themedSelect, themedTypography, title, viPanX, viPanY, viProfileActive, viZoom
+    themedMenuProps, themedSelect, themedTypography, title, viPanTool, viPanX, viPanY, viProfileActive, viZoom
   ]);
   const viControlRows = React.useMemo(() => (
     <Box sx={{ display: "flex", flexDirection: "column", gap: `${SPACING.XS}px`, flex: "0 1 auto", minWidth: 0, justifyContent: "center" }}>
@@ -9043,12 +9333,16 @@ liveRows.clear();
           {COLORMAP_OPTIONS}
         </Select>
         <ScaleToggle value={viScaleMode} onChange={setViScaleMode} name="Image" />
+        <Box component="label" sx={{ display: "inline-flex", alignItems: "center", gap: "2px" }}>
+          <Typography sx={{ ...themedTypography.label, fontSize: 10 }} title="CSS bilinear interpolation. Same data, browser smooths visually.">Smooth</Typography>
+          <Switch checked={viSmooth} onChange={(event) => setViSmooth(event.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Image smoothing" } }} />
+        </Box>
       </Box>
     </Box>
   ), [
-    setViColormap, setViRoiMode, setViRoiRadius, setViRoiReduce, setViScaleMode, shapeCols, shapeRows,
+    setViColormap, setViRoiMode, setViRoiRadius, setViRoiReduce, setViScaleMode, setViSmooth, shapeCols, shapeRows,
     themeColors, themedMenuProps, themedSelect, themedTypography, viColormap, viRoiMode, viRoiRadius,
-    viRoiReduce, viScaleMode
+    viRoiReduce, viScaleMode, viSmooth
   ]);
   // View and the Dataset controls: one row. While a scan streams the view stays on the scan arriving: the row is
   // hidden in place, so nothing moves when a scan starts or ends. Embedded in a host panel the row is under the
@@ -9299,7 +9593,7 @@ liveRows.clear();
           {/* One row, the same height as the image header, so the two canvases line up; the cursor
               readout already gives the scan position and k (also on hover here). */}
           <Stack direction="row" justifyContent="flex-start" alignItems="center" sx={{ ...panelHeaderSx, flexWrap: "nowrap" }}
-            title={`DP at (${Math.round(localPosRow)}, ${Math.round(localPosCol)}) · k (${Math.round(localKRow)}, ${Math.round(localKCol)})`}>
+            ref={dpHeader} title={dpHeaderTitle()}>
             {dpToolbarControls}
           </Stack>
 
@@ -9308,9 +9602,11 @@ liveRows.clear();
             <canvas data-quantem-scientific-output="show4dstem-diffraction-pattern" ref={dpCanvasRef} width={detCols} height={detRows} style={{ position: "absolute", width: "100%", height: "100%", imageRendering: "pixelated" }} />
             <canvas
               ref={dpOverlayRef} width={detCols} height={detRows}
+              title="Scroll to zoom. Alt/Option-drag to pan."
               onPointerDown={handleDpMouseDown} onPointerMove={handleDpMouseMove}
               onPointerUp={handleDpMouseUp} onPointerCancel={handleDpMouseUp} onPointerLeave={handleDpMouseLeave}
-              onWheel={createZoomHandler(setDpZoom, setDpPanX, setDpPanY, dpViewRef, dpOverlayRef)}
+              onLostPointerCapture={event => panelPan.dp.release(event)}
+              onWheel={createZoomHandler(setDpZoom, setDpPanX, setDpPanY, dpViewRef, dpOverlayRef, true)}
               onDoubleClick={handleDpDoubleClick}
               onTouchStart={handlePanelTouchStart("dp")}
               onTouchMove={handlePanelTouchMove("dp")}
@@ -9321,7 +9617,7 @@ liveRows.clear();
                 width: "100%",
                 height: "100%",
                 touchAction: "none",
-                cursor: (draggingDpProfileEndpoint !== null || isDraggingDpProfileLine)
+                cursor: dpPanTool ? (panelPan.dp.active ? "grabbing" : "grab") : (draggingDpProfileEndpoint !== null || isDraggingDpProfileLine)
                   ? "grabbing"
                   : (profileActive && (hoveredDpProfileEndpoint !== null || isHoveringDpProfileLine))
                     ? "grab"
@@ -9345,34 +9641,34 @@ liveRows.clear();
           </Box>
 
           {/* DP Stats Bar */}
-          {showStats && !dpPanelLoading && dpStats && dpStats.length === 4 && (
+          {showSettledStats && dpPanelReady && hasImageStats(dpStats) && (
             <Box sx={{ ...statsBarSx, ...hideBetweenPanelsOnMobileSx }}>
-              <Typography sx={statsShownSx}>Mean <Box component="span" sx={statsValueSx}>{formatStat(dpStats[0])}</Box></Typography>
+              <Typography sx={statsTextSx}>Mean <Box component="span" sx={statsValueSx}>{formatStat(dpStats[0])}</Box></Typography>
               {/* no Min: detector counts start at 0, and the row then fits one line beside the image buttons */}
-              <Typography sx={statsShownSx}>Max <Box component="span" sx={statsValueSx}>{formatStat(dpStats[2])}</Box></Typography>
-              <Typography sx={statsShownSx}>Std <Box component="span" sx={statsValueSx}>{formatStat(dpStats[3])}</Box></Typography>
+              <Typography sx={statsTextSx}>Max <Box component="span" sx={statsValueSx}>{formatStat(dpStats[2])}</Box></Typography>
+              <Typography sx={statsTextSx}>Std <Box component="span" sx={statsValueSx}>{formatStat(dpStats[3])}</Box></Typography>
             </Box>
           )}
           {controlsVisible && !dpPanelLoading && (dpStats?.length === 4 || hasViProductSources) && (
-            <Box role="group" aria-label="Image source" sx={{ ...statsBarSx, mt: 0, minHeight: 0,
-              columnGap: embedded ? "8px" : "12px" }}>
+            <Box role="group" aria-label="Image source"
+              onPointerLeave={(event) => { if (event.pointerType === "mouse") previewHover.leaveGroup(); }}
+              sx={{ ...statsBarSx, mt: 0, minHeight: 0,
+              columnGap: "var(--source-gap)", "--source-gap": embedded ? "8px" : "12px",
+              "@media (max-width: 700px)": { ...statsBarSx["@media (max-width: 700px)"], columnGap: "var(--source-gap)", "--source-gap": "6px" } }}>
               {HOVER_PRESETS.map((preset) => (
                 <Typography key={preset} component="button" type="button" {...previewEvents(preset)}
-                  aria-pressed={selectedViSource === "roi" && clickedPreset === preset}
-                  onClick={() => { setHoverSource(null); setClickedPreset(preset); requestViPreset(preset); }}
-                  sx={viSourceButtonSx(preset)}>{preset.toUpperCase()}</Typography>
+                  aria-pressed={selectedPreset === preset}
+                  onClick={() => { previewHover.clear(); requestViPreset(preset); }}
+                  sx={viSourceButtonSx(preset, selectedPreset === preset)}>{preset.toUpperCase()}</Typography>
               ))}
               {viProductSourceOptions.map((source) => (
                 <Typography key={source} component="button" type="button" {...previewEvents(source)}
                   aria-pressed={selectedViSource === source}
-                  onClick={() => { setHoverSource(null); setViSource(source); }}
+                  onClick={() => { previewHover.clear(); setViSource(source); }}
                   sx={viSourceButtonSx(source, selectedViSource === source)}>
                   {viSourceLabel(source)}
                 </Typography>
               ))}
-              {/* under the image buttons, beside DPC (2026-11-18, the operator): Flip and the rotation it gives */}
-              {flipPhaseControl && <Box sx={{ flexBasis: "100%", display: "flex", alignItems: "center", gap: "6px" }}>
-                {flipPhaseControl}</Box>}
             </Box>
           )}
 
@@ -9425,13 +9721,15 @@ liveRows.clear();
         </Box>
 
         {/* SECOND COLUMN: VI Panel */}
-        <Box sx={{ width: viPanelWidth, maxWidth: "100%", ...mobilePanelSx }}>
+        <Box sx={{ width: regionMapSize ? `min(${viCanvasSize}px, 100%)` : viPanelWidth, maxWidth: "100%", ...mobilePanelSx }}>
           {/* VI Header */}
           <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ ...panelHeaderSx, flexWrap: "nowrap", ...hideBetweenPanelsOnMobileSx }}>
             <Stack direction="row" alignItems="center" spacing={`${SPACING.SM}px`} sx={{ minWidth: 0, flexWrap: "nowrap" }}>
-              <Typography noWrap title={`${compareMode ? "Multiple " : ""}${imageSourceLabel}${viFactor > 1 ? ` upsampled ${viFactor}×` : ""} | ${shapeRows}×${shapeCols}`}
+              <Typography noWrap title={`${compareMode ? "Multiple " : ""}${imageSourceLabel}${viFactor > 1 ? ` upsampled ${viFactor}×` : ""} | ${viGridLabel}`}
                 sx={{ ...themedTypography.label, color: themeColors.textMuted, minWidth: 0 }}>
-                {imageSourceLabel}{viFactor > 1 ? ` ${viFactor}×` : ""}{compareMode ? ` · ${shapeRows}×${shapeCols}` : ` | ${shapeRows}×${shapeCols} | ${detRows}×${detCols}`}
+                {imageSourceLabel}{!compareMode && !directPending && activeViSource === "Direct" && preview?.completedGeneration &&
+                  <span aria-label="Direct phase source" ref={viPhaseOriginLabelRef} />}
+                {viFactor > 1 ? ` ${viFactor}×` : ""}{compareMode ? ` · ${viGridLabel}` : ` | ${viGridLabel} | ${detRows}×${detCols}`}
               </Typography>
               {controlsVisible && compareMode && activeComparePageCount > 1 && (
                 <Box sx={{ display: "flex", alignItems: "center", gap: 0.35, flexShrink: 0 }}>
@@ -9654,7 +9952,7 @@ liveRows.clear();
               onGpuRendererReady={setCompareGpuRenderer}
             />
           ) : (
-            <Box sx={{ ...container.imageBox, width: "100%", maxWidth: viCanvasWidth, aspectRatio: `${shapeCols} / ${shapeRows}`, height: "auto", touchAction: "none", ...mobileImageBoxSx }}>
+            <Box sx={{ ...container.imageBox, width: "100%", maxWidth: regionMapSize ? viCanvasSize : viCanvasWidth, aspectRatio: regionMapSize ? "1 / 1" : `${shapeCols} / ${shapeRows}`, height: "auto", touchAction: "none", ...mobileImageBoxSx }}>
               <canvas
                 data-quantem-scientific-output={viGpuVisible ? "show4dstem-virtual-image-cpu" : "show4dstem-virtual-image"}
                 ref={virtualCanvasRef}
@@ -9674,11 +9972,17 @@ liveRows.clear();
                 style={{ position: "absolute", width: "100%", height: "100%",
                   imageRendering: "pixelated", pointerEvents: "none", opacity: viGpuVisible ? 1 : 0 }}
               />
+              <LiveScanRegion incomingScan={preview?.scan} onMapSize={setRegionMap} onImageDraw={paintLiveRegion} source={() => ({
+                canvas: viOffscreenRef.current, scan: preview?.scan, rows: shapeRows, cols: shapeCols,
+                frozen: !!preview?.frozen, region: model.get("live_phase_preview")?.region,
+              })} />
               <canvas
                 ref={virtualOverlayRef} width={shapeCols} height={shapeRows}
+                title="Scroll to zoom. Alt/Option-drag to pan."
                 onPointerDown={handleViMouseDown} onPointerMove={handleViMouseMove}
                 onPointerUp={handleViMouseUp} onPointerCancel={handleViMouseUp} onMouseLeave={handleViMouseLeave}
-                onWheel={createZoomHandler(setViZoom, setViPanX, setViPanY, viViewRef, virtualOverlayRef)}
+                onLostPointerCapture={event => panelPan.vi.release(event)}
+                onWheel={createZoomHandler(setViZoom, setViPanX, setViPanY, viViewRef, virtualOverlayRef, true)}
                 onDoubleClick={handleViDoubleClick}
                 onTouchStart={handlePanelTouchStart("vi")}
                 onTouchMove={handlePanelTouchMove("vi")}
@@ -9689,7 +9993,7 @@ liveRows.clear();
                   width: "100%",
                   height: "100%",
                   touchAction: "none",
-                  cursor: (draggingViProfileEndpoint !== null || isDraggingViProfileLine)
+                  cursor: viPanTool ? (panelPan.vi.active ? "grabbing" : "grab") : (draggingViProfileEndpoint !== null || isDraggingViProfileLine)
                     ? "grabbing"
                     : (viProfileActive && (hoveredViProfileEndpoint !== null || isHoveringViProfileLine))
                       ? "grab"
@@ -9725,18 +10029,33 @@ liveRows.clear();
           )}
 
           {/* VI Stats Bar: stats on left, Auto/Smooth toggles on right edge */}
-          {showStats && !viPanelLoading && <Subscribe store={viDisplayStore}>{({ stats: viStats }) => viStats.length === 4 && (
+          {showStats && showingPointDose && (
+            <Box sx={statsBarSx} aria-label="Point dose">
+              <Button size="small" aria-pressed={showCumulativeDose}
+                sx={{ ...compactButton, color: showCumulativeDose ? themeColors.accent : themeColors.textMuted }}
+                onClick={() => setShowCumulativeDose((show) => !show)}>Cumulate dose</Button>
+              {pointExposure && (
+                <Typography sx={statsTextSx}>
+                  Dose <Box component="span" sx={statsValueSx}>{formatDose(pointExposure.dose)}{showCumulativeDose ? "" : " e⁻/Å²"}</Box>
+                </Typography>
+              )}
+              {showCumulativeDose && pointExposure && (
+                <Typography sx={{ ...statsTextSx, whiteSpace: "normal", flexShrink: 1 }}
+                  title={`${pointExposure.frames} completed exposures`}>
+                  Cumulative <Box component="span" sx={statsValueSx}>{formatDose(pointExposure.total)} e⁻/Å²</Box>
+                  {" · "}({pointExposure.row},{"\u00a0"}{pointExposure.col})
+                </Typography>
+              )}
+            </Box>
+          )}
+          {showSettledStats && !showingPointDose && !viPanelLoading && <Subscribe store={viDisplayStore}>{({ stats: viStats }) => hasImageStats(viStats) && (
             <Box sx={statsBarSx}>
-              {dose != null && Number.isFinite(dose) && <Typography sx={statsShownSx}
+              {dose != null && Number.isFinite(dose) && <Typography sx={statsTextSx}
                 title={`Electron dose ${Math.round(dose).toLocaleString("en-US")} e⁻/Å²: mean counts per scan position ÷ (counts per electron × scan step area)`}>Dose <Box component="span" sx={statsValueSx}>{formatDose(dose)} e⁻/Å²</Box></Typography>}
-              <Typography sx={statsShownSx} title={`Mean ${viStats[0]}`}>Mean <Box component="span" sx={statsValueSx}>{formatMean(viStats[0], viStats[3])}</Box></Typography>
-              <Typography sx={statsShownSx}>Min <Box component="span" sx={statsValueSx}>{formatStat(viStats[1])}</Box></Typography>
-              <Typography sx={statsShownSx}>Max <Box component="span" sx={statsValueSx}>{formatStat(viStats[2])}</Box></Typography>
-              <Typography sx={statsShownSx}>Std <Box component="span" sx={statsValueSx}>{formatStat(viStats[3])}</Box></Typography>
-              {controlsVisible && <Box sx={{ ml: "auto", display: "flex", alignItems: "center", gap: "2px", flexWrap: "nowrap", whiteSpace: "nowrap", flexShrink: 0 }}>
-                <Typography sx={{ ...themedTypography.label, fontSize: 10, lineHeight: "20px" }} title="CSS bilinear interpolation. Same data, browser smooths visually.">Smooth</Typography>
-                <Switch checked={viSmooth} onChange={(event) => setViSmooth(event.target.checked)} size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Image smoothing" } }} />
-              </Box>}
+              <Typography sx={statsTextSx} title={`Mean ${viStats[0]}`}>Mean <Box component="span" sx={statsValueSx}>{formatMean(viStats[0], viStats[3])}</Box></Typography>
+              <Typography sx={statsTextSx}>Min <Box component="span" sx={statsValueSx}>{formatStat(viStats[1])}</Box></Typography>
+              <Typography sx={statsTextSx}>Max <Box component="span" sx={statsValueSx}>{formatStat(viStats[2])}</Box></Typography>
+              <Typography sx={statsTextSx}>Std <Box component="span" sx={statsValueSx}>{formatStat(viStats[3])}</Box></Typography>
             </Box>
           )}</Subscribe>}
 
@@ -9983,12 +10302,12 @@ liveRows.clear();
             </Box>
 
             {/* FFT Stats Bar */}
-            {showStats && !fftPanelLoading && fftStats && fftStats.length === 4 && (
+            {showSettledStats && !fftPanelLoading && hasImageStats(fftStats) && (
               <Box sx={statsBarSx}>
-                <Typography sx={statsShownSx}>Mean <Box component="span" sx={statsValueSx}>{formatStat(fftStats[0])}</Box></Typography>
-                <Typography sx={statsShownSx}>Min <Box component="span" sx={statsValueSx}>{formatStat(fftStats[1])}</Box></Typography>
-                <Typography sx={statsShownSx}>Max <Box component="span" sx={statsValueSx}>{formatStat(fftStats[2])}</Box></Typography>
-                <Typography sx={statsShownSx}>Std <Box component="span" sx={statsValueSx}>{formatStat(fftStats[3])}</Box></Typography>
+                <Typography sx={statsTextSx}>Mean <Box component="span" sx={statsValueSx}>{formatStat(fftStats[0])}</Box></Typography>
+                <Typography sx={statsTextSx}>Min <Box component="span" sx={statsValueSx}>{formatStat(fftStats[1])}</Box></Typography>
+                <Typography sx={statsTextSx}>Max <Box component="span" sx={statsValueSx}>{formatStat(fftStats[2])}</Box></Typography>
+                <Typography sx={statsTextSx}>Std <Box component="span" sx={statsValueSx}>{formatStat(fftStats[3])}</Box></Typography>
               </Box>
             )}
 

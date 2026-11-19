@@ -26,8 +26,10 @@ def test_the_image_in_view_stays_while_a_visits_scan_arrives_completes_or_is_abo
     assert follower.arriving is arriving and viewer.size_groups == []      # counted in the title; no size tab for it
     arriving.complete = True                                # whole, its grid not made yet
     assert follower.of_shown_size([grid, arriving]) == [grid] and follower.arriving is None
+    assert viewer.size_groups == []
     its_grid = Scan((512, 512, 192, 192))
     assert follower.of_shown_size([grid, arriving, its_grid]) == [grid, its_grid]
+    assert viewer.size_groups == []
     second = Scan((1, 262144, 192, 192), complete=False, visits=(512, 512))
     assert follower.of_shown_size([grid, arriving, its_grid, second]) == [grid, its_grid]
     assert follower.of_shown_size([grid, arriving, its_grid]) == [grid, its_grid]      # aborted: the image is still there

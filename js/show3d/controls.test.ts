@@ -125,15 +125,17 @@ afterEach(async () => {
  * A mouse drag as a browser delivers it: each pointer event, then its compatibility mouse event unless the
  * pointerdown was cancelled (the Pointer Events rule that keeps one gesture from running two handlers).
  */
-function mouseDrag(target: Element, points: [number, number][]) {
+function mouseDrag(target: Element, points: [number, number][], beforeRelease: () => void = () => {}) {
   const fire = (type: string, [clientX, clientY]: [number, number]) => {
-    const pointer = new PointerEvent(type, { bubbles: true, cancelable: true, clientX, clientY, pointerId: 1, button: 0, buttons: type === "pointerup" ? 0 : 1 });
+    const pointer = new PointerEvent(type, { bubbles: true, cancelable: true, clientX, clientY, pointerId: 1,
+      pointerType: "mouse", button: 0, buttons: type === "pointerup" ? 0 : 1 });
     act(() => { target.dispatchEvent(pointer); });
     return pointer;
   };
   let compatible = true;
   const mouse = (type: string, [clientX, clientY]: [number, number], mouseTarget: EventTarget) => {
-    if (compatible) act(() => { mouseTarget.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX, clientY, button: 0 })); });
+    if (compatible) act(() => { mouseTarget.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true,
+      clientX, clientY, button: 0, buttons: type === "mouseup" ? 0 : 1 })); });
   };
   compatible = !fire("pointerdown", points[0]).defaultPrevented;
   mouse("mousedown", points[0], target);
@@ -141,6 +143,7 @@ function mouseDrag(target: Element, points: [number, number][]) {
     fire("pointermove", point);
     mouse("mousemove", point, document);
   }
+  beforeRelease();
   fire("pointerup", points[points.length - 1]);
   mouse("mouseup", points[points.length - 1], document);
 }
@@ -205,16 +208,15 @@ it("keeps the current frame while a loop end is dragged", async () => {
   await mount(model);
   model.writes = [];
   // the start thumb (frame 0) moves to frame 1; the current frame (2) must not be re-sent mid-drag
-  const root = el.querySelector('input[data-index="0"]')!.closest(".MuiSlider-root")!;
+  const root = el.querySelector('input[aria-label^="Loop range and current"]')!.closest(".MuiSlider-root")!;
+  const start = root.querySelector('.MuiSlider-thumb[data-index="0"]')!;
   vi.spyOn(root, "getBoundingClientRect").mockReturnValue({ left: 0, width: 90, top: 0, height: 10, bottom: 10, right: 90 } as DOMRect);
-  const mouse = (type: string, clientX: number, target: EventTarget) => act(() => {
-    target.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX, clientY: 5, button: 0, buttons: 1 }));
+  mouseDrag(start, [[1, 5], [32, 5], [32, 5]], () => {
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(model.written("loop_start")).toEqual([1]);
+    expect(model.written("slice_idx")).toEqual([]);
   });
-  mouse("mousedown", 1, root);
-  mouse("mousemove", 32, document);
-  act(() => { vi.advanceTimersByTime(1000); });
-  expect(model.written("loop_start")).toEqual([1]);
-  expect(model.written("slice_idx")).toEqual([]);
+  expect(model.get("slice_idx")).toBe(2);
 });
 
 it("marks More as active while denoise is on with its settings row closed", async () => {

@@ -56,6 +56,24 @@ def _wait_state(page, jupyter, notebook, predicate):
     pytest.fail(f"Comparison did not update: {state}")
 
 
+def test_an_old_live_direct_preview_does_not_label_retained_comparison_phases(jupyter, open_page, browser_out):
+    notebook = "show4dstem_compare_direct_title.ipynb"
+    source = SOURCE.removesuffix("viewer\n") + """
+for index in range(3):
+    viewer.attach("Direct", torch.arange(48 * 48).reshape(48, 48).float() + index, frame=index)
+viewer.vi_source = "Direct"
+viewer.live_phase_stream = True
+viewer.live_phase_preview = dict(scan="live_19", total=16, rows=16, cols=16, detRows=32, detCols=32,
+                                 mode="Direct", upsample=3, completed_direct_generation="old", frozen=True)
+viewer
+"""
+    jupyter.write_notebook(notebook, source)
+    page = jupyter.open(open_page, notebook, "compare_direct_title", webgpu=False, ready=COMPARISON, out=browser_out)
+    page.locator('[title^="Multiple Direct ptycho"]').first.wait_for(timeout=10_000)
+    assert page.get_by_text("ROI · Direct pending", exact=False).count() == 0
+    assert page.get_by_label("Direct phase source").count() == 0
+
+
 def test_comparison_detector_drag_and_scan_region_switch(
     jupyter, open_page, hardware_adapter, browser_out,
 ):

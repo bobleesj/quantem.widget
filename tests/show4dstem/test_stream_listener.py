@@ -1066,11 +1066,64 @@ def test_a_scan_of_another_size_replaces_the_others(recording):
         viewer.close()
 
 
+def test_size_switch_keeps_retained_scan_until_the_first_pattern(recording):
+    retained = LiveScan("series_1")
+    arriving = LiveScan("series_2")
+    arriving.counts = torch.full((1, 6, 8, 10), 2, dtype=torch.float32)
+    arriving.received, arriving.total = 0, 6
+    viewer = Show4DSTEM.stream(recording, embedded=True)
+    titles = []
+    viewer.observe(lambda change: titles.append(change["new"]), names="title")
+    try:
+        recording.acquisitions.append(retained)
+        viewer.refresh_stream()
+        pattern = viewer.frame_bytes
+        recording.acquisitions.append(arriving)
+        viewer.refresh_stream()
+        assert viewer.frame_labels == ["series_1"] and viewer.frame_bytes == pattern
+        assert not arriving.sessions
+
+        arriving.received = 1
+        viewer.refresh_stream()
+        assert viewer.frame_labels == ["series_2"]
+        assert viewer.title == "Live · 2 · 1/6 · 1 kept"
+        assert "No retained scans" not in titles
+        assert len(viewer.size_groups) == 2
+    finally:
+        viewer.close()
+
+
+def test_binned_live_visits_use_the_selected_detector_on_the_active_geometry(recording):
+    from quantem.widget.show4dstem.detector import preset_mask
+
+    retained = LiveScan("series_1")
+    retained.counts = torch.ones((3, 4, 16, 20))
+    recording.acquisitions.append(retained)
+    viewer = Show4DSTEM.stream(recording, bright_field_center_px=(7.0, 9.0),
+                              bright_field_radius_px=4.0, detector_sampling_mrad=(0.4, 0.5))
+    try:
+        viewer.refresh_stream()
+        viewer.apply_preset("adf")
+        selected = viewer._live_visit_detector_mask("live_2", (8, 10))
+        expected = preset_mask("adf", (8, 10), (3.25, 4.25), 2.0)
+        assert expected is not None
+        assert np.array_equal(selected, expected)
+        assert viewer._live_visit_detector_mask("live_3", (8, 10)) is selected
+        shown = viewer.live_detector_view
+        assert shown["scan"] == "live_3"
+        assert (shown["centerRow"], shown["centerCol"], shown["preset"]) == (3.25, 4.25, "adf")
+        assert shown["samplingMrad"] == [0.8, 1.0]
+        assert viewer._current_detector_mask().shape == (16, 20)
+    finally:
+        viewer.close()
+
+
 def test_a_failed_update_does_not_stop_the_live_panel(monkeypatch):
     """11-16 at the microscope: after one failed update (a scan released by the GPU memory limit while it was being
     drawn), the live page's left panel never showed another scan. The follower keeps going: the failure shows in
     the title, and the next scans appear."""
-    recording = SimpleNamespace(lock=threading.RLock(), acquisitions=[], datasets=[], receiving=True, error=None)
+    recording = SimpleNamespace(lock=threading.RLock(), acquisitions=[], datasets=[], receiving=True,
+                                error=None, select_newest=True)
     viewer = Show4DSTEM.stream(recording, refresh_s=0.01)
     refresh, failures = Show4DSTEM.refresh, [LookupError("series_14 was released from GPU memory")]
 
@@ -1144,6 +1197,7 @@ def test_short_scan_name_follows_the_page_rule():
 
 
 def test_live_titles_name_the_scan_short_and_a_live_frame_by_number(recording):
+    recording.select_newest = True
     go = LiveScan("series_4_rot0")
     viewer = Show4DSTEM.stream(recording)
     try:
@@ -1155,6 +1209,31 @@ def test_live_titles_name_the_scan_short_and_a_live_frame_by_number(recording):
         recording.acquisitions[:] = [go, frame]
         viewer.refresh_stream()
         assert viewer.title == "Live · frame 7 · 5/12"
+    finally:
+        viewer.close()
+
+
+def test_live_title_follows_the_selected_dataset_after_returning_to_another_size(recording):
+    """A scan's grid and the earlier scan keep their own titles in a size group."""
+    first = LiveScan("series_1")
+    grid = LiveScan("series_2_grid")
+    grid.metadata.update(grid_of="series_2", scan_positions=[[0, 0], [0, 2], [0, 0]])
+    large = LiveScan("series_3")
+    large.counts = torch.ones((4, 4, 8, 10))
+    large.received = large.total = 16
+    viewer = Show4DSTEM.stream(recording)
+    try:
+        recording.acquisitions.extend([first, grid, large])
+        viewer.refresh_stream()
+        assert viewer.title == "Live · 3 · 16/16 ✓ · 1 kept"
+        viewer.size_group = 1
+        viewer.refresh_stream()
+        assert viewer.frame_idx == 0
+        assert viewer.title == "Live · 1 · 12/12 ✓ · 2 kept"
+        viewer.frame_idx = 1
+        assert viewer.title == "Live · 2 · 3 visits · 2 kept"
+        viewer.frame_idx = 0
+        assert viewer.title == "Live · 1 · 12/12 ✓ · 2 kept"
     finally:
         viewer.close()
 
@@ -1171,6 +1250,30 @@ def test_sparse_grid_title_counts_detector_visits_instead_of_grid_cells(recordin
         viewer.close()
 
 
+def test_visit_progress_updates_the_title_over_the_retained_scan(recording):
+    first = LiveScan("series_1")
+    visits = LiveScan("series_2")
+    visits.counts = visits.counts.reshape(1, 12, 8, 10)
+    visits.metadata["scan_positions"] = [[row, col] for row in range(3) for col in range(4)]
+    visits.complete, visits.received = False, 3
+    viewer = Show4DSTEM.stream(recording)
+    try:
+        recording.acquisitions.append(first)
+        viewer.refresh_stream()
+        recording.acquisitions.append(visits)
+        viewer.refresh_stream()
+        assert viewer.frame_labels == ["series_1"]
+        assert viewer.title == "Live · 2 · 3/12 · 1 kept"
+        visits.received = 8
+        viewer.refresh_stream()
+        assert viewer.title == "Live · 2 · 8/12 · 1 kept"
+        recording.acquisitions.pop()
+        viewer.refresh_stream()
+        assert viewer.title == "Live · 1 · 12/12 ✓ · 1 kept"
+    finally:
+        viewer.close()
+
+
 def test_reinitialized_geometry_keeps_the_operators_detector_area_at_the_same_detector_size(recording):
     """2026-11-18, at the microscope: a live view moving between a 512 scan and 128 Live frames re-initialized its
     geometry at each switch, and ADF snapped back to the bright-field circle."""
@@ -1182,5 +1285,228 @@ def test_reinitialized_geometry_keeps_the_operators_detector_area_at_the_same_de
         chosen = (viewer.roi_mode, viewer.roi_center, viewer.roi_radius_inner, viewer.roi_radius)
         viewer._initialize_stream_geometry(recording.acquisitions[0], {})      # the shape switch the page makes
         assert (viewer.roi_mode, viewer.roi_center, viewer.roi_radius_inner, viewer.roi_radius) == chosen
+    finally:
+        viewer.close()
+
+
+def test_stopped_live_keeps_its_aperture_when_the_retained_detector_size_differs(recording):
+    retained = LiveScan("series_1")
+    retained.counts = torch.ones((3, 4, 16, 20))
+    live = LiveScan("live_7")
+    live.metadata["detector_sampling_mrad"] = [1.4, 1.4]
+    viewer = Show4DSTEM.stream(recording)
+    try:
+        recording.acquisitions[:] = [retained, live]
+        viewer.refresh_stream()
+        viewer.apply_preset("adf")
+        aperture = (viewer.roi_center_row, viewer.roi_center_col, viewer.roi_radius_inner, viewer.roi_radius)
+        viewer.live_phase_preview = {"scan": "live_7", "detRows": 8, "detCols": 10}
+
+        recording.acquisitions[:] = [retained]
+        viewer.refresh_stream()
+
+        assert (viewer.det_rows, viewer.det_cols) == (16, 20)
+        assert viewer.roi_mode == "annular"
+        snapshot = viewer.live_detector_view
+        assert snapshot["scan"] == "live_7" and snapshot["mode"] == "annular"
+        assert tuple(snapshot[field] for field in ("centerRow", "centerCol", "inner", "radius")) == aperture
+        assert snapshot["samplingMrad"] == [1.4, 1.4]
+    finally:
+        viewer.close()
+
+
+def test_new_detector_binning_reapplies_the_named_aperture_and_not_a_custom_geometry(recording):
+    large = LiveScan("series_1")
+    large.counts = torch.ones((3, 4, 16, 20))
+    small = LiveScan("live_2")
+    viewer = Show4DSTEM.stream(recording)
+    try:
+        recording.acquisitions[:] = [large]
+        viewer.refresh_stream()
+        viewer.apply_preset("adf")
+        revision = viewer._detector_preset_revision
+        viewer.bright_field_center_row_px += 0.25  # another field in the same detector geometry
+        assert viewer._current_named_detector_preset() == "adf"
+        assert viewer._detector_preset_name == "adf"
+        recording.acquisitions[:] = [large, small]
+        viewer.refresh_stream()
+
+        assert (viewer.det_rows, viewer.det_cols) == (8, 10)
+        assert viewer._current_named_detector_preset() == "adf"
+        assert viewer.roi_center == [viewer.roi_center_row, viewer.roi_center_col]
+        assert viewer.roi_radius_inner == viewer.bright_field_radius_px
+        assert viewer._detector_preset_revision == revision
+
+        viewer.roi_center_row += 0.25
+        assert not viewer._detector_preset_name
+        recording.acquisitions[:] = [large]
+        viewer.refresh_stream()
+        assert (viewer.det_rows, viewer.det_cols) == (16, 20)
+        assert viewer.roi_mode == "circle"
+        assert viewer.roi_radius_inner == 0
+        assert viewer._current_named_detector_preset() is None
+    finally:
+        viewer.close()
+
+
+def test_hover_presets_keep_the_selected_live_detector_session_separate(recording):
+    first = LiveScan("live_1")
+    second = LiveScan("live_2", value=2)
+    viewer = Show4DSTEM.stream(recording)
+    try:
+        recording.acquisitions[:] = [first]
+        viewer.refresh_stream()
+        viewer.apply_preset("adf")
+        viewer.live_phase_preview = {"scan": "live_1"}
+        selected = viewer._compute
+        request = {"preset": "bf", "shape": [3, 4, 8, 10], "frame": 0,
+                   "source_id": viewer._stream_source_ids[0], "scan": "live_1"}
+
+        first_image = viewer._preset_preview_pixels(request)
+        hovered = viewer._live_preset_sessions["bf"]
+        second_image = viewer._preset_preview_pixels(request)
+        assert hovered is not selected
+        assert viewer._live_preset_sessions["bf"] is hovered
+        assert first_image == second_image and viewer.roi_mode == "annular"
+
+        recording.acquisitions[:] = [second]
+        viewer.refresh_stream()
+        assert viewer._live_preset_sessions == {}
+        assert hovered._flat_t is None
+    finally:
+        viewer.close()
+
+
+def test_live_hover_sends_new_positions_and_resets_on_source_change(recording, monkeypatch):
+    source = LiveScan("series_1")
+    source.received = 5
+    recording.acquisitions[:] = [source]
+    viewer = Show4DSTEM.stream(recording)
+    try:
+        viewer.refresh_stream()
+        viewer.live_phase_preview = {"scan": "series_1"}
+        identity = viewer._stream_source_ids[0]
+        request = {"type": "show4dstem_preset_preview", "view": "test", "request": 1,
+                   "preset": "bf", "shape": [3, 4, 8, 10], "frame": 0, "source_id": identity,
+                   "scan": "series_1", "prefix": True}
+        replies = []
+        monkeypatch.setattr(viewer, "send", lambda content, buffers: replies.append((content, buffers)))
+        exact = bytes(viewer._preset_preview_pixels(request))
+        viewer._handle_preset_preview(viewer, request, ())
+        message, buffers = replies[-1]
+        assert message["prefix"] == dict(source=identity, scan="series_1", start=0, stop=5)
+        assert bytes(buffers[0]) == exact[:20]
+
+        source.received = 8
+        viewer._handle_preset_preview(viewer, {**request, "after_source": identity, "after": 5}, ())
+        message, buffers = replies[-1]
+        assert message["prefix"] == dict(source=identity, scan="series_1", start=5, stop=8)
+        assert bytes(buffers[0]) == exact[20:32]
+
+        viewer._handle_preset_preview(viewer, {**request, "after_source": "old", "after": 8}, ())
+        message, buffers = replies[-1]
+        assert message["prefix"]["start"] == 0
+        assert bytes(buffers[0]) == exact[:32]
+    finally:
+        viewer.close()
+
+
+def test_hover_uses_the_scan_drawing_in_single_view_with_a_retained_dataset_selected(recording, monkeypatch):
+    old = LiveScan("series_1", value=1)
+    incoming = LiveScan("series_2", value=3)
+    recording.acquisitions[:] = [old, incoming]
+    viewer = Show4DSTEM.stream(recording, view_mode="single")
+    try:
+        viewer.refresh_stream()
+        viewer.frame_idx = 0
+        old_id, live_id = viewer._stream_source_ids
+        viewer.live_phase_preview = {"scan": "series_2"}
+        captured = []
+        monkeypatch.setattr(viewer, "send", lambda content, buffers: captured.append((content, buffers)))
+        request = {"type": "show4dstem_preset_preview", "view": "test", "request": 1,
+                   "preset": "bf", "shape": [3, 4, 8, 10], "frame": 0, "source_id": old_id,
+                   "scan": "series_2", "prefix": True}
+
+        viewer._handle_preset_preview(viewer, request, ())
+        message, buffers = captured[-1]
+        assert message["prefix"]["source"] == live_id
+        assert message["prefix"]["scan"] == "series_2"
+        assert viewer.frame_idx == 0
+        assert viewer._live_preset_source is incoming
+        bright_field = np.frombuffer(buffers[0], dtype=np.float32)
+        assert np.all(bright_field == 3 * viewer._current_detector_mask().sum())
+    finally:
+        viewer.close()
+
+
+def test_hover_reads_the_current_live_frame_before_it_is_retained(recording, monkeypatch):
+    old = LiveScan("live_1", value=1)
+    incoming = LiveScan("live_2", value=3)
+    incoming.identifier, incoming.shape, incoming.received = "incoming", incoming.counts.shape, 5
+    recording.acquisitions[:] = [old]
+    requested_series = []
+
+    def preview_source(series):
+        requested_series.append(series)
+        return incoming
+
+    recording.detector_preview_source = preview_source
+    viewer = Show4DSTEM.stream(recording, view_mode="single")
+    try:
+        viewer.refresh_stream()
+        viewer.live_phase_preview = {"scan": "live_2"}
+        captured = []
+        monkeypatch.setattr(viewer, "send", lambda content, buffers: captured.append((content, buffers)))
+        request = {"type": "show4dstem_preset_preview", "view": "test", "request": 1,
+                   "preset": "bf", "shape": [3, 4, 8, 10], "frame": 0,
+                   "scan": "live_2", "prefix": True}
+
+        viewer._handle_preset_preview(viewer, request, ())
+        message, buffers = captured[-1]
+        assert requested_series == ["live_2"]
+        assert viewer.frame_labels == ["live_1"]
+        assert message["prefix"] == dict(source="incoming", scan="live_2", start=0, stop=5)
+        assert np.all(np.frombuffer(buffers[0], dtype=np.float32) == 3 * viewer._current_detector_mask().sum())
+
+        viewer._handle_preset_preview(viewer, {**request, "after_source": "incoming", "after": 5}, ())
+        assert not captured[-1][1]
+    finally:
+        viewer.close()
+
+
+def test_hover_maps_measured_visits_onto_the_active_field_with_a_different_detector(recording, monkeypatch):
+    from quantem.widget.show4dstem.detector import preset_mask
+
+    retained = LiveScan("series_1")
+    retained.counts = torch.ones((3, 4, 16, 20))
+    incoming = LiveScan("live_2")
+    incoming.counts = torch.arange(1, 5, dtype=torch.float32).reshape(1, 4, 1, 1).expand(1, 4, 8, 10).contiguous()
+    incoming.shape, incoming.identifier, incoming.received = incoming.counts.shape, "visits", 2
+    incoming.metadata.update(scan_positions=[[0, 1], [1, 2], [0, 1], [2, 0]], scan_positions_shape=[3, 4])
+    recording.acquisitions[:] = [retained]
+    recording.detector_preview_source = lambda name: incoming
+    viewer = Show4DSTEM.stream(recording, view_mode="single")
+    try:
+        viewer.refresh_stream()
+        viewer.apply_preset("adf")
+        viewer.live_phase_preview = dict(scan="live_2", visit_path=True, total=3, cols=4, detRows=8, detCols=10)
+        captured = []
+        monkeypatch.setattr(viewer, "send", lambda content, buffers: captured.append((content, buffers)))
+        request = dict(type="show4dstem_preset_preview", view="test", request=1, preset="bf",
+                       shape=[3, 4, 8, 10], frame=0, scan="live_2", prefix=True)
+        viewer._handle_preset_preview(viewer, request, ())
+        message, buffers = captured[-1]
+        assert message["prefix"] == dict(source="visits", scan="live_2", start=0, stop=2, at=True, total=4)
+        np.testing.assert_array_equal(np.frombuffer(buffers[1], np.int32), [1, 6])
+        disk = viewer._live_preset_disk
+        area = preset_mask("bf", (8, 10), disk[:2], disk[2]).sum()
+        np.testing.assert_array_equal(np.frombuffer(buffers[0], np.float32), [area, 2 * area])
+        incoming.received = 4
+        viewer._handle_preset_preview(viewer, {**request, "after_source": "visits", "after": 2}, ())
+        message, buffers = captured[-1]
+        assert message["prefix"]["start"] == 2
+        np.testing.assert_array_equal(np.frombuffer(buffers[1], np.int32), [1, 8])
+        np.testing.assert_array_equal(np.frombuffer(buffers[0], np.float32), [3 * area, 4 * area])
+        assert viewer.roi_mode == "annular"
     finally:
         viewer.close()

@@ -349,6 +349,10 @@ def test_space_plays_the_frame_series(pages, open_page, hardware_adapter):
 def test_flip_changes_only_the_direct_phase_contrast(pages, open_page, hardware_adapter):
     page = open_export(open_page, hardware_adapter, pages["direct"], ready=VI)
     toggle = page.get_by_role("checkbox", name="Flip phase contrast")
+    assert toggle.evaluate("""node => {
+      const bar = node.closest("label").previousElementSibling;
+      return Boolean(bar?.querySelector('input[aria-label="Diffraction colorbar"]'));
+    }""")
     canvas = page.locator(VI).first
     before = canvas.evaluate("(node) => node.toDataURL()")
     original = shot(page, VI)

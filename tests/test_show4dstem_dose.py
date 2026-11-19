@@ -8,14 +8,14 @@ import torch
 from quantem.widget import Show4DSTEM
 
 
-def dasol_dose(dp, fov, adu):
+def reference_dose(dp, fov, adu):
     """Her code: pacbed = mean over scan positions; dose = sum(pacbed) Nx Nx / (ADU fov fov)."""
     nx = dp.shape[0]
     pacbed = np.mean(dp, axis=(0, 1))
     return np.sum(pacbed) * nx * nx / (adu * fov * fov)
 
 
-def test_the_dose_is_dasols_calcdose():
+def test_the_dose_matches_the_reference():
     """Measured 11-18 on scan 1256 (512 x 512, 1.0526 A step): 72,038.87 e/A^2 both ways, an independent full sum of
     every count by her formula and this, from the running count total, in 0.12 ms."""
     rng = np.random.default_rng(3)
@@ -23,7 +23,7 @@ def test_the_dose_is_dasols_calcdose():
     step = 0.5
     viewer = Show4DSTEM(torch.from_numpy(dp), scan_sampling_A=(step, step))
     try:
-        assert viewer.dose() == pytest.approx(dasol_dose(dp, 8 * step, 1.0), rel=1e-6)
+        assert viewer.dose() == pytest.approx(reference_dose(dp, 8 * step, 1.0), rel=1e-6)
         assert viewer.dose_e_per_A2 == pytest.approx(viewer.dose())
     finally:
         viewer.close()
@@ -57,6 +57,13 @@ def test_frame_metadata_reads_a_live_scans_acquisition(monkeypatch):
     from quantem.widget import Show4DSTEM
 
     viewer = Show4DSTEM(np.zeros((4, 4, 8, 8), np.float32))
-    view = SimpleNamespace(source=SimpleNamespace(metadata={"series": "series_1440"}))
-    monkeypatch.setattr(viewer, "_frame_source", lambda index: view)
-    assert viewer.frame_metadata()["series"] == "series_1440"
+    visits = np.ones((4, 4), np.int32)
+    visits[2, 1] = 0
+    view = SimpleNamespace(source=SimpleNamespace(metadata={"series": "series_1440", "visits_per_position": visits}))
+    try:
+        monkeypatch.setattr(viewer, "_frame_source", lambda index: view)
+        assert viewer.frame_metadata()["series"] == "series_1440"
+        viewer._update_unvisited()
+        np.testing.assert_array_equal(np.frombuffer(viewer.unvisited_bytes, np.uint8).reshape(4, 4), visits == 0)
+    finally:
+        viewer.close()

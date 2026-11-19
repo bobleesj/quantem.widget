@@ -68,7 +68,7 @@ from quantem.widget.show4dstem.detector import (
 )
 from quantem.widget.show4dstem.preview import static_png_b64
 from quantem.widget.show4dstem.reader import acquisition_name
-from quantem.widget.show4dstem.streaming import _shape_of, _size_label
+from quantem.widget.show4dstem.streaming import _shape_of, _size_label, live_frame_number
 from quantem.widget.show4dstem.session import DetectorSessionSource, SessionSeries
 from quantem.widget.show4dstem.streaming import StreamFollower
 from quantem.widget.show4dstem.live import LiveFolder
@@ -264,6 +264,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     # them. A host (a scanning GUI) sets them as the browsed dataset changes (frame_metadata gives what it reads).
     source_folder = traitlets.Unicode("").tag(sync=True)
     source_file = traitlets.Unicode("").tag(sync=True)
+    source_selection = traitlets.Unicode(None, allow_none=True).tag(sync=True)
+    # A visible row preview has its own save record, separate from frame_idx.
+    preview_source = traitlets.Dict(default_value={}).tag(sync=True)
     # Live acquisition: the diffraction pattern follows the newest arrived pattern, except while the user
     # interacts and for STREAM_FOLLOW_PAUSE_S after (drag the probe, let go, and it returns to the newest).
     stream_follow = traitlets.Bool(True)
@@ -300,8 +303,12 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     #   send({"type": "live_image_clear"}) forgets every image, so the next scan is drawn over nothing.
     # A frame that carries whole images (phase, roi, com_row, com_col, dpc as float32 bytes, with dp) still shows.
     live_phase_preview = traitlets.Dict(default_value={}).tag(sync=True)
+    live_detector_view = traitlets.Dict(default_value={}).tag(sync=True)
     # The receiver uses the diffraction-only frame in Multiple when the matching browser bundle supports it.
     supports_live_diffraction_in_multiple = True
+    # The mounted browser explicitly subscribes to uncentered CoM row deltas.
+    # An older browser can only consume conventional centered row messages.
+    live_com_subscription = traitlets.Unicode("").tag(sync=True)
     # The newest diffraction pattern of the scan being received (float32, detector rows x cols): sent alone, many
     # times a second, and drawn without rendering the viewer.
     live_pattern = traitlets.Bytes(b"").tag(sync=True)
@@ -316,6 +323,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     #: per electron (the scan's ``counts_per_electron``, 1 for a counting detector such as the ARINA) times the scan
     #: step's area. A user's calcDose (11-18): dose = sum(PACBED) Nx^2 / (ADU FOV^2), the same quantity.
     dose_e_per_A2 = traitlets.Float(None, allow_none=True).tag(sync=True)
+    #: Live Point dose at a measured (row, col): frames, frame_dose_e_per_A2 and cumulative
+    #: dose_e_per_A2. Empty when no calibrated exposure is available for the point.
+    point_dose = traitlets.Dict(default_value={}).tag(sync=True)
     vi_source = traitlets.Unicode("roi").tag(sync=True)
     vi_product_labels = traitlets.List(traitlets.Unicode(), default_value=[]).tag(sync=True)
     vi_product_map_frames = traitlets.Int(0).tag(sync=True)
@@ -385,6 +395,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     fft_auto = traitlets.Bool(True).tag(sync=True)
     show_fft = traitlets.Bool(False).tag(sync=True)
     _preset_request = traitlets.Unicode("").tag(sync=True)
+    _detector_preset_name = traitlets.Unicode("").tag(sync=True)
     fft_window = traitlets.Bool(True).tag(sync=True)
     show_controls = traitlets.Bool(True).tag(sync=True)
     controls_collapsed = traitlets.Bool(False).tag(sync=True)
@@ -509,10 +520,15 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._attached_upsampled: dict[str, dict[str, np.ndarray]] = {}  # the same, k x the scan grid
         self._attached_lock = threading.RLock()
         self._preset_images: dict[str, bytes | memoryview] = {}
+        self._live_preset_source = None
+        self._live_preset_disk = None
+        self._live_preset_sessions: dict[str, DetectorSessionSource] = {}
         self._suppress_roi_recompute = False
         self._roi_seen: tuple | None = None  # the detector ROI at the last ROI notification
         self._position_seen: tuple | None = None  # the scan position at the last position notification
         self._last_interaction_at = 0.0
+        self._detector_preset_revision = 0
+        self._detector_preset_aperture = None
         self._suppress_compare_recompute = False
         self._owned_acquisitions = []
         self._stream_lock = threading.RLock()
@@ -1038,25 +1054,24 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         # switched, radii stale) would paint a wrong image first.
         self._suppress_roi_recompute = True
         with self.hold_trait_notifications():
+            self._detector_preset_revision += 1
             self.vi_source = "roi"
-            self.roi_active = True
-            self.roi_mode = "circle" if preset == "bf" else "annular"
-            self.roi_center_row = float(self.bright_field_center_row_px)
-            self.roi_center_col = float(self.bright_field_center_col_px)
-            if preset == "bf":
-                self.roi_radius_inner = 0.0
-                self.roi_radius = float(max(1.0, bright_field_radius_px))
-            elif preset == "abf":
-                self.roi_radius_inner = float(max(0.5, bright_field_radius_px * 0.5))
-                self.roi_radius = float(max(1.0, bright_field_radius_px))
-            else:
-                # preset_radii: the multiples of the disk radius, the outer one ending at the detector edge
-                self.roi_radius_inner, self.roi_radius = float(radii[0]), float(radii[1])
+            self._place_detector_preset(preset, center, radii)
         self._suppress_roi_recompute = False
         if not self._multiple_view_active():
             self._compute_virtual_image_from_roi()
         self._refresh_compare_virtual_images()
         return self
+
+    def _place_detector_preset(self, name, center, radii) -> None:
+        """Write a supported aperture after the caller has deferred its observers."""
+        self.roi_active = True
+        self.roi_mode = "circle" if name == "bf" else "annular"
+        self.roi_center_row, self.roi_center_col = map(float, center)
+        self.roi_center = [self.roi_center_row, self.roi_center_col]
+        self.roi_radius_inner, self.roi_radius = map(float, radii[:2])
+        self._detector_preset_name = name
+        self._detector_preset_aperture = self._detector_aperture()
 
     # The traits of the display state: scalars, then the lists state_dict copies.
     _STATE_KEYS = (
@@ -1468,8 +1483,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         """Send the positions of the shown scan its path never visited, read from its ``visits_per_position``."""
         mask = b""
         if self._data is not None and 0 <= int(self.frame_idx) < max(1, int(self.n_frames)):
-            metadata = getattr(self._frame_source(int(self.frame_idx)), "metadata", None) or {}
-            visits = metadata.get("visits_per_position")
+            visits = self.frame_metadata().get("visits_per_position")
             if visits is not None:
                 visits = np.asarray(visits)
                 if visits.shape == (self.shape_rows, self.shape_cols) and (visits == 0).any():
@@ -1529,7 +1543,34 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         re-initialized at each switch and snapped ADF back to the bright-field circle)."""
         self._device = torch.device(self._data.device)
         detector_before = (self.det_rows, self.det_cols) if getattr(self, "_stream_geometry_set", False) else None
-        self.shape_rows, self.shape_cols, self.det_rows, self.det_cols = self._data.shape[-4:]
+        preset = self._current_named_detector_preset() if detector_before else None
+        rows, cols, det_rows, det_cols = self._data.shape[-4:]
+        preview = self.live_phase_preview
+        if (
+            detector_before != (det_rows, det_cols)
+            and live_frame_number(preview.get("scan")) is not None
+            and detector_before == (preview.get("detRows"), preview.get("detCols"))
+        ):
+            # An unsaved Live frame remains visible when the receiver falls back to a retained
+            # scan. Its aperture and diffraction scale still belong to the original detector.
+            self.live_detector_view = {
+                "scan": preview["scan"],
+                "mode": self.roi_mode,
+                "active": self.roi_active,
+                "preset": preset or "",
+                "centerRow": self.roi_center_row,
+                "centerCol": self.roi_center_col,
+                "radius": self.roi_radius,
+                "inner": self.roi_radius_inner,
+                "width": self.roi_width,
+                "height": self.roi_height,
+                "bfRow": self.bright_field_center_row_px,
+                "bfCol": self.bright_field_center_col_px,
+                "bfRadius": self.bright_field_radius_px,
+                "samplingMrad": list(self.detector_sampling_mrad),
+                "samplingInvA": list(self.detector_sampling_inv_A),
+            }
+        self.shape_rows, self.shape_cols, self.det_rows, self.det_cols = rows, cols, det_rows, det_cols
         self._stream_geometry_set = True
         keep_detector_area = detector_before == (self.det_rows, self.det_cols)
         self.pos_row = self.pos_col = 0
@@ -1560,8 +1601,26 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             center if center is not None else (self.det_rows / 2, self.det_cols / 2))
         self.bright_field_radius_px = (radius if radius is not None else
                                       min(self.det_rows, self.det_cols) * BRIGHT_FIELD_RADIUS_FRACTION)
-        if not keep_detector_area:                  # a new detector size: the bright-field disk of this one
-            self._set_roi_to_disk()
+        if not keep_detector_area:
+            center = (self.bright_field_center_row_px, self.bright_field_center_col_px)
+            radii = preset_radii(preset, (det_rows, det_cols), center, self.bright_field_radius_px) if preset else None
+            if radii is None:
+                self._detector_preset_name = ""
+                self._detector_preset_aperture = None
+                self._set_roi_to_disk()
+            else:
+                self._place_detector_preset(preset, center, radii)
+
+    def _current_named_detector_preset(self) -> str | None:
+        """Keep an explicit preset across binning while the operator still uses its aperture."""
+        if self._detector_preset_aperture == self._detector_aperture():
+            return self._detector_preset_name
+        return None
+
+    def _detector_aperture(self) -> tuple:
+        """The current diffraction aperture, independent of a newer disk fit."""
+        return (self.roi_active, self.roi_mode, self.roi_center_row, self.roi_center_col,
+                self.roi_radius_inner, self.roi_radius)
 
     @contextmanager
     def _defer_stream_observers(self):
@@ -1583,6 +1642,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         """Retire old live panels without resetting the detector or surviving query sessions."""
         with self._compare_lock, self._session_lock:
             self._stream_completed_sources.clear()
+            if self._live_preset_source is not None and all(source is not self._live_preset_source for source in sources):
+                self._close_live_preset_sessions()
             if not sources:
                 self._close_sessions()
                 self._data = None
@@ -1683,6 +1744,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         """Close every detector session: sessions hold views of the data, so the memory is released only after this."""
         with self._compare_lock, self._session_lock:
             self._stream_completed_sources.clear()
+            self._close_live_preset_sessions()
             if self._compare_session is not None:
                 self._compare_session.close()
                 self._compare_session = None
@@ -1693,6 +1755,14 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             for session in {id(session): session for session in sessions}.values():
                 session.close()
             self._sessions = {}
+
+    def _close_live_preset_sessions(self) -> None:
+        """Release the temporary preset caches that borrow the current live scan."""
+        for session in self._live_preset_sessions.values():
+            session.close()
+        self._live_preset_sessions.clear()
+        self._live_preset_source = None
+        self._live_preset_disk = None
 
     @property
     def _compute(self):
@@ -1756,6 +1826,53 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         return roi_mask(self.roi_mode, (self.det_rows, self.det_cols), center_row=self.roi_center_row,
                         center_col=self.roi_center_col, radius=self.roi_radius, radius_inner=self.roi_radius_inner,
                         width=self.roi_width, height=self.roi_height)
+
+    def _projected_live_disk(self, detector: tuple[int, int]) -> tuple[float, float, float] | None:
+        """Put the existing bright-field disk on the same detector at another binning."""
+        # A 1×1 idle model has no detector calibration to project.
+        if min(detector) <= 0 or min(self.det_rows, self.det_cols) <= 1:
+            return None
+        scale = detector[0] / self.det_rows
+        if scale != detector[1] / self.det_cols:
+            return None
+        return ((self.bright_field_center_row_px + 0.5) * scale - 0.5,
+                (self.bright_field_center_col_px + 0.5) * scale - 0.5,
+                self.bright_field_radius_px * scale)
+
+    def _live_visit_detector_mask(self, scan: str, detector: tuple[int, int]) -> np.ndarray | None:
+        """Share a binned Live aperture even when the widget still owns a differently binned retained grid."""
+        disk = self._projected_live_disk(detector)
+        if disk is None:
+            return None
+        scale = detector[0] / self.det_rows
+        active, mode, row, col, inner, radius = self._detector_aperture()
+        center = ((row + 0.5) * scale - 0.5, (col + 0.5) * scale - 0.5)
+        inner, radius = inner * scale, radius * scale
+        preset = self._current_named_detector_preset()
+        if preset:
+            # Use exactly the same preset geometry for temporary hover and selected images.
+            radii = preset_radii(preset, detector, disk[:2], disk[2])
+            if radii is None:
+                return None
+            center, (inner, radius) = disk[:2], radii[:2]
+        width, height = self.roi_width * scale, self.roi_height * scale
+        geometry = {"mode": mode, "active": active, "preset": preset or "",
+                    "centerRow": center[0], "centerCol": center[1], "radius": radius, "inner": inner,
+                    "width": width, "height": height, "bfRow": disk[0], "bfCol": disk[1], "bfRadius": disk[2],
+                    "samplingMrad": [value / scale for value in self.detector_sampling_mrad],
+                    "samplingInvA": [value / scale for value in self.detector_sampling_inv_A]}
+        key = (detector, mode, center, radius, inner, width, height)
+        cached = getattr(self, "_live_visit_mask_cache", None)
+        if cached is None or cached[0] != key:
+            mask = roi_mask(mode, detector, center_row=center[0], center_col=center[1],
+                            radius=radius, radius_inner=inner, width=width, height=height)
+            self._live_visit_mask_cache = key, mask
+        else:
+            mask = cached[1]
+        shown = {"scan": scan, **geometry}
+        if self.live_detector_view != shown:
+            self.live_detector_view = shown
+        return mask
 
     def _compute_virtual_image_from_roi(self) -> None:
         """Sum the current dataset over the detector ROI into ``virtual_image_bytes``."""
@@ -2800,6 +2917,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             self.roi_center_col = self.bright_field_center_col_px
             self.roi_center_row = self.bright_field_center_row_px
             self.roi_center = [self.bright_field_center_row_px, self.bright_field_center_col_px]
+            self.roi_radius_inner = 0.0
             self.roi_radius = float(max(1.0, self.bright_field_radius_px))
             self.roi_active = True
         self._suppress_roi_recompute = False
@@ -2822,49 +2940,146 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             return
         reply = {"type": "show4dstem_preset_preview_result", "view": content.get("view"),
                  "request": content.get("request")}
-        image = None
+        image, indices = None, None
         if self._stream_lock.acquire(blocking=False):
             try:
-                image = self._preset_preview_pixels(content)
-            except (LookupError, ValueError, RuntimeError, MemoryError):
-                pass  # A stream source may leave while a preview is requested.
+                active = self._preset_preview_live_source(content)
+                if active is not None or not self.live_phase_preview:
+                    prefix = self._preset_preview_prefix(content, active)
+                    if prefix is None or prefix[2] < prefix[3]:
+                        image = self._preset_preview_pixels(content, active)
+                    if image is not None and prefix is not None:
+                        source_id, scan, start, stop = prefix
+                        reply["prefix"] = dict(source=source_id, scan=scan, start=start, stop=stop)
+                        image = image[start * 4:stop * 4]
+                        positions = self._preset_preview_positions(active[0])
+                        if positions is not None:
+                            points = np.asarray(positions[start:stop], dtype=np.int32)
+                            cols = self._preset_preview_geometry()[1]
+                            indices = np.ascontiguousarray(points[:, 0] * cols + points[:, 1])
+                            reply["prefix"].update(at=True, total=len(positions))
+            except (LookupError, TypeError, ValueError, RuntimeError, MemoryError):
+                image, indices = None, None  # A stream source may leave during a preview request.
             finally:
                 self._stream_lock.release()
-        self.send(reply, buffers=[image] if image is not None else [])
+        buffers = [image] if image is not None else []
+        if indices is not None:
+            buffers.append(memoryview(indices).cast("B"))
+        self.send(reply, buffers=buffers)
 
-    def _preset_preview_pixels(self, request: dict) -> bytes | memoryview | None:
-        """Read the current source on its existing detector session, or a cached retained preset."""
-        name = request.get("preset")
-        shape = [self.shape_rows, self.shape_cols, self.det_rows, self.det_cols]
-        if (
-            self._data is None or self._multiple_view_active() or not isinstance(name, str) or name not in PRESET_RADII
-            or request.get("shape") != shape or request.get("frame") != self.frame_idx
-        ):
+    def _preset_preview_geometry(self) -> list[int]:
+        """The full display's shape, including visits over a retained scan of another size."""
+        live = self.live_phase_preview
+        if live.get("visit_path"):
+            return [live["total"], live["cols"], live["detRows"], live["detCols"]]
+        return [self.shape_rows, self.shape_cols, self.det_rows, self.det_cols]
+
+    def _preset_preview_positions(self, source):
+        """The raw stream's on-grid visit order, if it matches the displayed field."""
+        if not self.live_phase_preview.get("visit_path"):
             return None
-        if self._stream_source_ids and request.get("source_id") != self._stream_source_ids[self.frame_idx]:
+        rows, cols, det_rows, det_cols = self._preset_preview_geometry()
+        positions = source.metadata.get("scan_positions")
+        if (positions is not None
+                and tuple(source.metadata.get("scan_positions_shape", ())) == (rows, cols)
+                and tuple(source.shape) == (1, len(positions), det_rows, det_cols)):
+            return positions
+        return None
+
+    def _preset_preview_prefix(self, request: dict, active: tuple | None) -> tuple[str, str, int, int] | None:
+        """Return the already measured prefix before querying a live detector."""
+        if request.get("prefix") is not True or active is None:
             return None
+        source, source_id = active
+        count = getattr(source, "received", None)
+        if count is None:
+            return None
+        positions = self._preset_preview_positions(source)
+        shape = self._preset_preview_geometry()
+        total = len(positions) if positions is not None else shape[0] * shape[1]
+        stop = max(0, min(int(count), total))
+        after = request.get("after")
+        start = (after if request.get("after_source") == source_id and type(after) is int and 0 <= after <= stop else 0)
+        return source_id, str(source.metadata.get("series") or ""), start, stop
+
+    def _preset_preview_live_source(self, request: dict):
+        """Resolve the scan that is drawing, even when a retained dataset is selected."""
         live = self.live_phase_preview
         current = str(live.get("scan") or "")
         requested = str(request.get("scan") or "")
-        transient = current.startswith("live_") and requested.startswith("live_")
-        if live.get("frozen") or (current != requested and not transient):
+        follower = self._stream_follower
+        transient = live_frame_number(current) is not None and live_frame_number(requested) is not None
+        if not current or live.get("frozen") or follower is None or (current != requested and not transient):
             return None
+        lookup = getattr(follower.recording, "detector_preview_source", None)
+        if callable(lookup) and transient:
+            source = lookup(current)
+            shape = tuple(self._preset_preview_geometry())
+            if source is not None and (tuple(source.shape) == shape or self._preset_preview_positions(source) is not None):
+                return source, str(source.identifier)
+        preceding = None
+        for source, source_id in zip(follower.shown_sources, self._stream_source_ids):
+            name = str(source.metadata.get("series") or "")
+            if live.get("visit_path") and tuple(source.shape) != tuple(self._preset_preview_geometry()):
+                continue
+            if name == current:
+                return source, source_id
+            if transient and live_frame_number(name) is not None:
+                preceding = (source, source_id)
+        return preceding
+
+    def _preset_preview_pixels(self, request: dict, active: tuple | None = None) -> bytes | memoryview | None:
+        """Read the current source on its existing detector session, or a cached retained preset."""
+        name = request.get("preset")
+        shape = self._preset_preview_geometry()
+        if (
+            (self._data is None and active is None) or self._multiple_view_active()
+            or not isinstance(name, str) or name not in PRESET_RADII
+            or request.get("shape") != shape
+        ):
+            return None
+        live = self.live_phase_preview
+        source = None
         if live:
-            # The transient row header can be a frame ahead of the latest readable detector source.
-            follower = self._stream_follower
-            if follower is None or self.frame_idx >= len(follower.shown_sources):
+            if active is None:
+                active = self._preset_preview_live_source(request)
+            if active is None:
                 return None
-            source = str(follower.shown_sources[self.frame_idx].metadata.get("series") or "")
-            if source != current and not (transient and source.startswith("live_")):
+            source, _ = active
+        else:
+            if request.get("scan") or request.get("frame") != self.frame_idx:
                 return None
-        elif name in self._preset_images:
-            return self._preset_images[name]
-        center = (self.bright_field_center_row_px, self.bright_field_center_col_px)
-        mask = preset_mask(name, (self.det_rows, self.det_cols), center, self.bright_field_radius_px)
-        if mask is None:
-            return None
+            if self._stream_source_ids and request.get("source_id") != self._stream_source_ids[self.frame_idx]:
+                return None
+            if name in self._preset_images:
+                return self._preset_images[name]
         with self._session_lock:
-            image = np.ascontiguousarray(self._compute.masked_sum(mask), dtype=np.float32)
+            open_session = getattr(source, "detector_session", None)
+            if callable(open_session):
+                # The active detector's session caches one mask and its measured
+                # prefix. A hovered mask must not make it rescan that prefix.
+                if source is not self._live_preset_source:
+                    self._close_live_preset_sessions()
+                    self._live_preset_source = source
+                if name not in self._live_preset_sessions:
+                    self._live_preset_sessions[name] = open_session()
+                compute = self._live_preset_sessions[name]
+            else:
+                compute = self._compute
+            detector = tuple(shape[-2:])
+            if detector == (self.det_rows, self.det_cols):
+                disk = (self.bright_field_center_row_px, self.bright_field_center_col_px, self.bright_field_radius_px)
+            else:
+                if not callable(open_session):
+                    return None
+                if self._live_preset_disk is None:
+                    disk = self._projected_live_disk(detector) if live.get("visit_path") else None
+                    self._live_preset_disk = disk or fit_disk(compute.frame(0), detector, BRIGHT_FIELD_RADIUS_FRACTION)
+                disk = self._live_preset_disk
+            mask = preset_mask(name, detector, disk[:2], disk[2])
+            if mask is None:
+                return None
+            image = np.ascontiguousarray(compute.masked_sum(mask), dtype=np.float32)
         pixels = memoryview(image).cast("B")
         if not live:
             self._preset_images[name] = pixels
@@ -2882,6 +3097,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         """
         roi = (self.roi_active, self.roi_mode, self.roi_center_row, self.roi_center_col, self.roi_radius,
                self.roi_radius_inner, self.roi_width, self.roi_height)
+        if self._detector_preset_name and self._current_named_detector_preset() is None:
+            self._detector_preset_name = ""
+            self._detector_preset_aperture = None
         if roi == self._roi_seen:
             return
         self._roi_seen = roi
@@ -2919,6 +3137,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             self._stream_selected_source = self._stream_source_ids[self.frame_idx]
         if self._stream_defer_compute:
             return
+        if self._stream_follower is not None and self.stream_error is None:
+            self._stream_follower.update_title()
         if self.n_frames <= 1:
             return
         self._preset_images = {}

@@ -1,6 +1,7 @@
 // @ts-expect-error Vitest raw source import is not part of the widget bundle.
 import source from "./index.tsx?raw";
 import ts from "typescript";
+import {detectorPreset} from "./detectorInteraction";
 import {expect, it} from "vitest";
 
 // Exercise the real offline preset handler. Saved snapshots represent the
@@ -47,6 +48,9 @@ it("saves the displayed ADF then BF detector geometry for Python readback", () =
     vi_source: "roi", _preset_request: "",
   });
   expect(saved[1]).toMatchObject({roi_mode: "circle", roi_radius_inner: 0, roi_radius: 6});
+  // Reopen with only the saved detector geometry; the local button-click history is gone.
+  expect(saved.map(s => detectorPreset(String(s.roi_mode), Number(s.roi_radius_inner),
+    Number(s.roi_radius), Number(s.bright_field_radius_px), 12))).toEqual(["adf", "bf", "bf"]);
   expect(saved[2]).toEqual(saved[1]);
 });
 
@@ -69,6 +73,9 @@ it("stops an annular preset at the detector edge and refuses one past it, as Pyt
     state._preset_request = "adf";
     onPreset();
     expect(state).toMatchObject({roi_mode: "annular", roi_radius_inner: 7, roi_radius: 12});  // the edge, not 14
+    expect(detectorPreset("annular", 7, 12, 7, 12)).toBe("adf");
+    expect(detectorPreset("annular", 7, 11.9, 7, 12)).toBeNull();
+    expect(detectorPreset("annular", 3.5, 7, 7, 12)).toBe("abf");
     state._preset_request = "haadf";
     onPreset();
     expect(state).toMatchObject({roi_mode: "annular", roi_radius_inner: 7, roi_radius: 12});  // unchanged
