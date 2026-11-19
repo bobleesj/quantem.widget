@@ -4989,18 +4989,24 @@ function Show4DSTEM() {
   // (rotating by theta + 180 gives the negative phase), for Direct the displayed contrast; each image keeps its own.
   const [flipBySource, setFlipBySource] = React.useState<Record<string, boolean>>({});
   const flipPhaseContrast = Boolean(flipBySource[activeViSource]);
+  // The Flip switch belongs to the image the user clicked, not one hovered: a hovered image's switch cannot be reached
+  // (the pointer leaves the button to get to it) and its row came and went under the buttons (11-18).
+  const flipSource = selectedViSource;
+  const flipChosen = Boolean(flipBySource[flipSource]);
   const setFlipPhaseContrast = React.useCallback((on: boolean) =>
-    setFlipBySource(previous => ({ ...previous, [activeViSource]: on })), [activeViSource]);
-  const canFlipPhaseContrast = (activeViSource === "Direct" || activeViSource === "DPC" || activeViSource === "iDPC")
+    setFlipBySource(previous => ({ ...previous, [flipSource]: on })), [flipSource]);
+  const canFlipPhaseContrast = (flipSource === "Direct" || flipSource === "DPC" || flipSource === "iDPC")
     && !compareMode;
-  const dpcSource = activeViSource === "DPC" || activeViSource === "iDPC";
+  const dpcSource = flipSource === "DPC" || flipSource === "iDPC";
   const [dpcRotationDeg, setDpcRotationDeg] = React.useState<number | null>(null);
   const previewRotation = preview?.dpcRotationDeg;
   React.useEffect(() => {
     if (typeof previewRotation === "number" && Number.isFinite(previewRotation)) setDpcRotationDeg(previewRotation);
   }, [previewRotation]);
-  const shownDpcRotation = dpcRotationDeg == null ? null : (dpcRotationDeg + (flipPhaseContrast ? 180 : 0)) % 360;
-  const reversePhaseLut = canFlipPhaseContrast && flipPhaseContrast;
+  const shownDpcRotation = dpcRotationDeg == null ? null : (dpcRotationDeg + (flipChosen ? 180 : 0)) % 360;
+  // the image shown (a hovered one too) is drawn with its own flip
+  const reversePhaseLut = (activeViSource === "Direct" || activeViSource === "DPC" || activeViSource === "iDPC")
+    && !compareMode && flipPhaseContrast;
   const viDisplayLut = React.useMemo(() => {
     const lut = COLORMAPS[viColormap] || COLORMAPS.inferno;
     return reversePhaseLut ? reverseLut(lut) : lut;
@@ -8869,11 +8875,11 @@ function Show4DSTEM() {
     themedSelect, themedTypography
   ]);
   const flipPhaseControl = React.useMemo(() => canFlipPhaseContrast && (
-    <Box component="label" title={activeViSource === "Direct" ? "Invert the displayed phase contrast"
+    <Box component="label" title={flipSource === "Direct" ? "Invert the displayed phase contrast"
       : "The other 180° branch of the DPC rotation: the rotation is known modulo 180°, and this branch gives the opposite sign"}
       sx={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
       <Typography sx={{ ...themedTypography.label, fontSize: 10 }}>Flip</Typography>
-      <Switch checked={flipPhaseContrast} onChange={(event) => setFlipPhaseContrast(event.target.checked)}
+      <Switch checked={flipChosen} onChange={(event) => setFlipPhaseContrast(event.target.checked)}
         size="small" sx={switchStyles.small} slotProps={{ input: { "aria-label": "Flip phase contrast" } }} />
       {dpcSource && shownDpcRotation != null && (
         <Typography sx={{ ...themedTypography.label, fontSize: 10, fontVariantNumeric: "tabular-nums" }}
@@ -8881,7 +8887,7 @@ function Show4DSTEM() {
           rot {shownDpcRotation.toFixed(1)}°</Typography>
       )}
     </Box>
-  ), [activeViSource, canFlipPhaseContrast, dpcSource, flipPhaseContrast, setFlipPhaseContrast, shownDpcRotation, themedTypography]);
+  ), [flipSource, canFlipPhaseContrast, dpcSource, flipChosen, setFlipPhaseContrast, shownDpcRotation, themedTypography]);
   const viToolbarControls = React.useMemo(() => (
     controlsVisible && <Stack
       direction="row"
@@ -9170,8 +9176,15 @@ function Show4DSTEM() {
         {...(qemSourceAvailable ? {} : { webkitdirectory: "", directory: "" })}
       />
       {/* HEADER */}
-      {titleHeading}
-      {embedded && scanChoiceRows}
+      {/* Embedded in a host panel, the look-back row sits on the title's line, right of it, so its room (kept from the
+          first scan, nothing jumps when a second arrives) costs no band of its own (11-18: an empty 38 px strip under
+          the title); in a window too narrow for both it wraps under the title. */}
+      {embedded ? <Box data-show4dstem-title-line sx={{ display: "flex", alignItems: "center", flexWrap: "wrap",
+          columnGap: `${SPACING.MD}px`, mb: `${SPACING.SM}px`, "& > h6": { mb: 0, flex: "0 1 auto" },
+          "& [data-show4dstem-scan-rows] > div": { mb: 0 } }}>
+          {titleHeading}
+          {scanChoiceRows}
+        </Box> : titleHeading}
       {preview?.frozen && keptFrames > 0 && !sizeGroups?.length && (
         <Button size="small" sx={compactButton} onClick={dismissFrozenLive}>Show retained scan</Button>
       )}
