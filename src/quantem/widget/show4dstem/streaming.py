@@ -97,6 +97,7 @@ class StreamFollower:
         self.select_newest = getattr(recording, "select_newest", False)
         # scans of several sizes: one size in view, the others one click away (the size tabs)
         self.size_shapes, self.shown_shape, self.newest_source = [], None, None
+        self.arriving = None        # a scan arriving in a size of its own, while another size stays in view
 
     def snapshot(self) -> list:
         return list(self.recording.acquisitions if self.partial else self.recording.datasets)
@@ -108,12 +109,29 @@ class StreamFollower:
         brings back the scans of another size, which stay in GPU memory all along."""
         viewer = self.viewer
         shapes = [_shape_of(source) for source in sources]
-        if sources and (id(sources[-1]) != self.newest_source or self.shown_shape not in shapes):
-            self.shown_shape = shapes[-1]
-        self.newest_source = id(sources[-1]) if sources else None     # its identity only: no scan is kept by this
-        self.size_shapes = list(dict.fromkeys(reversed(shapes)))
+        seen = id(sources[-1]) if sources else None                   # its identity only: no scan is kept by this
+        self.arriving = None
+        if sources and (seen != self.newest_source or self.shown_shape not in shapes):
+            # A scan kept as visits brought its own size into view: "No retained scans" while it arrived, a one-row
+            # image when it was whole, and an empty image after Abort. The image in view stays instead; the arriving
+            # scan is drawn over it and the title counts it.
+            newest = sources[-1]
+            arriving = not getattr(newest, "complete", True)
+            # a scan kept as visits is one row of patterns, not an image: its grid, made when it is whole, is what
+            # is looked at, so the visits never take an image's place in the view
+            visits = (shapes[-1][0] == 1 and (getattr(newest, "metadata", None) or {}).get("scan_positions") is not None
+                      and self.shown_shape is not None and self.shown_shape[0] != 1)
+            if visits and self.shown_shape in shapes:
+                seen = self.newest_source
+                self.arriving = newest if arriving else None
+            else:
+                self.shown_shape = shapes[-1]
+        self.newest_source = seen
+        # the size tabs name the sizes that have something to show: not the one of a scan still arriving alone
+        listed = [shape for source, shape in zip(sources, shapes) if source is not self.arriving]
+        self.size_shapes = list(dict.fromkeys(reversed(listed)))
         several = len(self.size_shapes) > 1
-        labels = [_size_label(shape, shapes.count(shape)) for shape in self.size_shapes] if several else []
+        labels = [_size_label(shape, listed.count(shape)) for shape in self.size_shapes] if several else []
         index = self.size_shapes.index(self.shown_shape) if several else 0
         if list(viewer.size_groups) != labels:
             viewer.size_groups = labels
@@ -264,6 +282,9 @@ class StreamFollower:
                             if getattr(source, "identifier", None) in completed
                         }
             progress = tuple(source.received for source in sources[:shown]) if self.partial else ()
+            arriving = self.arriving
+            if self.partial and arriving is not None:
+                progress += (getattr(arriving, "received", 0),)
             if self.partial and complete and isinstance(viewer._data, SessionSeries) and len(self.recording.datasets) == shown and all(
                     gpu_adapter.is_acquisition(dataset) for dataset in self.recording.datasets):
                 # Borrow the same ANS storage through the regular joint
@@ -278,7 +299,7 @@ class StreamFollower:
                     self.follow_probe(sources[shown - 1])
                 viewer.refresh()
                 if self.partial:
-                    current = sources[shown - 1]
+                    current = arriving if arriving is not None else sources[shown - 1]
                     grid_of = current.metadata.get("grid_of")
                     scan = grid_of or current.metadata.get("series", shown)
                     # One short line that never wraps beside a control panel; the counts are in the stats bar.
