@@ -119,11 +119,11 @@ class StreamFollower:
             arriving = not getattr(newest, "complete", True)
             # a scan kept as visits is one row of patterns, not an image: its grid, made when it is whole, is what
             # is looked at, so the visits never take an image's place in the view
-            # (only where its grid is the size in view: a Live frame of another size brings its own, as before)
+            # (whatever its grid's size: it is drawn at its own size over the image in view; with a rule for equal
+            # sizes only, a 1024 x 1024 scan after 512 x 512 ones began blank, its first pass over black)
             record = getattr(newest, "metadata", None) or {}
-            grid = tuple(int(side) for side in record.get("scan_positions_shape") or ())
             visits = (shapes[-1][0] == 1 and record.get("scan_positions") is not None
-                      and self.shown_shape is not None and grid == tuple(self.shown_shape[:2]))
+                      and self.shown_shape is not None and self.shown_shape[0] != 1)
             if visits and self.shown_shape in shapes:
                 seen = self.newest_source
                 self.arriving = newest if arriving else None
