@@ -108,9 +108,17 @@ class StreamFollower:
         brings back the scans of another size, which stay in GPU memory all along."""
         viewer = self.viewer
         shapes = [_shape_of(source) for source in sources]
-        if sources and (id(sources[-1]) != self.newest_source or self.shown_shape not in shapes):
-            self.shown_shape = shapes[-1]
-        self.newest_source = id(sources[-1]) if sources else None     # its identity only: no scan is kept by this
+        seen = id(sources[-1]) if sources else None                   # its identity only: no scan is kept by this
+        if sources and (seen != self.newest_source or self.shown_shape not in shapes):
+            # A scan arriving in a size no kept scan has (a scan kept as visits, before its grid is made) would leave
+            # nothing to draw: "No retained scans" and a blank image for a second at the start of every such scan.
+            # The size in view stays until that scan is whole; it is looked at again then.
+            alone = not getattr(sources[-1], "complete", True) and shapes.count(shapes[-1]) == 1
+            if alone and self.shown_shape in shapes:
+                seen = self.newest_source
+            else:
+                self.shown_shape = shapes[-1]
+        self.newest_source = seen
         self.size_shapes = list(dict.fromkeys(reversed(shapes)))
         several = len(self.size_shapes) > 1
         labels = [_size_label(shape, shapes.count(shape)) for shape in self.size_shapes] if several else []
