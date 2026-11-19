@@ -8474,8 +8474,10 @@ function Show4DSTEM() {
   // drag that streams new pattern or image bytes leaves their MUI styles alone.
   const titleHeading = React.useMemo(() => (
     showTitle && <Typography variant="h6" sx={{ ...themedTypography.title, mb: `${SPACING.SM}px`, display: "flex", alignItems: "center", minWidth: 0 }}>
-      {/* One line beside narrow panels: the full title is on hover. */}
-      <span title={displayedTitle} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+      {/* One line beside narrow panels: the full title is on hover, with the file it was saved to (not drawn: the
+          panel's Folder already says where scans go, and two path lines above the title were clutter, 11-18). */}
+      <span title={[displayedTitle, sourceFile && (sourceFile.startsWith("not saved") ? sourceFile
+                      : `${sourceFolder ? `${sourceFolder}/` : ""}${sourceFile}`)].filter(Boolean).join("\n")} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {displayedTitle}</span>
       <RenderPathBadge colors={themeColors} />
       {nFrames > 1 && !streaming && !isLiveFrame(frameNames?.[frameIdx]) && !titleNamesScan(title, frameNames?.[frameIdx]) && !titleNamesScan(title, frameLabels?.[frameIdx])
@@ -8507,7 +8509,7 @@ function Show4DSTEM() {
       </Box>} theme={themeInfo.theme} />}
     </Typography>
   ), [
-    detCols, detRows, displayedTitle, frameDimLabel, frameIdx, frameLabels, frameNames, kCalibrated, kPixelSize, kPixelUnit,
+    detCols, detRows, displayedTitle, sourceFolder, sourceFile, frameDimLabel, frameIdx, frameLabels, frameNames, kCalibrated, kPixelSize, kPixelUnit,
     keyboardShortcutItems, nFrames, panelChromeVisible, pixelSize, scanUnit, shapeCols, shapeRows,
     showTitle, streaming, themeColors, themeInfo, themedTypography, title
   ]);
@@ -9137,14 +9139,6 @@ function Show4DSTEM() {
           </>}
         </Box>
       </Box>);
-  const sourceLines = (sourceFolder || sourceFile) ? (
-    <Box sx={{ mb: `${SPACING.XS}px`, minWidth: 0, fontSize: 11, lineHeight: 1.35, fontFamily: "monospace" }}>
-      <div title={sourceFolder} style={{ opacity: 0.7, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {sourceFolder || " "}</div>
-      <div title={sourceFile} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-        fontStyle: sourceFile && sourceFile.startsWith("not saved") ? "italic" : "normal" }}>
-        {sourceFile || " "}</div>
-    </Box>) : null;
   if (nFrames === 0 && !liveImage) {
     return (
       <Box ref={rootRef} className="show4dstem-root" sx={{ p: "4px", bgcolor: themeColors.bg, color: themeColors.text }}>
@@ -9176,7 +9170,6 @@ function Show4DSTEM() {
         {...(qemSourceAvailable ? {} : { webkitdirectory: "", directory: "" })}
       />
       {/* HEADER */}
-      {sourceLines}
       {titleHeading}
       {embedded && scanChoiceRows}
       {preview?.frozen && keptFrames > 0 && !sizeGroups?.length && (
