@@ -1,5 +1,8 @@
 """Custom detector requests preserve canonical state and exact detector products."""
 
+from types import SimpleNamespace
+
+import numpy as np
 import pytest
 import torch
 
@@ -133,6 +136,35 @@ def test_position_request_reads_once_and_recovers_after_failure(viewer, monkeypa
     torch.testing.assert_close(actual, values_t[0, 1, 3], atol=0, rtol=0)
     widget._handle_position_request(widget, dict(content, context=[1, "off", "selected"]), [])
     assert messages[-1]["status"] == "rejected" and len(calls) == 2
+
+
+def test_interlaced_live_probe_reads_the_measured_visit_for_a_grid_position(viewer, monkeypatch):
+    widget, _, replies = viewer
+    positions = np.array([(1, 2), (0, 2), (1, 0), (0, 0), (1, 1), (0, 1)])
+    patterns = np.arange(6 * 16 * 16, dtype=np.float32).reshape(6, 16, 16)
+    query = SimpleNamespace(frame=lambda visit: patterns[visit], close=lambda: None)
+    source = SimpleNamespace(shape=(1, 6, 16, 16), received=2, detector_session=lambda: query,
+                             metadata={"scan_positions": positions, "scan_positions_shape": (2, 3), "series": "live_9"})
+    recording = SimpleNamespace(detector_preview_source=lambda _: source, datasets=[source])
+    live = {"scan": "live_9", "visit_path": True, "total": 2, "cols": 3, "detRows": 16, "detCols": 16}
+    request = {"type": "show4dstem_live_probe", "scan": "live_9", "view": "test", "epoch": 0, "seq": 1}
+    widget.send = lambda reply, buffers=None: replies.append((reply, buffers))
+    with monkeypatch.context() as scoped:
+        scoped.setattr(widget, "_stream_follower", SimpleNamespace(recording=recording))
+        widget.live_phase_preview = live
+        widget._handle_live_probe(widget, dict(request, center=[1, 2]), [])
+        reply, buffers = replies[-1]
+        assert reply["center"] == [1, 2] and reply["scan"] == "live_9"
+        np.testing.assert_array_equal(np.frombuffer(buffers[0], np.float32), patterns[0].ravel())
+        widget._handle_live_probe(widget, dict(request, center=[1, 1]), [])
+        assert not replies[-1][1]  # This position belongs to a later pass.
+        recording.detector_preview_source = lambda _: None
+        source.received = len(positions)
+        widget.live_phase_preview = dict(live, frozen=True)
+        widget._handle_live_probe(widget, dict(request, center=[1, 1]), [])
+        np.testing.assert_array_equal(np.frombuffer(replies[-1][1][0], np.float32), patterns[4].ravel())
+        widget._handle_live_probe(widget, dict(request, scan="live_8", center=[1, 1]), [])
+        assert not replies[-1][1]
 
 
 @pytest.mark.parametrize("mode, inner", [("circle", 0.0), ("annular", 2.25)])

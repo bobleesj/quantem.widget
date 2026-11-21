@@ -526,6 +526,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._suppress_roi_recompute = False
         self._roi_seen: tuple | None = None  # the detector ROI at the last ROI notification
         self._position_seen: tuple | None = None  # the scan position at the last position notification
+        self._live_visit_index = None
         self._last_interaction_at = 0.0
         self._detector_preset_revision = 0
         self._detector_preset_aperture = None
@@ -854,6 +855,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self.on_msg(self._handle_detector_request)
         self.on_msg(self._handle_detector_radius_request)
         self.on_msg(self._handle_position_request)
+        self.on_msg(self._handle_live_probe)
         self.on_msg(self._handle_preset_preview)
         self.observe(self._on_scan_position_change, names=["pos_row", "pos_col"])
         self.observe(self._on_roi_change, names=["roi_center_col", "roi_center_row", "roi_radius", "roi_radius_inner",
@@ -1176,7 +1178,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self.unobserve_all()                        # nothing answers the front end: the last images stay as they are
         for handler in (self._handle_frontend_ready_msg, self._handle_detector_request,
                         self._handle_detector_radius_request, self._handle_position_request,
-                        self._handle_preset_preview):
+                        self._handle_live_probe, self._handle_preset_preview):
             self.on_msg(handler, remove=True)
         note = "scan released: picture only"
         self.title = f"{self.title} · {note}" if self.title and note not in self.title else (self.title or note)
@@ -2827,6 +2829,63 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             self.send(dict(receipt, status="rejected", error=str(error)))
         else:
             self.send(dict(receipt, status="complete"))
+
+    def _handle_live_probe(self, _widget, content, _buffers) -> None:
+        """Send the exact measured pattern at a displayed interlaced Live position."""
+        if not isinstance(content, dict) or content.get("type") != "show4dstem_live_probe":
+            return
+        reply = {key: content.get(key) for key in ("view", "epoch", "seq", "center", "scan")}
+        reply.update(type="show4dstem_live_probe_receipt", status="complete")
+        pattern = None
+        if self._stream_lock.acquire(blocking=False):
+            try:
+                pattern = self._live_probe_pattern(content)
+            except (LookupError, TypeError, ValueError, RuntimeError, MemoryError):
+                pass  # The current encoder can retire before the selected pattern is decoded.
+            finally:
+                self._stream_lock.release()
+        self.send(reply, buffers=[pattern.tobytes()] if pattern is not None else [])
+
+    def _live_probe_pattern(self, request):
+        """Address visit-order storage with a displayed (row, col) pair."""
+        live = self.live_phase_preview
+        scan = live.get("scan")
+        follower = self._stream_follower
+        if (not follower or not live.get("visit_path") or live.get("diffraction_only")
+                or live_frame_number(scan) is None or request.get("scan") != scan):
+            return None
+        rows, cols, det_rows, det_cols = self._preset_preview_geometry()
+        row, col = request["center"]
+        if not (type(row) is int and type(col) is int and 0 <= row < rows and 0 <= col < cols):
+            return None
+        recording = follower.recording
+        lookup = getattr(recording, "detector_preview_source", None)
+        source = lookup(scan) if callable(lookup) else None
+        if source is None:
+            # The last complete Live frame stays available across Stop.
+            source = next((item for item in getattr(recording, "datasets", ())
+                           if item.metadata.get("series") == scan), None)
+        positions = self._preset_preview_positions(source) if source is not None else None
+        if positions is None:
+            return None
+        cached = self._live_visit_index
+        if cached is None or cached[0] is not positions or cached[1].shape != (rows, cols):
+            flat = np.ravel_multi_index(np.asarray(positions).T, (rows, cols))
+            indices = np.full((rows, cols), -1, np.int32)
+            indices.ravel()[flat] = np.arange(len(positions), dtype=np.int32)
+            self._live_visit_index = cached = (positions, indices)
+        index = int(cached[1][row, col])
+        if not 0 <= index < getattr(source, "received", len(positions)):
+            return None
+        open_session = getattr(source, "detector_session", None)
+        compute = open_session() if callable(open_session) else gpu_adapter.prepare_session(source)
+        try:
+            pattern = np.ascontiguousarray(compute.frame(index), dtype=np.float32)
+        finally:
+            compute.close()
+        if pattern.shape == (det_rows, det_cols) and np.isfinite(pattern).all():
+            return pattern
+        return None
 
     def _handle_detector_request(self, _widget, content, _buffers) -> None:
         """Accept one center request before its synchronous image computation."""
