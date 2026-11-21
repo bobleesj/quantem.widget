@@ -129,7 +129,10 @@ def fit_disk(mean_pattern: np.ndarray, det_shape: tuple[int, int], default_ratio
     pattern = np.where(pattern >= 65535.0, 0.0, pattern)     # flagged detector pixels are not the disk
     if not np.any(pattern > pattern.mean() + pattern.std()):
         return det_shape[0] / 2, det_shape[1] / 2, min(det_shape) * default_ratio
-    (center_row, center_col), radius = bright_field_disk(pattern)
+    try:
+        (center_row, center_col), radius = bright_field_disk(pattern)
+    except ValueError:                       # a disk too faint or off the detector to fit: the midpoint, as blank
+        return det_shape[0] / 2, det_shape[1] / 2, min(det_shape) * default_ratio
     return center_row, center_col, radius
 
 

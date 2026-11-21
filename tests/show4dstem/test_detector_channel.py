@@ -255,3 +255,16 @@ def test_a_position_click_before_the_first_frame_says_so_once_not_stale(viewer, 
     assert len(rejected) == 3 and all("No complete frame yet" in message["error"] for message in rejected)
     assert "stale" not in " ".join(message["error"] for message in rejected)
     assert capfd.readouterr().err.count("REFUSED") == 1      # the log goes to the kernel's stderr
+
+
+def test_a_disk_too_faint_to_fit_leaves_the_detector_at_its_middle(monkeypatch):
+    """11-21, the operator: no bright field found (another camera length, almost no beam) is not a bug: the BF detector stays
+    centred on the detector."""
+    from quantem.widget.show4dstem import detector
+
+    def no_disk(pattern):
+        raise ValueError("No bright-field pixels found with threshold 0.00.")
+
+    monkeypatch.setattr(detector, "bright_field_disk", no_disk)
+    pattern = np.zeros((16, 20)); pattern[3, 4] = 50.0                # a few stray counts, no disk
+    assert detector.fit_disk(pattern, (16, 20), 0.25) == (8.0, 10.0, 4.0)
