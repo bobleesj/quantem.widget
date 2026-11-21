@@ -125,6 +125,13 @@ def test_live_counts_remain_exact_through_completion_and_eviction(recording):
     cp = pytest.importorskip("cupy")
     from quantem.gpu.streaming import LiveEncoder
 
+    try:                                        # the ARINA PC: torch sees its GPU, CuPy finds no CUDA toolkit to compile
+        LiveEncoder((32, 16), (16, 16), hot_pixel_correction="none")
+    except RuntimeError as error:
+        if "CUDA" not in str(error):
+            raise
+        pytest.skip(f"CuPy cannot compile CUDA kernels here: {error}")
+
     counts = np.random.default_rng(5).integers(0, 20, (3, 32, 16, 16, 16), dtype=np.uint16)
     acquisitions = [LiveEncoder((32, 16), (16, 16), hot_pixel_correction="none") for _ in counts]
     viewer = Show4DSTEM.stream(recording, compare_dp_mode="all")
