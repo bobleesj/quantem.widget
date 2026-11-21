@@ -2742,9 +2742,9 @@ function Show4DSTEM() {
   const liveDetectorView = showingLivePreview && preview && savedLiveDetectorView?.scan === preview.scan
     && (preview.detRows !== savedDetRows || preview.detCols !== savedDetCols)
     ? savedLiveDetectorView : undefined;
-  // The Python model owns the retained detector. Live visits may draw the
+  // The Python model owns the retained detector. The incoming scan may draw the
   // same detector at another binning, so gestures are sent in model pixels.
-  const detectorScale = showingLivePreview && preview?.visitPath && savedDetRows > 1 && savedDetCols > 1
+  const detectorScale = showingLivePreview && preview && savedDetRows > 1 && savedDetCols > 1
     && preview.detRows / savedDetRows === preview.detCols / savedDetCols ? preview.detRows / savedDetRows : 1;
   const detectorScaleRef = React.useRef(detectorScale);
   detectorScaleRef.current = detectorScale;
@@ -2840,8 +2840,8 @@ function Show4DSTEM() {
   const [directCalibrationFilename] = useModelState<string>("direct_calibration_filename");
 
   // ROI state
-  const [storedRoiRadius, setRoiRadius] = useModelState<number>("roi_radius");
-  const [storedRoiRadiusInner, setRoiRadiusInner] = useModelState<number>("roi_radius_inner");
+  const [storedRoiRadius] = useModelState<number>("roi_radius");
+  const [storedRoiRadiusInner] = useModelState<number>("roi_radius_inner");
   const [localRadii, setLocalRadii] = React.useState<[number, number] | null>(null);
   const localRadiiRef = React.useRef<[number, number] | null>(null);
   const roiRadius = (preview?.frozen ? liveDetectorView?.radius : localRadii?.[0])
@@ -5182,14 +5182,14 @@ function Show4DSTEM() {
   const imageSourceLabel = hoverLabel ?? (directPending ? directFallbackLabel : viSourceLabel(activeViSource));
   const previewEvents = (source: string) => ({
     onPointerEnter: (event: React.PointerEvent<HTMLButtonElement>) => {
-      if (event.pointerType === "mouse" && !event.buttons) previewHover.show(source);
+      if (!embedded && event.pointerType === "mouse" && !event.buttons) previewHover.show(source);
     },
     "data-preview-source": source,
     onPointerLeave: (event: React.PointerEvent<HTMLButtonElement>) => {
       if (event.pointerType === "mouse") previewHover.leave(source, event.currentTarget.parentElement, event.relatedTarget);
     },
     onFocus: (event: React.FocusEvent<HTMLButtonElement>) => {
-      if (event.currentTarget.matches(":focus-visible")) previewHover.show(source);
+      if (!embedded && event.currentTarget.matches(":focus-visible")) previewHover.show(source);
     },
     onBlur: () => previewHover.clear(source),
   });
@@ -9182,11 +9182,11 @@ function Show4DSTEM() {
                 beginDpRoiInteraction();
                 if (roiMode === "annular") {
                   const [inner, outer] = value as number[];
-                  setRoiRadiusInner(Math.min(inner, outer - 1) / detectorScale);
-                  setRoiRadius(Math.max(outer, inner + 1) / detectorScale);
+                  sendRoiRadius(Math.min(inner, outer - 1), "inner");
+                  sendRoiRadius(Math.max(outer, inner + 1));
                 } else {
                   const next = Array.isArray(value) ? value[0] : value;
-                  setRoiRadius(next / detectorScale);
+                  sendRoiRadius(next);
                 }
                 requestCompareViLive();
               }}
@@ -9222,7 +9222,7 @@ function Show4DSTEM() {
   ), [
     beginDpRoiInteraction, detCols, detRows, dpColormap, dpScaleMode, finishDpRoiInteraction, flipPhaseControl,
     requestCompareViLive, roiMode, roiRadius, roiRadiusInner, roiVirtualDetectorActive, setDpColormap, setDpScaleMode, setRoiMode,
-    setRoiRadius, setRoiRadiusInner, setShowDpColorbar, showDpColorbar, maskedPixels, showMaskedPixels, setShowMaskedPixels, themeColors, themedMenuProps,
+    sendRoiRadius, setShowDpColorbar, showDpColorbar, maskedPixels, showMaskedPixels, setShowMaskedPixels, themeColors, themedMenuProps,
     themedSelect, themedTypography
   ]);
   const viToolbarControls = React.useMemo(() => (

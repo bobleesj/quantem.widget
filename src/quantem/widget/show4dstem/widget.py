@@ -1540,13 +1540,18 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._refresh_compare_virtual_images()
         self._update_frame()
 
-    def _initialize_preview_detector(self, shape: tuple[int, int], disk: Sequence[float]) -> None:
+    def _initialize_preview_detector(self, scan: str, shape: tuple[int, int],
+                                     disk: Sequence[float], pattern: np.ndarray | None = None) -> None:
         """Adopt the arriving detector and its measured disk before the first scan attaches."""
         if self._data is not None or shape == (self.det_rows, self.det_cols):
             return
         row, col, radius = map(float, disk)
         if not (0 <= row < shape[0] and 0 <= col < shape[1] and math.isfinite(radius) and radius > 0):
-            return
+            if pattern is None or not pattern.any():
+                return
+            row, col, radius = fit_disk(np.nan_to_num(pattern), shape, BRIGHT_FIELD_RADIUS_FRACTION)
+        pending = getattr(self, "_preview_preset_request", None)
+        self._preview_preset_request = None
         preset = self._current_named_detector_preset() if getattr(self, "_stream_geometry_set", False) else None
         with self.hold_sync(), self.hold_trait_notifications():
             self.det_rows, self.det_cols = shape
@@ -1560,12 +1565,26 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 self._set_roi_to_disk()
             else:
                 self._place_detector_preset(preset, (row, col), radii)
+        if pending is not None and pending[0] == scan:
+            self.apply_preset(pending[1])
 
     def _has_preview_detector(self) -> bool:
         """Check that an arriving preview can receive detector edits without retained data."""
         preview = self.live_phase_preview
         return (getattr(self, "_stream_geometry_set", False) and bool(preview.get("scan")) and not preview.get("frozen")
                 and (preview.get("detRows"), preview.get("detCols")) == (self.det_rows, self.det_cols))
+
+    def _detector_center_in_bounds(self, row: float, col: float) -> bool:
+        """Validate model coordinates on the detector actually shown during a binned preview."""
+        rows, cols = self.det_rows, self.det_cols
+        preview = self.live_phase_preview
+        detector = (preview.get("detRows", rows), preview.get("detCols", cols))
+        if (not preview.get("diffraction_only") and detector != (rows, cols)
+                and self._projected_live_disk(detector) is not None):
+            scale = detector[0] / rows
+            row, col = (row + 0.5) * scale - 0.5, (col + 0.5) * scale - 0.5
+            rows, cols = detector
+        return 0 <= row < rows and 0 <= col < cols
 
     def _initialize_stream_geometry(self, source, options) -> None:
         """Adopt the first real scan's geometry and calibration after an idle start. The operator's detector area
@@ -1870,7 +1889,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 self.bright_field_radius_px * scale)
 
     def _live_visit_detector_mask(self, scan: str, detector: tuple[int, int]) -> np.ndarray | None:
-        """Share a binned Live aperture even when the widget still owns a differently binned retained grid."""
+        """Share the incoming aperture when the retained detector uses a different binning."""
         disk = self._projected_live_disk(detector)
         if disk is None:
             return None
@@ -2931,8 +2950,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             if content.get("context") != self._interaction_context(context):
                 raise ValueError("Detector settings changed before this request was accepted.")
             row, col = map(float, content["center"])
-            if not (math.isfinite(row) and math.isfinite(col)
-                    and 0 <= row < self.det_rows and 0 <= col < self.det_cols):
+            if not self._detector_center_in_bounds(row, col):
                 raise ValueError("The detector center must lie inside the diffraction pattern.")
             self.send(dict(receipt, status="accepted"))
             self._last_interaction_at = time.monotonic()
@@ -3025,7 +3043,11 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         name = (change.get("new") or "").strip().lower()
         if name in PRESET_RADII:
             with self.hold_sync():
-                self.apply_preset(name)
+                scan = self.live_phase_preview.get("scan")
+                if scan and self._data is None and not self._has_preview_detector():
+                    self._preview_preset_request = (scan, name)
+                else:
+                    self.apply_preset(name)
                 self._preset_request = ""
 
     def _handle_preset_preview(self, _widget, content, _buffers) -> None:

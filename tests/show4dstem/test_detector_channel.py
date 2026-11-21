@@ -80,6 +80,17 @@ def test_center_request_acknowledges_before_one_exact_computation(viewer, monkey
     torch.testing.assert_close(actual_t, expected_t, atol=0, rtol=0)
 
 
+def test_center_request_accepts_first_pixel_in_a_higher_resolution_preview(viewer):
+    widget, _, messages = viewer
+    widget.view_mode = "single"
+    widget.live_phase_preview = {"scan": "series_2", "detRows": 32, "detCols": 32}
+    widget._handle_detector_request(widget, request(widget, [-0.25, -0.25]), [])
+    assert [message["status"] for message in messages] == ["accepted", "complete"]
+    assert widget.roi_center == [-0.25, -0.25]
+    widget._handle_detector_request(widget, request(widget, [-0.5, 0], seq=2), [])
+    assert messages[-1]["status"] == "rejected"
+
+
 def test_center_request_recovers_same_position_after_compute_failure(viewer, monkeypatch):
     widget, _, messages = viewer
     compute = widget._compare_images

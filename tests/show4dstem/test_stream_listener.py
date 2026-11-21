@@ -110,10 +110,14 @@ def test_first_preview_accepts_detector_presets_and_ring_before_the_scan_attache
     messages = []
     viewer.send = lambda content, buffers=None: messages.append(content)
     try:
-        viewer._initialize_preview_detector((8, 10), (0, 0, 0))  # The receiver's empty first descriptor.
+        viewer._initialize_preview_detector("first", (8, 10), (0, 0, 0))  # The receiver's empty first descriptor.
         assert (viewer.det_rows, viewer.det_cols) == (1, 1)
-        viewer._initialize_preview_detector((8, 10), (3.5, 4.5, 2))
         viewer.live_phase_preview = {"scan": "first", "detRows": 8, "detCols": 10}
+        viewer._preset_request = "adf"
+        viewer._preset_request = "abf"
+        assert not viewer._detector_preset_name
+        viewer._initialize_preview_detector("first", (8, 10), (3.5, 4.5, 2))
+        assert viewer._detector_preset_name == "abf"
         assert viewer.n_frames == 0 and viewer._data is None
         for name in ("bf", "abf", "adf"):
             viewer._preset_request = name
