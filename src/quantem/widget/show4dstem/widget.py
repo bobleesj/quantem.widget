@@ -1640,12 +1640,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._stream_source_serial += count
         return [str(index) for index in range(start + 1, start + count + 1)]
 
-    def _replace_stream_sources(self, previous, sources, labels=None, *, last_live_frame: str | None = None) -> None:
-        """Retire old live panels without resetting the detector or surviving query sessions.
-
-        ``last_live_frame``: the stream ended on a Live frame (never kept). Its data is released as for any ended
-        stream, but its image and pattern stay on screen under "Live stopped" until the next scan replaces them
-        (11-21, Bob: "after Live is done the view disappears; let it stay")."""
+    def _replace_stream_sources(self, previous, sources, labels=None) -> None:
+        """Retire old live panels without resetting the detector or surviving query sessions."""
         with self._compare_lock, self._session_lock:
             self._stream_completed_sources.clear()
             if self._live_preset_source is not None and all(source is not self._live_preset_source for source in sources):
@@ -1659,15 +1655,11 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                     self._stream_source_ids = []
                     self._stream_selected_source = ""
                     self.frame_labels = []
-                    if last_live_frame is not None:
-                        self.title = f"Live stopped · frame {last_live_frame} · not kept"
-                    else:
-                        self.frame_bytes = np.full((self.det_rows, self.det_cols), np.nan, np.float32).tobytes()
-                        self.virtual_image_bytes = np.full((self.shape_rows, self.shape_cols), np.nan,
-                                                           np.float32).tobytes()
-                        self.compare_diffraction_bytes = b""
-                        self._clear_compare_virtual_images("No retained scans. Waiting for another acquisition.")
-                        self.title = "No retained scans"
+                    self.frame_bytes = np.full((self.det_rows, self.det_cols), np.nan, np.float32).tobytes()
+                    self.virtual_image_bytes = np.full((self.shape_rows, self.shape_cols), np.nan, np.float32).tobytes()
+                    self.compare_diffraction_bytes = b""
+                    self._clear_compare_virtual_images("No retained scans. Waiting for another acquisition.")
+                    self.title = "No retained scans"
                 self._restack_attached()
                 return
             if not isinstance(self._data, SessionSeries):
