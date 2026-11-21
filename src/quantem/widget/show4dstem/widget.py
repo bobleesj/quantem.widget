@@ -23,6 +23,7 @@ import glob
 import json
 import math
 import os
+import sys
 import pathlib
 import threading
 import time
@@ -3402,10 +3403,10 @@ def _say_request(content) -> None:
     """One line per detector request the browser sends (a ring drag or resize), so a log shows whether the operator's
     action reached this viewer (Spectra, 11-21: during a scan, drags and BF/ADF seemed to do nothing)."""
     if os.environ.get("SHOW4DSTEM_LOG_ACTIONS") == "1":
-        print(f"[viewer] request {content.get('type')} seq {content.get('seq')} (pid {os.getpid()})", flush=True)
+        print(f"[viewer] request {content.get('type')} seq {content.get('seq')} (pid {os.getpid()})", file=sys.__stderr__, flush=True)
 
 
 def _say_refused(receipt, error) -> None:
     """One line per refused request, with its reason: a refusal otherwise goes back to the browser silently."""
     if os.environ.get("SHOW4DSTEM_LOG_ACTIONS") == "1":
-        print(f"[viewer] REFUSED {receipt.get('type')} seq {receipt.get('seq')}: {error} (pid {os.getpid()})", flush=True)
+        print(f"[viewer] REFUSED {receipt.get('type')} seq {receipt.get('seq')}: {error} (pid {os.getpid()})", file=sys.__stderr__, flush=True)
