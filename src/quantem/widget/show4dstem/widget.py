@@ -2826,6 +2826,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             self._on_scan_position_change()
         except (KeyError, TypeError, ValueError, RuntimeError, MemoryError) as error:
             self._position_seen = None
+            _say_refused(receipt, error)
             self.send(dict(receipt, status="rejected", error=str(error)))
         else:
             self.send(dict(receipt, status="complete"))
@@ -2891,6 +2892,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         """Accept one center request before its synchronous image computation."""
         if not isinstance(content, dict) or content.get("type") != "show4dstem_detector":
             return
+        _say_request(content)
         receipt = {key: content.get(key) for key in ("view", "epoch", "seq")}
         receipt["type"] = "show4dstem_detector_receipt"
         try:
@@ -2913,6 +2915,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 raise RuntimeError(self.compare_status)
         except (KeyError, TypeError, ValueError, RuntimeError, MemoryError) as error:
             self._roi_seen = None
+            _say_refused(receipt, error)
             self.send(dict(receipt, status="rejected", error=str(error)))
         else:
             self.send(dict(receipt, status="complete"))
@@ -2921,6 +2924,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         """Acknowledge a detector resize before computing its complete image."""
         if not isinstance(content, dict) or content.get("type") != "show4dstem_detector_radius":
             return
+        _say_request(content)
         receipt = {key: content.get(key) for key in ("view", "epoch", "seq")}
         receipt["type"] = "show4dstem_detector_radius_receipt"
         try:
@@ -2947,6 +2951,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 raise RuntimeError(self.compare_status)
         except (KeyError, TypeError, ValueError, OverflowError, RuntimeError, MemoryError) as error:
             self._roi_seen = None
+            _say_refused(receipt, error)
             self.send(dict(receipt, status="rejected", error=str(error)))
         else:
             self.send(dict(receipt, status="complete"))
@@ -3391,3 +3396,16 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             self._clear_compare_virtual_images(f"Multiple grid unavailable: {exc}")
         finally:
             self._suppress_compare_recompute = False
+
+
+def _say_request(content) -> None:
+    """One line per detector request the browser sends (a ring drag or resize), so a log shows whether the operator's
+    action reached this viewer (Spectra, 11-21: during a scan, drags and BF/ADF seemed to do nothing)."""
+    if os.environ.get("SHOW4DSTEM_LOG_ACTIONS") == "1":
+        print(f"[viewer] request {content.get('type')} seq {content.get('seq')} (pid {os.getpid()})", flush=True)
+
+
+def _say_refused(receipt, error) -> None:
+    """One line per refused request, with its reason: a refusal otherwise goes back to the browser silently."""
+    if os.environ.get("SHOW4DSTEM_LOG_ACTIONS") == "1":
+        print(f"[viewer] REFUSED {receipt.get('type')} seq {receipt.get('seq')}: {error} (pid {os.getpid()})", flush=True)
