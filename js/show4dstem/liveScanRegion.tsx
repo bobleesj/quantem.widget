@@ -146,10 +146,9 @@ export function LiveScanRegion({
     send.current({ type: "spectra-live-region-change", ready: false, size, region: null });
   }, [incomingScan, clearReference]);
   React.useEffect(() => {
-    // Notebook twins share a DOM subtree with their controls; the microscope's remote
-    // viewer lives inside a separate-origin iframe embedded by the acquisition notebook.
-    if (layer.current?.closest(".spectra-gui-saved")) return;
-    const scope = layer.current?.closest(".spectra-gui");
+    // AnyWidget may mount before Jupyter attaches it to the controls' subtree.
+    // Resolve that subtree when a command arrives. Remote viewers use the iframe message.
+    const ownerDocument = layer.current?.ownerDocument;
     const parentOrigin =
       window.location.ancestorOrigins?.[0] || (document.referrer ? new URL(document.referrer).origin : "");
     const configure = (command: Command, reply: (value: Reply) => void) => {
@@ -235,13 +234,18 @@ export function LiveScanRegion({
       paintBox();
       reply({ type: "spectra-live-region-change", ready: true, size, region: bounds.current });
     };
-    const local = (event: Event) =>
+    const local = (event: Event) => {
+      const node = layer.current;
+      const scope = node?.closest(".spectra-gui");
+      if (!scope || event.target !== scope || node?.closest(".spectra-gui-saved")) return;
       configure((event as CustomEvent).detail, (value) =>
-        scope?.dispatchEvent(new CustomEvent(value.type, { detail: value })),
+        scope.dispatchEvent(new CustomEvent(value.type, { detail: value })),
       );
+    };
     const embedded = (event: MessageEvent) => {
       if (
         window.parent === window ||
+        layer.current?.closest(".spectra-gui-saved") ||
         event.source !== window.parent ||
         !parentOrigin ||
         event.origin !== parentOrigin
@@ -249,10 +253,10 @@ export function LiveScanRegion({
         return;
       configure(event.data, (value) => window.parent.postMessage(value, parentOrigin));
     };
-    scope?.addEventListener("spectra-live-region", local);
+    ownerDocument?.addEventListener("spectra-live-region", local, true);
     window.addEventListener("message", embedded);
     return () => {
-      scope?.removeEventListener("spectra-live-region", local);
+      ownerDocument?.removeEventListener("spectra-live-region", local, true);
       window.removeEventListener("message", embedded);
       cancelAnimationFrame(frame.current);
       if (active.current)

@@ -8,7 +8,7 @@ describe("Live scan region", () => {
     const gui = document.createElement("div");
     gui.className = "spectra-gui";
     document.body.append(gui);
-    const mount = gui.appendChild(document.createElement("div"));
+    const mount = document.createElement("div");
     const root = createRoot(mount);
     const canvas = document.createElement("canvas");
     canvas.width = canvas.height = 64 * sampling;
@@ -79,6 +79,7 @@ describe("Live scan region", () => {
           ),
         );
       render();
+      gui.appendChild(mount);  // AnyWidget mounts before Jupyter inserts the viewer.
       command();
       expect(replies.at(-1)?.ready).toBe(false);
       image.frozen = true;
