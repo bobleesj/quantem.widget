@@ -1510,3 +1510,29 @@ def test_hover_maps_measured_visits_onto_the_active_field_with_a_different_detec
         assert viewer.roi_mode == "annular"
     finally:
         viewer.close()
+
+
+def test_a_stopped_live_frame_stays_on_screen_and_a_cleared_scan_does_not(recording):
+    """11-21, the operator: "after Live is done the view disappears; let it stay". The Live frame (never kept) leaves the
+    receiver at Stop live: its data is released, but its image and pattern stay under "Live stopped"; a kept scan
+    that is cleared still empties the view."""
+    viewer = Show4DSTEM.stream(recording, embedded=True)
+    try:
+        recording.acquisitions.append(LiveScan("live_7"))
+        viewer.refresh_stream()
+        pattern, image = viewer.frame_bytes, viewer.virtual_image_bytes
+        recording.acquisitions.clear()              # Stop live: the frame leaves the receiver
+        viewer.refresh_stream()
+        assert viewer._data is None and viewer.n_frames == 0
+        assert viewer.title == "Live stopped · frame 7 · not kept"
+        assert (viewer.frame_bytes, viewer.virtual_image_bytes) == (pattern, image)
+
+        recording.acquisitions.append(LiveScan("series_1"))     # a scan after it replaces the held frame
+        viewer.refresh_stream()
+        assert viewer.frame_labels == ["series_1"]
+        recording.acquisitions.clear()              # Clear of a kept scan: the view empties as before
+        viewer.refresh_stream()
+        assert viewer.title == "No retained scans"
+        assert np.isnan(np.frombuffer(viewer.frame_bytes, np.float32)).all()
+    finally:
+        viewer.close()
