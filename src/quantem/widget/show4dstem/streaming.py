@@ -240,7 +240,9 @@ class StreamFollower:
                 shown = len(self.shown_sources)
                 if not sources:
                     if self.shown_sources:
-                        viewer._replace_stream_sources(self.shown_sources, [])
+                        frames = [live_frame_number(source.metadata.get("series", "")) for source in self.shown_sources]
+                        last = frames[-1] if all(frame is not None for frame in frames) else None
+                        viewer._replace_stream_sources(self.shown_sources, [], last_live_frame=last)
                         self.last_refresh = time.monotonic()
                     self.shown_sources, self.previous = [], None
                     if not self.partial:
