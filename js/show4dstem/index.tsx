@@ -2549,11 +2549,15 @@ function Show4DSTEM() {
   // Model State (synced with Python)
   // ─────────────────────────────────────────────────────────────────────────
   const [liveStream] = useModelState<boolean>("live_phase_stream");
-  const [viSource, setViSource] = useModelState<string>("vi_source");
+  const [showDirect] = useModelState<boolean>("show_direct");
+  const directVisible = showDirect !== false;
+  const [requestedViSource, setViSource] = useModelState<string>("vi_source");
+  const viSource = requestedViSource === "Direct" && !directVisible ? "roi" : requestedViSource;
   const [hoverSource, setHoverSource] = React.useState<string | null>(null);
   const previewHover = React.useMemo(() => createPreviewHover(setHoverSource), []);
   React.useEffect(() => previewHover.cancel, [previewHover]);
-  const requestedHoverProduct = hoverSource && !isHoverPreset(hoverSource) ? hoverSource : null;
+  const requestedHoverProduct = hoverSource && !isHoverPreset(hoverSource)
+    && (hoverSource !== "Direct" || directVisible) ? hoverSource : null;
   // The scan arriving. Its pixels never pass through React state: a new pattern or new rows are written into
   // arrays kept here and drawn once per animation frame, and the component renders only when the scan itself
   // changes (its name, size or kind) or, a few times a second, for what reads the image (stats, histogram).
@@ -5135,6 +5139,7 @@ function Show4DSTEM() {
     const seen = new Set<string>();
     const out: string[] = [];
     const add = (source: string) => {
+      if (source === "Direct" && !directVisible) return;
       if (!["DPC_row", "DPC_col", "iDPC", "Direct", "COM_row", "COM_col", "DPC"].includes(source) || seen.has(source)) return;
       seen.add(source);
       out.push(source);
@@ -5151,7 +5156,7 @@ function Show4DSTEM() {
       add("iDPC");
     }
     return out;
-  }, [viProductLabels, webgpuDpcReady, preview, liveRowImage]);
+  }, [directVisible, viProductLabels, webgpuDpcReady, preview, liveRowImage]);
   const selectedViSource = React.useMemo(() => {
     return viSource === "roi" || viProductSourceOptions.includes(viSource) ? viSource : "roi";
   }, [viProductSourceOptions, viSource]);
@@ -8932,7 +8937,7 @@ function Show4DSTEM() {
           </MenuItem>
         ))}
       </Menu>}
-      {directEnabled && <Button
+      {directVisible && directEnabled && <Button
         size="small"
         sx={compactButton}
         onClick={(event) => setDpMoreAnchor(event.currentTarget)}
@@ -8940,7 +8945,7 @@ function Show4DSTEM() {
       >
         More
       </Button>}
-      {directEnabled && <Menu
+      {directVisible && directEnabled && <Menu
         anchorEl={dpMoreAnchor}
         open={Boolean(dpMoreAnchor)}
         onClose={() => setDpMoreAnchor(null)}
@@ -9111,7 +9116,7 @@ function Show4DSTEM() {
           {h5LocalSourceStatus}
         </Typography>
       )}
-      {(directStatus || directBusy) && (
+      {directVisible && (directStatus || directBusy) && (
         <Typography
           sx={{
             ...themedTypography.label,
@@ -9142,7 +9147,7 @@ function Show4DSTEM() {
     setIsHoveringDpProfileLine, setOfflineBackendError, setProfileActive, setProfileData, setProfileLine,
     setDirectLockC10, setDirectLockC12, setDirectTrials, setDirectRefinement, setDirectTilt,
     directMethod,
-    directBfCountText, directBusy, directC10Nm, directC12Nm, directEnabled, directLockC10,
+    directBfCountText, directBusy, directC10Nm, directC12Nm, directEnabled, directVisible, directLockC10,
     directLockC12, directTrials, directRefinement, directStatus, directTilt, directProgressText,
     directStatusIsFailure, starredReportCount, themeColors, themeInfo, themedMenuProps, themedSelect,
     themedTypography, title, writeRoiCenterModel

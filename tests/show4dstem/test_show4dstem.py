@@ -237,6 +237,27 @@ def test_an_attached_phase_stays_with_its_scan_as_a_stream_grows(tmp_path, accel
             acquisition.close()
 
 
+def test_hiding_direct_deselects_it_without_discarding_the_phase():
+    widget = Show4DSTEM(np.ones((4, 4, 8, 8), dtype=np.float32), device="cpu")
+    phase = np.arange(16, dtype=np.float32).reshape(4, 4)
+    try:
+        widget.attach("Direct", phase)
+        widget.vi_source = "Direct"
+        assert widget.vi_source == "Direct"
+
+        widget.show_direct = False
+        assert widget.vi_source == "roi"
+        widget.vi_source = "Direct"
+        assert widget.vi_source == "roi"
+
+        widget.show_direct = True
+        assert widget.vi_source == "roi"
+        widget.vi_source = "Direct"
+        np.testing.assert_array_equal(widget.virtual_image(), phase)
+    finally:
+        widget.close()
+
+
 def test_a_streaming_viewer_sends_each_attached_image_alone_never_the_whole_stack(tmp_path, accelerator):
     """11-17: every attach() resent every scan's images as one stack (19 MB for five 512 x 512 scans, 16 times that
     at 2048 x 2048) and the page spent 100 to 200 ms decoding each. A streaming viewer sends the one image that

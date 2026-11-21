@@ -345,6 +345,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     direct_status = traitlets.Unicode("").tag(sync=True)
     direct_busy = traitlets.Bool(False).tag(sync=True)
     direct_enabled = traitlets.Bool(True).tag(sync=True)
+    show_direct = traitlets.Bool(True).tag(sync=True)
     direct_trials = traitlets.Int(200).tag(sync=True)
     # quantem.gpu's default direct ptychography: the model fit with the sample tilt and depth spread; False fits at tilt 0
     direct_tilt = traitlets.Bool(True).tag(sync=True)
@@ -864,6 +865,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self.observe(self._on_roi_center_change, names=["roi_center"])
         self.observe(self._on_live_scan_end, names=["live_phase_preview"])
         self.observe(self._on_vi_source_change, names=["vi_source"])
+        self.observe(self._on_show_direct_change, names=["show_direct"])
         self.observe(self._publish_detail, names=["vi_source", "frame_idx"])
         self.observe(self._on_calibration_change, names=["bright_field_center_row_px", "bright_field_center_col_px", "bright_field_radius_px"])
         # The first render shows the bright-field image: a point detector paints near black.
@@ -2314,8 +2316,10 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         source = self.vi_source
         live = self.live_phase_preview
         available_live = source in PRODUCT_LABELS and source in (live.get("images") or ())
-        if (source != "roi" and source not in self._vi_product_maps and not available_live
-                and not (self.live_phase_stream and source == "Direct")):
+        if (source == "Direct" and not self.show_direct) or (
+            source != "roi" and source not in self._vi_product_maps and not available_live
+            and not (self.live_phase_stream and source == "Direct")
+        ):
             source = "roi"
         if source != self.vi_source:
             self.vi_source = source  # re-enters this observer with a valid source
@@ -2323,6 +2327,11 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         if source == "roi" and not self._multiple_view_active():
             self._compute_virtual_image_from_roi()
         self._refresh_compare_virtual_images()
+
+    def _on_show_direct_change(self, change) -> None:
+        """Leave a selected detector source alone when the acquisition switch changes."""
+        if not change["new"] and self.vi_source == "Direct":
+            self.vi_source = "roi"
 
     # ------------------------------------------------------------------
     # Direct ptychography
