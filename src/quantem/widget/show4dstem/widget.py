@@ -1540,6 +1540,33 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         self._refresh_compare_virtual_images()
         self._update_frame()
 
+    def _initialize_preview_detector(self, shape: tuple[int, int], disk: Sequence[float]) -> None:
+        """Adopt the arriving detector and its measured disk before the first scan attaches."""
+        if self._data is not None or shape == (self.det_rows, self.det_cols):
+            return
+        row, col, radius = map(float, disk)
+        if not (0 <= row < shape[0] and 0 <= col < shape[1] and math.isfinite(radius) and radius > 0):
+            return
+        preset = self._current_named_detector_preset() if getattr(self, "_stream_geometry_set", False) else None
+        with self.hold_sync(), self.hold_trait_notifications():
+            self.det_rows, self.det_cols = shape
+            self._stream_geometry_set = True
+            self.bright_field_center_row_px, self.bright_field_center_col_px = row, col
+            self.bright_field_radius_px = radius
+            radii = preset_radii(preset, shape, (row, col), radius) if preset else None
+            if radii is None:
+                self._detector_preset_name = ""
+                self._detector_preset_aperture = None
+                self._set_roi_to_disk()
+            else:
+                self._place_detector_preset(preset, (row, col), radii)
+
+    def _has_preview_detector(self) -> bool:
+        """Check that an arriving preview can receive detector edits without retained data."""
+        preview = self.live_phase_preview
+        return (getattr(self, "_stream_geometry_set", False) and bool(preview.get("scan")) and not preview.get("frozen")
+                and (preview.get("detRows"), preview.get("detCols")) == (self.det_rows, self.det_cols))
+
     def _initialize_stream_geometry(self, source, options) -> None:
         """Adopt the first real scan's geometry and calibration after an idle start. The operator's detector area
         stays when the detector size is the same (2026-11-18: a live view moving between a 512 scan and 128 Live frames
@@ -2898,7 +2925,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         receipt["type"] = "show4dstem_detector_receipt"
         try:
             context = "frame_idx vi_source view_mode compare_page_idx roi_mode roi_radius roi_radius_inner roi_width roi_height"
-            if content.get("version") != 1 or self._data is None or self.comm is None:
+            if (content.get("version") != 1 or self.comm is None
+                    or (self._data is None and not self._has_preview_detector())):
                 raise ValueError("The detector request is stale; reopen the viewer.")
             if content.get("context") != self._interaction_context(context):
                 raise ValueError("Detector settings changed before this request was accepted.")
@@ -2933,7 +2961,8 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                 "frame_idx vi_source view_mode compare_page_idx roi_mode "
                 "roi_center_row roi_center_col"
             )
-            if content.get("version") != 1 or self._data is None or self.comm is None:
+            if (content.get("version") != 1 or self.comm is None
+                    or (self._data is None and not self._has_preview_detector())):
                 raise ValueError("The radius request is stale; reopen the viewer.")
             if content.get("context") != self._interaction_context(context):
                 raise ValueError("Detector settings changed before this radius request was accepted.")

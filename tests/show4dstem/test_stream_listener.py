@@ -12,6 +12,7 @@ import torch
 from quantem.widget import Show4DSTEM
 from quantem.widget.show4dstem import widget as widget_module
 from quantem.widget.show4dstem.dense import DenseSession
+from quantem.widget.show4dstem.detector import preset_mask
 
 
 class LiveScan:
@@ -102,6 +103,41 @@ def test_idle_first_arrival_matches_opening_the_same_scan(recording):
     finally:
         waiting.close()
         opened.close()
+
+
+def test_first_preview_accepts_detector_presets_and_ring_before_the_scan_attaches(recording):
+    viewer = Show4DSTEM.stream(recording, device="cpu")
+    messages = []
+    viewer.send = lambda content, buffers=None: messages.append(content)
+    try:
+        viewer._initialize_preview_detector((8, 10), (0, 0, 0))  # The receiver's empty first descriptor.
+        assert (viewer.det_rows, viewer.det_cols) == (1, 1)
+        viewer._initialize_preview_detector((8, 10), (3.5, 4.5, 2))
+        viewer.live_phase_preview = {"scan": "first", "detRows": 8, "detCols": 10}
+        assert viewer.n_frames == 0 and viewer._data is None
+        for name in ("bf", "abf", "adf"):
+            viewer._preset_request = name
+            assert viewer._detector_preset_name == name
+            np.testing.assert_array_equal(
+                viewer._current_detector_mask(), preset_mask(name, (8, 10), (3.5, 4.5), 2),
+            )
+        before = viewer._current_detector_mask()
+        keys = ("frame_idx vi_source view_mode compare_page_idx roi_mode "
+                "roi_radius roi_radius_inner roi_width roi_height")
+        viewer._handle_detector_request(viewer, {
+            "type": "show4dstem_detector", "version": 1, "view": "browser", "epoch": 0, "seq": 1,
+            "center": [4, 6], "context": viewer._interaction_context(keys),
+        }, [])
+        assert [message["status"] for message in messages] == ["accepted", "complete"]
+        assert viewer.roi_center == [4, 6]
+        after = viewer._current_detector_mask()
+        assert not np.array_equal(after, before)
+        recording.acquisitions.append(LiveScan("first"))
+        viewer.refresh_stream()
+        assert viewer.frame_labels == ["first"]
+        np.testing.assert_array_equal(viewer._current_detector_mask(), after)
+    finally:
+        viewer.close()
 
 
 def test_idle_listener_reports_receiver_failure_and_closes(recording):
