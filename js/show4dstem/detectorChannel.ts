@@ -1,11 +1,13 @@
 type Request = { view: string; epoch: number; seq: number; center: number[] };
+type Receipt = Request & { type: string; status: string; scan?: string };
 
 export function detectorViewId() {
   return Array.from(crypto.getRandomValues(new Uint32Array(4))).join("-");
 }
 
 /** A bounded request window and one replaceable position, scoped to this view. */
-export function detectorChannel(view: string, send: (request: Request) => void, settled: (reply: Request & { status: string }) => void,
+export function detectorChannel(view: string, send: (request: Request) => void,
+  settled: (reply: Receipt, buffers?: DataView[]) => void,
   receiptType = "show4dstem_detector_receipt", pendingLimit = 1) {
   let epoch = 0, serial = 0, completed = 0;
   const waiting = new Set<number>();
@@ -22,12 +24,12 @@ export function detectorChannel(view: string, send: (request: Request) => void, 
       pending = { view, epoch, seq: ++serial, center: [row, col] }; flush();
       return true;
     },
-    receive(reply: Request & { type: string; status: string }) {
+    receive(reply: Receipt, buffers?: DataView[]) {
       if (reply.type !== receiptType || reply.view !== view) return;
       if (!["accepted", "complete", "rejected"].includes(reply.status)) return;
       if (waiting.delete(reply.seq)) flush();
       if (reply.status !== "accepted" && reply.epoch === epoch && reply.seq === serial) {
-        completed = serial; settled(reply);
+        completed = serial; settled(reply, buffers);
       }
     },
     clear() { epoch++; pending = null; completed = serial; },
