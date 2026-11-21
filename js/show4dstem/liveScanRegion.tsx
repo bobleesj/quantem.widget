@@ -13,6 +13,10 @@ type Command = {
   regionSession?: number | null;
   size: number;
   region: ScanBounds | null;
+  /** The acquisition says a full Live frame of this size was just stopped and is held in GPU memory (11-21, Spectra:
+   * the stopped frame stays explorable, so its row preview is withdrawn and never freezes). Its image is the one
+   * shown: the box is drawn on it at once. */
+  stoppedFrame?: boolean;
 };
 type Reply = {
   type: "spectra-live-region-change";
@@ -170,8 +174,8 @@ export function LiveScanRegion({
           current.rows !== size ||
           current.cols !== size ||
           !current.canvas ||
-          !current.frozen ||
-          !isLiveFrame(current.scan) ||
+          (!current.frozen && !command.stoppedFrame) ||
+          (!command.stoppedFrame && !isLiveFrame(current.scan)) ||
           current.region ||
           current.canvas.width < size ||
           current.canvas.width % size !== 0 ||

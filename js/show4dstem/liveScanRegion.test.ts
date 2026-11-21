@@ -261,4 +261,41 @@ describe("Live scan region", () => {
       vi.unstubAllGlobals();
     }
   });
+  it("draws the box at once on a stopped full Live frame the acquisition vouches for, with no frozen preview", () => {
+    // 11-21, Bob: "the moment Region is on, it should draw a draggable box". The stopped Live frame stays explorable
+    // (its preview withdrawn, never frozen); the panel says it was a full frame of this size.
+    const gui = document.createElement("div");
+    gui.className = "spectra-gui";
+    document.body.append(gui);
+    const root = createRoot(gui.appendChild(document.createElement("div")));
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 64;
+    const context = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation((() => ({
+      drawImage: vi.fn(),
+    })) as unknown as typeof HTMLCanvasElement.prototype.getContext);
+    const replies: { ready: boolean; region: ScanBounds | null }[] = [];
+    gui.addEventListener("spectra-live-region-change", (event) => replies.push((event as CustomEvent).detail));
+    const ask = (stoppedFrame: boolean) =>
+      act(() => {
+        gui.dispatchEvent(new CustomEvent("spectra-live-region", { detail: {
+          type: "spectra-live-region", enabled: true, locked: false, size: 64, region: null, stoppedFrame } }));
+      });
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    try {
+      act(() => root.render(createElement(LiveScanRegion, {
+        source: () => ({ canvas, scan: undefined, rows: 64, cols: 64, frozen: false }),
+        onMapSize: vi.fn(), onImageDraw: { current: null },
+      })));
+      ask(false);
+      expect(replies.at(-1)).toEqual(expect.objectContaining({ ready: false }));
+      ask(true);
+      expect(replies.at(-1)).toEqual(expect.objectContaining({ ready: true }));
+      expect(replies.at(-1)?.region).not.toBeNull();
+    } finally {
+      act(() => root.unmount());
+      gui.remove();
+      context.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
 });
