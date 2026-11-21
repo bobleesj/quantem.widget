@@ -2857,8 +2857,12 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         receipt = {key: content.get(key) for key in ("view", "epoch", "seq")}
         receipt["type"] = "show4dstem_position_receipt"
         try:
-            if content.get("version") != 1 or self._data is None or self.comm is None:
+            if content.get("version") != 1 or self.comm is None:
                 raise ValueError("The position request is stale; reopen the viewer.")
+            if self._data is None:
+                # 11-21 (microscope): a fresh viewer's first Live has no complete frame yet, so no pattern exists at
+                # any position; 53 clicks were refused as "stale; reopen the viewer", which was wrong and alarming
+                raise _NoFrameYet("No complete frame yet: the pattern at a position shows once the first frame arrives.")
             if content.get("context") != self._interaction_context("frame_idx vi_roi_mode compare_dp_mode"):
                 raise ValueError("The selected acquisition or diffraction mode changed.")
             row, col = content["center"]
@@ -2873,7 +2877,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             self._on_scan_position_change()
         except (KeyError, TypeError, ValueError, RuntimeError, MemoryError) as error:
             self._position_seen = None
-            _say_refused(receipt, error)
+            if not isinstance(error, _NoFrameYet) or not getattr(self, "_said_no_frame_yet", False):
+                _say_refused(receipt, error)        # waiting for the first frame: said once, not per click
+            self._said_no_frame_yet = isinstance(error, _NoFrameYet)
             self.send(dict(receipt, status="rejected", error=str(error)))
         else:
             self.send(dict(receipt, status="complete"))
@@ -3455,6 +3461,10 @@ def _say_request(content) -> None:
     action reached this viewer (Spectra, 11-21: during a scan, drags and BF/ADF seemed to do nothing)."""
     if os.environ.get("SHOW4DSTEM_LOG_ACTIONS") == "1":
         print(f"[viewer] request {content.get('type')} seq {content.get('seq')} (pid {os.getpid()})", file=sys.__stderr__, flush=True)
+
+
+class _NoFrameYet(ValueError):
+    """A position request before the viewer holds any complete frame: nothing to show yet, not an error."""
 
 
 def _say_refused(receipt, error) -> None:

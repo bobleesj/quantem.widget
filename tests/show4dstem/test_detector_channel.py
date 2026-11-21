@@ -238,3 +238,20 @@ def test_stale_or_invalid_radius_requests_leave_the_display_unchanged(viewer, mo
         assert bytes(widget.compare_virtual_image_bytes) == before
         assert (widget.roi_radius, widget.roi_radius_inner) == radii
     assert not queries
+
+
+def test_a_position_click_before_the_first_frame_says_so_once_not_stale(viewer, monkeypatch, capfd):
+    """11-21, microscope: a fresh viewer's first Live had no complete frame and 53 clicks were each logged as
+    "stale; reopen the viewer". Now the receipt says there is no frame yet, and the log says it once."""
+    widget, _, messages = viewer
+    monkeypatch.setenv("SHOW4DSTEM_LOG_ACTIONS", "1")
+    monkeypatch.setattr(type(widget), "comm", SimpleNamespace(comm_id="test"), raising=False)
+    monkeypatch.setattr(widget, "_data", None)
+    content = {"type": "show4dstem_position", "version": 1, "view": "v", "epoch": 0, "seq": 1, "center": [1, 3],
+               "context": widget._interaction_context("frame_idx vi_roi_mode compare_dp_mode")}
+    for seq in (1, 2, 3):
+        widget._handle_position_request(widget, dict(content, seq=seq), [])
+    rejected = [message for message in messages if message.get("status") == "rejected"]
+    assert len(rejected) == 3 and all("No complete frame yet" in message["error"] for message in rejected)
+    assert "stale" not in " ".join(message["error"] for message in rejected)
+    assert capfd.readouterr().err.count("REFUSED") == 1      # the log goes to the kernel's stderr
