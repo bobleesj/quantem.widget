@@ -36,6 +36,8 @@ const widgets = [
   "showpdf",
   "showptycho",
   "showgpu",
+  "showreconstruction",
+  "showsearch",
   "scancontrol",
   "diffractionsim",
 ];
