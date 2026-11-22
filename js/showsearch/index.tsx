@@ -448,12 +448,24 @@ function ShowSearch() {
     );
   };
 
+  // The line a person reads while it runs: where the search is, how many candidates are training, waiting and landed,
+  // how long it has run, how long is left and the clock time it will be done by (when to come back and decide), and
+  // the GPUs it is on. Finished or read back, it says so with the total time.
   const done = status?.done, total = status?.total;
+  const runningCount = groups.filter((group) => group.row.state === "running").length + (stages || []).filter((stage) => stage.verdict === "running").length;
+  const waitingCount = groups.filter((group) => group.row.state === "queued").length;
+  const landedCount = groups.filter((group) => group.row.held_out != null && group.row.state !== "running").length;
+  const live = runningCount > 0 || waitingCount > 0;
+  const leftS = status?.left_s != null && Number.isFinite(status.left_s) ? Number(status.left_s) : null;
+  const doneBy = leftS != null ? new Date(Date.now() + 1000 * leftS) : null;
+  const clockTime = doneBy ? `${String(doneBy.getHours()).padStart(2, "0")}:${String(doneBy.getMinutes()).padStart(2, "0")}` : "";
+  const gpus = Array.isArray(status?.devices) && status.devices.length ? `GPU ${status.devices.join(", ")}` : status?.device || "";
   const headline = [
     status?.stage ? `${status.stage}${total ? ` ${done}/${total}` : ""}` : "",
+    live ? `${runningCount} running · ${waitingCount} waiting · ${landedCount} landed` : "",
     clock(status?.elapsed_s),
-    status?.left_s != null ? `about ${Math.max(1, Math.round(status.left_s / 60))} min left` : "",
   ].filter(Boolean).join(" · ");
+  const timeLeft = leftS != null ? `about ${leftS < 90 ? `${Math.max(1, Math.round(leftS))} s` : `${Math.round(leftS / 60)} min`} left, done by ${clockTime}` : "";
   const bestRow = overall?.row;
   const lastKept = [...(stages || [])].reverse().find((stage) => stage.verdict === "kept");
   const chosenGroup = byKey.get(selected || "");
@@ -465,7 +477,7 @@ function ShowSearch() {
         padding: GAP, borderRadius: 4, maxWidth: "100%", boxSizing: "border-box", fontVariantNumeric: "tabular-nums" }}>
         <div style={{ lineHeight: "18px", overflowWrap: "anywhere" }}>
           <span style={{ float: "right", marginLeft: GAP }}><SizeControl size={size} onSize={setSize} colors={colors} /></span>
-          <b>{title || "Search"}</b>{rules && rules.length > 0 && <InfoTooltip text={<div>{rules.map((rule) => <div key={rule}>{rule}</div>)}</div>} theme={theme} toggleOnClick />}{headline && <span> · {headline}</span>}{status?.note && <span style={{ color: colors.textMuted }}> · {status.note}</span>}
+          <b>{title || "Search"}</b>{rules && rules.length > 0 && <InfoTooltip text={<div>{rules.map((rule) => <div key={rule}>{rule}</div>)}</div>} theme={theme} toggleOnClick />}{headline && <span> · {headline}</span>}{timeLeft && <b> · {timeLeft}</b>}{gpus && <span style={{ color: colors.textMuted }}> · {gpus}</span>}{status?.note && <span style={{ color: colors.textMuted }}> · {status.note}</span>}
         </div>
         <div style={{ lineHeight: "18px", overflowWrap: "anywhere", marginBottom: GAP }}>
           {bestRow ? <>best after the {bestRow.stage} pass: {sig3(bestRow.thickness_nm)} nm · focus {signed(bestRow.focus_nm, 1)} nm · {bestRow.slices} slices · {bestRow.modes} modes · held-out <b>{plain(bestRow.held_out)}</b> ★</>
