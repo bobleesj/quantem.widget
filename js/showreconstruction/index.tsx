@@ -1135,7 +1135,7 @@ function RunView() {
   const [size, setSize] = useModelState<ViewSize>("size");
   const controls = useControls(colors, !!smooth, setSmooth);
   const [root, rootWidth] = useWidth(1000);
-  const SIDE = Math.min(bySize(size, 110, 200, 360), Math.max(90, Math.floor((rootWidth - 24) / 2.2)));  // the before, after and change images, px tall; narrower on a phone
+  const SIDE = Math.min(bySize(size, 110, 200, 360), Math.max(90, Math.floor((rootWidth - 2 * HAIR - 14) / 3)));  // the before, after and change images, px tall; narrower on a phone
   const STRIP = bySize(size, 22, 30, 40);  // the filmstrip's thumbnails
   const PROBE = Math.round(0.6 * SIDE);  // the probe's strongest mode and aperture, sized with the object
   const CURVE = bySize(size, 44, 52, 60);  // the objective: a thin strip, never a big panel
@@ -1331,7 +1331,7 @@ function RunView() {
               title={rawChange ? "the change pixel by pixel: click to smooth it over 2 px" : "the change smoothed over 2 px (a Gaussian of σ 2 px on both states, display only): click for the raw pixels"}
               onClick={() => setRawChange(!rawChange)}>
               {moved && <ImageCanvas data={moved.image} rows={rows} cols={cols} low={-moved.span} high={moved.span} cmap="RdBu_r" height={SIDE} keepAspect zoomable symmetric pixelA={data.pixelA} />}
-              <div style={{ ...ON_IMAGE, ...PLATE, left: 3, top: 1 }}>after − before{rawChange ? "" : ", smoothed 2 px"}</div>
+              <div style={{ ...ON_IMAGE, ...PLATE, left: 3, top: 1 }}>{SIDE >= 150 ? `after − before${rawChange ? "" : ", smoothed 2 px"}` : "change"}</div>
               {unequalSlices && <div style={{ ...ON_IMAGE, ...PLATE, left: 3, top: 16, color: "#f2b04e" }} title="the run changed the slicing: a slice's phase grows with its thickness, so this map mixes that with what the run changed">slices of {unequalSlices}</div>}
               {moved && <div style={{ ...ON_IMAGE, ...PLATE, left: 3, bottom: 1 }}>±{plain(moved.span, 2)} rad</div>}
             </div>
@@ -1414,9 +1414,9 @@ function DetailGrid({ data, epoch, previewing, sliceIndex, setSliceIndex, savedL
   const kept = (value: number | undefined) => previewing ? <span style={muted}> (preview{value != null && value !== epoch ? `, kept ${value}` : ""})</span>
     : value != null && value !== epoch ? <span style={muted}> kept epoch {value}</span> : null;
   const large = size === "large";
-  const wide = width >= 900 ? (large ? 2 : 3) : width >= 600 ? 2 : 1;  // large: the object and the probe share the first row, the depth spans the next
-  const areas = large ? (wide >= 2 ? `"object probe" "depth depth"` : `"object" "probe" "depth"`)
-    : wide === 3 ? `"object depth probe"` : wide === 2 ? `"object depth" "probe probe"` : `"object" "depth" "probe"`;
+  const wide = width >= 900 ? (large ? 2 : 3) : width >= 520 ? 2 : 1;  // large: the object and the probe share the first row, the depth spans the next
+  // the object first, then the probe, then the depth cut: in that order across a row and down a phone
+  const areas = wide === 3 ? `"object probe depth"` : wide === 2 ? `"object probe" "depth depth"` : `"object" "probe" "depth"`;
   const [imagesRow, imagesWidth] = useWidth(320);
   const fitted = Math.floor(imagesWidth * (shown.rows || 1) / (shown.cols || 1)), preset = bySize(size, 180, 300, 560);
   const imageHeight = Math.max(80, fitted <= 1.3 * preset ? fitted : preset);  // the panel's width when the preset is near it, so no band is left beside the image
@@ -1450,7 +1450,7 @@ function DetailGrid({ data, epoch, previewing, sliceIndex, setSliceIndex, savedL
       <Panel area="depth" title="Depth" hint={<>{slicesCount ? `${slicesCount} slices${data.sliceA ? ` of ${plain(data.sliceA, 1)} Å` : ""}` : "no volume kept"}{kept(volume?.epoch)}</>} colors={colors} theme={theme}
         info="Top: the volume cut along the line through every slice, the beam entering at the top; the accent line marks the slice shown. Bottom: lattice power per slice (down) against draw (across), the accent line at the slice shown, the dashed line at the epoch shown; the specimen's faces form while vacuum slices stay dark.">
         {cut && <div style={{ position: "relative" }}>
-          <ImageCanvas data={cut.image} rows={slicesCount} cols={cut.width} low={data.phaseRange[0]} high={data.phaseRange[1]} cmap="gray" line={[slice + 0.5, 0, slice + 0.5, cut.width]} lineColor={colors.accent} height={depthCanvas ? Math.max(60, imageHeight - 46) : imageHeight + 30} />
+          <ImageCanvas data={cut.image} rows={slicesCount} cols={cut.width} low={data.phaseRange[0]} high={data.phaseRange[1]} cmap="gray" line={[slice + 0.5, 0, slice + 0.5, cut.width]} lineColor={colors.accent} height={wide === 3 ? (depthCanvas ? Math.max(60, imageHeight - 46) : imageHeight + 30) : Math.min(180, Math.round(0.5 * imageHeight))} />
           <div style={{ ...ON_IMAGE, left: 3, bottom: 1 }}>{plain(cut.lengthA, 0)} Å along the line</div>
         </div>}
         {depthCanvas && <>
@@ -1509,11 +1509,12 @@ function StageTiles({ runs, size, inset = false, fft = false, perRow: fixed, sho
   });
   const startScores = runs.map((run) => (run.records.length && run.records[0].start ? run.records[0].held_out : null));
   const best = ends.reduce((found: number, end, index) => (!end.refused && end.score != null && (found < 0 || end.score < ends[found].score!) ? index : found), -1);
+  inset = inset || (!fixed && rowWidth < 520);  // a phone: the probe in the projection's corner, so several stages fit a row
   const across = inset ? 1 : fft ? 3 : 2;  // images a tile is wide
   const perRow = fixed || Math.max(1, Math.min(ends.length, Math.floor(rowWidth / (across * size))));
   const image = Math.min(fixed ? Infinity : Math.round(size * 1.6), Math.floor(rowWidth / perRow / across));  // the images grow to fill the row, a short row only so far
   return (
-    <div ref={row} style={{ display: "flex", flexWrap: "wrap", gap: 0, marginBottom: GAP }} onMouseLeave={onLook ? () => onLook(null) : undefined}>
+    <div ref={row} style={{ display: "flex", flexWrap: "wrap", gap: 0 }} onMouseLeave={onLook ? () => onLook(null) : undefined}>
       {ends.map((end, index) => {
         const before = ends.slice(0, index).filter((one) => !one.refused).pop();
         const previous = end.refused || !before ? startScores[index] : before.score;
@@ -1664,8 +1665,8 @@ function DashboardView() {
   const hasMap = data.tiltShape[0] > 0;
   const side = [tiltMoves && "tilt", hasMap && "map", pathSeries.length > 0 && "scan"].filter(Boolean) as string[];
   const narrow = rootWidth < 700;
-  const storyColumns = narrow || !side.length ? "minmax(0, 1fr)" : `minmax(0, 2.4fr) ${side.map(() => "minmax(0, 1fr)").join(" ")}`;
-  const storyAreas = narrow || !side.length ? [`"story"`, ...side.map((name) => `"${name}"`)].join(" ") : `"story ${side.join(" ")}"`;
+  const storyColumns = !side.length ? "minmax(0, 1fr)" : narrow ? side.map(() => "minmax(0, 1fr)").join(" ") : `minmax(0, 2.4fr) ${side.map(() => "minmax(0, 1fr)").join(" ")}`;
+  const storyAreas = !side.length ? `"story"` : narrow ? `"${side.map(() => "story").join(" ")}" "${side.join(" ")}"` : `"story ${side.join(" ")}"`;
   const tileImage = bySize(size, 72, 90, 130);  // the stage strip's images, grown to fill the row
   return (
     <Engine.Provider value={engineContext}><ViewLink.Provider value={controls.link}>
@@ -1690,7 +1691,9 @@ function DashboardView() {
       </div>
       {controls.row}
       <StageTiles runs={runs} size={tileImage} inset={size === "small"} shown={stageNow} onLook={setPreview} onPick={setEpoch} colors={colors} />
-      <div style={{ display: "grid", gridTemplateColumns: storyColumns, gridTemplateAreas: storyAreas, gap: GAP }}>
+      <DetailGrid data={data} epoch={epoch} previewing={previewing} sliceIndex={sliceIndex} setSliceIndex={setSliceIndex} savedLine={savedLine} setSavedLine={setSavedLine}
+        smooth={!!smooth} setSmooth={setSmooth} colors={colors} theme={theme} width={rootWidth} size={size} />
+      <div style={{ display: "grid", gridTemplateColumns: storyColumns, gridTemplateAreas: storyAreas, gap: GAP, marginTop: GAP }}>
         <Panel area="story" title="Held-out" hint={<>{previewing ? <span style={muted}>epoch {epoch} (preview) · </span> : null}<span style={{ cursor: "pointer", textDecoration: "underline dotted" }} onClick={() => setTraining(!training)}>{training ? "hide training" : "show training"}</span></>} colors={colors} theme={theme}
           info="Held-out against total epoch (lower is better): the solid step is each stage's end and sets the axis, the faint curve the epochs within a stage, which rise at a stage's start because each stage starts its rates over, then fall (cut at the axis' edge where it runs past); the training objective on a click. Each run is a shaded band, and a triangle marks where a run starts. Hover to preview an epoch in every panel and read that run's changes (old value grey, new in color); click or tap to keep that epoch. Ticks on the epoch axis mark epochs that keep a full volume. The tiles above are each run's end: hover to look, click to keep; a dimmed tile is a stage tried and refused. A saved notebook keeps, for each run: its projection at every epoch (the newest run) or at its draws (earlier runs), its probe's modes at its end and its strongest mode at every draw, and slices with the cut along the line in place of the whole volume (three, a quarter, half and three quarters through the slab, for the newest run; the middle one for earlier runs); the running kernel keeps everything.">
           <LineChart series={[...(training ? [{ ...series("train", colors.border, true, "training"), }] : []), { ...series("held_out", colors.border, false, "within a stage") }, steps]}
@@ -1703,7 +1706,7 @@ function DashboardView() {
             label={<>epoch {committed} of {last.epoch}{stageAt(committed) ? ` · ${stageAt(committed)!.name}` : ""}</>} />
         </Panel>
         {tiltMoves && <Panel area="tilt" title="Specimen tilt" hint="learned, mrad" colors={colors} theme={theme} info="The specimen's tilt as training learns it (row solid, column dashed) against total epoch, beside the direct ptychography fit it started from (grey dashed); shown only because it moved by half a mrad or more.">
-          <Fill min={56}>{(_, height) => <LineChart series={tiltSeries} keyItems={[{ name: "learned (row, col dashed)", color: HUES[0], points: [] },
+          <Fill min={narrow ? 110 : 56}>{(_, height) => <LineChart series={tiltSeries} keyItems={[{ name: "learned (row, col dashed)", color: HUES[0], points: [] },
             ...(referenceText ? [{ name: referenceText, color: colors.textMuted, dashed: true, points: [] }] : [])]} stages={stages} cursor={epoch} height={height} outer xLabel="total epoch" yLabel="mrad" colors={colors} />}</Fill>
         </Panel>}
         {hasMap && <Panel area="map" title="Tilt map" colors={colors} theme={theme} info="Local tilt across the field: one arrow a cell, its length scaled to the longest arrow.">
@@ -1723,11 +1726,9 @@ function DashboardView() {
           })()}
         </Panel>}
         {pathSeries.length > 0 && <Panel area="scan" title="Vibration path" hint="along the fast scan, Å" colors={colors} theme={theme} info="The beam's vibration against the specimen, learned: how far it moved (Å) along each of the first three scan lines as the line was scanned.">
-          <Fill min={56}>{(_, height) => <LineChart series={pathSeries} stages={[]} cursor={null} height={height} outer xLabel={data.pathStep ? "ms along the scan line" : "along the scan line"} yLabel="Å" colors={colors} />}</Fill>
+          <Fill min={narrow ? 110 : 56}>{(_, height) => <LineChart series={pathSeries} stages={[]} cursor={null} height={height} outer xLabel={data.pathStep ? "ms along the scan line" : "along the scan line"} yLabel="Å" colors={colors} />}</Fill>
         </Panel>}
       </div>
-      <DetailGrid data={data} epoch={epoch} previewing={previewing} sliceIndex={sliceIndex} setSliceIndex={setSliceIndex} savedLine={savedLine} setSavedLine={setSavedLine}
-        smooth={!!smooth} setSmooth={setSmooth} colors={colors} theme={theme} width={rootWidth} size={size} />
     </div>
     </ViewLink.Provider></Engine.Provider>
   );
@@ -1820,7 +1821,7 @@ function CompareReconstruction() {
   if (!all.length) return null;
   const tallest = bySize(size, 220, 300, 520);
   const first = columns[0]?.slices[0];
-  const imageHeight = Math.max(80, Math.min(tallest, Math.floor(columnWidth * bySize(size, 0.6, 0.6, 0.98) * (first ? first.shape[0] / first.shape[1] : 1))));  // large: the slice takes the column, the spectrum goes under it
+  const imageHeight = Math.max(80, Math.min(tallest, Math.floor(columnWidth * (columnWidth * 0.4 - GAP >= 110 ? bySize(size, 0.6, 0.6, 0.98) : 1) * (first ? first.shape[0] / first.shape[1] : 1))));  // the slice takes 0.6 of the column with the probe beside it; a narrow column (or large) gives the slice the whole column, the probe under it
   // each run's raw lattice power per slice ÷ its slice thickness² (phase per slice grows with the thickness, its power with
   // the square), over the strongest of any run: a uniform crystal reads the same height however it is sliced
   const perA2 = (value: number, run: RunMeta) => value / (run.slice_A || 1) ** 2;
@@ -1880,7 +1881,7 @@ function CompareColumn({ run, column, item, imageHeight, line, peaks, showPeaks,
   const data = item ? item.data : EMPTY_FRAME;
   const spectrum = useSpectrum(data, rows, cols, region, run.pixel_A);
   const beside = Math.floor(width - 12 - (rows ? imageHeight * cols / rows : 0) - GAP);  // what the column has left beside the slice: the cut and the probe go there, else under it
-  const stacked = beside < 150;
+  const stacked = beside < 110;
   const cutHeight = Math.round(imageHeight / 4);
   const changed = run === first ? "reference" : differs(run);
   const ignore = () => undefined;

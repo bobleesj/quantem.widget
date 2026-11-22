@@ -307,8 +307,8 @@ function ShowSearch() {
   const probeLink = useViewLink();  // and on the probe, on its own: a probe never zooms with an object image
   const [root, rootWidth] = useWidth(1000);
   const STRIP_TILE = bySize(size, 52, 64, 92);
-  const SHOWN = Math.min(bySize(size, 150, 230, Math.max(230, Math.floor((rootWidth - Math.min(500, rootWidth * 0.46) - 40) / 2.5))), Math.max(110, Math.floor((rootWidth - 40) / 2)));  // the shown projection and probe; at large beside the grid; half the width on a phone
-  const SMALL = Math.floor((SHOWN - GAP) / 2);  // spectrum and depth cut stacked beside them
+  let SHOWN = Math.min(bySize(size, 150, 230, Math.max(230, Math.floor((rootWidth - Math.min(500, rootWidth * 0.46) - 40) / 2.5))), Math.max(110, Math.floor((rootWidth - 40) / 2)));  // the shown projection and probe; at large beside the grid; half the width on a phone
+  let SMALL = Math.floor((SHOWN - GAP) / 2);  // spectrum and depth cut stacked beside them
   const [hovered, setHovered] = React.useState<string | null>(null);
   const [curvesBox, curvesWidth] = useWidth(300);
 
@@ -329,6 +329,10 @@ function ShowSearch() {
   const TILE = size === "large" ? Math.max(96, Math.min(170, Math.floor((Math.min(500, rootWidth * 0.46) - 40) / Math.max(1, focuses.length))))  // large: the grid about 500 px, the shown panel beside it
     : bySize(size, 56, 76, 108);
   const tile = rowsCount > 3 ? Math.round(TILE * 0.8) : TILE;  // smaller for many thicknesses, so the view keeps its height
+  const besideGrid = Math.floor((rootWidth - (56 + Math.max(1, focuses.length) * tile) - 44) / 2.5);  // what "shown" may be for the grid and it to share one row
+  if (size !== "large" && besideGrid >= 120 && besideGrid < SHOWN) { SHOWN = besideGrid; SMALL = Math.floor((SHOWN - GAP) / 2); }
+  const pairBelow = rootWidth - 40 < 2 * SHOWN + SMALL + 2 * GAP;  // a phone: spectrum and depth go under the object and the probe, as wide as they are
+  if (pairBelow) SMALL = SHOWN;
   const later = ["slices", "refocus", "refinement"].map((stage) => ({ stage, groups: groups.filter((group) => group.row.stage === stage) })).filter((part) => part.groups.length);
   const running = groups.find((group) => group.row.state === "running");
   const focusStage = shownGroup ? shownGroup.row.stage : running ? running.row.stage : groups.length ? groups[groups.length - 1].row.stage : "geometry";
@@ -434,7 +438,7 @@ function ShowSearch() {
                   <div style={{ ...ON_IMAGE, left: 3, bottom: 1 }}>probe, strongest mode{probe && probe.shape.length === 3 ? "" : ", amplitude"}</div>
                 </div>;
               })()}
-              <div style={{ display: "flex", flexDirection: "column", gap: GAP }}>
+              <div style={{ display: "flex", flexDirection: pairBelow ? "row" : "column", gap: GAP }}>
                 {[["spectrum", spectrum && <Picture data={spectrum.image} rows={spectrum.size} cols={spectrum.size} width={SMALL} height={SMALL} low={spectrum.low} high={spectrum.high} />],
                   ["depth", section && section.shape.length === 2 && <Picture data={section.data} rows={section.shape[0]} cols={section.shape[1]} width={SMALL} height={SMALL} />]]
                   .map(([label, content]) => (
