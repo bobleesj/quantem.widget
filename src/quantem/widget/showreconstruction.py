@@ -128,7 +128,7 @@ class ShowReconstruction(anywidget.AnyWidget):
     aperture_shapes = traitlets.List(traitlets.List(traitlets.Int())).tag(sync=True)
     aperture_epochs = traitlets.List(traitlets.Int()).tag(sync=True)
     size = traitlets.Unicode("medium").tag(sync=True)  # "small", "medium" or "large": how big the view draws; the browser's S M L writes it back
-    tiles = traitlets.Unicode("all").tag(sync=True)  # the report's tiles: "image" (the projected phase, the probe a corner inset), "fft" (with its spectrum) or "all" (with the probe too); the browser's buttons write it back
+    tiles = traitlets.Unicode("").tag(sync=True)  # what a stage tile holds beside the projection: a comma list of "fft", "slice", "probe" ("image": none; "": the view's default, FFT and probe in the report, the probe in the dashboard); the browser's chips write it back
     phase_range = traitlets.List(traitlets.Float(), default_value=[0.0, 1.0]).tag(sync=True)  # one linear range, every slice
     profile_line = traitlets.List(traitlets.Float(), default_value=[]).tag(sync=True)  # row0, col0, row1, col1 in pixels; the browser writes a dragged line back
     profile_line_given = traitlets.List(traitlets.Float(), default_value=[]).tag(sync=True)  # the line Python gave: what "reset line" restores

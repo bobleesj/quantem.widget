@@ -26,6 +26,11 @@ type Frame = { data: Float32Array; shape: number[] };
 const TEXT = 11;
 const GAP = SPACING.XS;
 const STAGE_COLORS: { [stage: string]: string } = { geometry: "#8c8c8c", slices: "#6f8fb3", refocus: "#b09a72", refinement: "#9a7fb0" };
+// A thickness for a label: three significant figures (21.0, not 21.04166364182265).
+function sig3(value: number | null | undefined): string {
+  return value == null || !Number.isFinite(value) ? "–" : String(Number(value.toPrecision(3)));
+}
+
 const PLATE: React.CSSProperties = { background: "rgba(0,0,0,0.6)", padding: "0 3px", borderRadius: 2, textShadow: "none" };  // a label readable over any image, inside its own tile
 const ON_IMAGE: React.CSSProperties = { position: "absolute", fontSize: TEXT, color: "#fff", textShadow: "0 0 3px #000, 0 0 2px #000", pointerEvents: "none", lineHeight: "13px", whiteSpace: "nowrap" };
 const MARKS: { [mark: string]: [string, string] } = { best: ["★", "the pick of its stage: lowest held-out"], tie: ["▲", "within 2 standard errors of the pick"] };
@@ -354,7 +359,7 @@ function ShowSearch() {
         badge={plain(row.held_out)} caption={label} mark={mark} markWhy={markWhy}
         running={row.state === "running" ? `${epochs}/${group.epochs}` : undefined} queued={row.state === "queued"}
         active={hovered === group.key} chosen={selected === group.key}
-        why={`${row.thickness_nm} nm · focus ${signed(row.focus_nm, 1)} nm · ${row.slices} slices · ${row.modes} modes · ${group.epochs} epochs · held-out ${plain(row.held_out)}`}
+        why={`${sig3(row.thickness_nm)} nm · focus ${signed(row.focus_nm, 1)} nm · ${row.slices} slices · ${row.modes} modes · ${group.epochs} epochs · held-out ${plain(row.held_out)}`}
         onHover={look(group.key)} onPick={choose(group.key)} />
     );
   };
@@ -386,13 +391,13 @@ function ShowSearch() {
   return (
     <Engine.Provider value={engine}>
       <div ref={root} style={{ fontFamily: WIDGET_UI_FONT, fontSize: 12, color: colors.text, background: colors.bg, border: `1px solid ${colors.border}`,
-        padding: GAP, borderRadius: 4, maxWidth: 1100, boxSizing: "border-box", fontVariantNumeric: "tabular-nums" }}>
+        padding: GAP, borderRadius: 4, maxWidth: "100%", boxSizing: "border-box", fontVariantNumeric: "tabular-nums" }}>
         <div style={{ lineHeight: "18px", overflowWrap: "anywhere" }}>
           <span style={{ float: "right", marginLeft: GAP }}><SizeControl size={size} onSize={setSize} colors={colors} /></span>
           <b>{title || "Search"}</b>{rules && rules.length > 0 && <InfoTooltip text={<div>{rules.map((rule) => <div key={rule}>{rule}</div>)}</div>} theme={theme} toggleOnClick />}{headline && <span> · {headline}</span>}{status?.note && <span style={{ color: colors.textMuted }}> · {status.note}</span>}
         </div>
         <div style={{ lineHeight: "18px", overflowWrap: "anywhere", marginBottom: GAP }}>
-          {bestRow ? <>best after the {bestRow.stage} pass: {bestRow.thickness_nm} nm · focus {signed(bestRow.focus_nm, 1)} nm · {bestRow.slices} slices · {bestRow.modes} modes · held-out <b>{plain(bestRow.held_out)}</b> ★</>
+          {bestRow ? <>best after the {bestRow.stage} pass: {sig3(bestRow.thickness_nm)} nm · focus {signed(bestRow.focus_nm, 1)} nm · {bestRow.slices} slices · {bestRow.modes} modes · held-out <b>{plain(bestRow.held_out)}</b> ★</>
             : <span style={{ color: colors.textMuted }}>no candidate landed yet</span>}
           {lastKept && <span> · after {lastKept.name} <b>{plain(lastKept.held_out)}</b></span>}
           {(picks || []).flatMap((one) => one.flags).includes("search_boundary") && <span style={{ color: colors.textMuted }}> · {bestRow && thicknesses.length && bestRow.thickness_nm <= thicknesses[0] ? "at the bottom of the thickness range" : "at the top of the thickness range"}</span>}
@@ -405,7 +410,7 @@ function ShowSearch() {
               {focuses.map((focus) => <div key={focus} style={{ textAlign: "center", color: colors.textMuted }}>{signed(focus, 1)} nm</div>)}
               {thicknesses.map((thickness) => (
                 <React.Fragment key={thickness}>
-                  <div style={{ color: colors.textMuted }}>{thickness} nm</div>
+                  <div style={{ color: colors.textMuted }}>{sig3(thickness)} nm</div>
                   {focuses.map((focus) => {
                     const group = geometry.find((one) => one.row.thickness_nm === thickness && one.row.focus_nm === focus);
                     return group ? tileOf(group, tile) : <div key={focus} />;
@@ -414,7 +419,7 @@ function ShowSearch() {
               ))}
             </div>
           </Panel>
-          <Panel title="shown" hint={shownGroup ? `${shownGroup.row.thickness_nm} nm, focus ${signed(shownGroup.row.focus_nm, 1)} nm${hovered ? "" : selected ? " (chosen)" : " (best candidate)"}` : shownStage ? shownStage.name : "hover a tile"} colors={colors} theme={theme} style={{ flex: "1 1 auto", minWidth: 0, maxWidth: "100%" }}
+          <Panel title="shown" hint={shownGroup ? `${sig3(shownGroup.row.thickness_nm)} nm, focus ${signed(shownGroup.row.focus_nm, 1)} nm${hovered ? "" : selected ? " (chosen)" : " (best candidate)"}` : shownStage ? shownStage.name : "hover a tile"} colors={colors} theme={theme} style={{ flex: "1 1 auto", minWidth: 0, maxWidth: "100%" }}
             info="The hovered tile, else the chosen one, else the best: its projected phase, its spectrum (log power, ±2.6 1/Å), its strongest probe mode at focus and the depth cut along its line (slices down).">
             <div style={{ display: "flex", flexWrap: "wrap", gap: GAP }}>
               <div style={{ width: SHOWN, height: SHOWN, background: "#000", position: "relative" }}>
@@ -451,7 +456,7 @@ function ShowSearch() {
               </div>
             </div>
             <div style={{ fontSize: TEXT, color: colors.textMuted, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 2 * SHOWN + SMALL + 2 * GAP }}>
-              {shownGroup ? `${shownGroup.row.thickness_nm} nm · ${signed(shownGroup.row.focus_nm, 1)} nm · ${shownGroup.row.slices} slices · ${shownGroup.row.modes} modes · ${shownGroup.epochs} epochs`
+              {shownGroup ? `${sig3(shownGroup.row.thickness_nm)} nm · ${signed(shownGroup.row.focus_nm, 1)} nm · ${shownGroup.row.slices} slices · ${shownGroup.row.modes} modes · ${shownGroup.epochs} epochs`
                 : shownStage ? `${shownStage.verdict} · start ${plain(shownStage.start)} · control ${plain(shownStage.control)}` : ""}
             </div>
           </Panel>
