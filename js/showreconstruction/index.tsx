@@ -1614,10 +1614,11 @@ type TileEnd = {
 };
 
 // What a stage tile holds beside the object's projection, each a chip the reader switches: its spectrum, its middle
-// slice, its strongest probe mode at the picture's size. A part switched off is not lost: the probe becomes a small
-// inset in the projection's corner. The tiles trait keeps the choice ("" is the view's own default; "image" none).
+// slice, its strongest probe mode. Every part is its own picture at the tile's size, never set into another's corner;
+// in the report, hovering a picture draws it large. The tiles trait keeps the choice ("" is the view's own default;
+// "image" none).
 const TILE_PARTS: [string, string, string][] = [["fft", "FFT", "the projection's spectrum, with the 50 pm ring and its finest spot"],
-  ["slice", "Slice", "the middle slice kept of the run, at its depth"], ["probe", "Probe", "the strongest probe mode at the picture's size; off, it is a small inset in the picture's corner"]];
+  ["slice", "Slice", "the middle slice kept of the run, at its depth"], ["probe", "Probe", "the strongest probe mode, its own picture"]];
 function tileParts(tiles: string | undefined, fallback: string): Set<string> {
   const text = tiles === "all" ? "fft,probe" : tiles || fallback;  // "all": the first spelling of FFT and probe
   return new Set(text.split(",").map((part) => part.trim()).filter((part) => TILE_PARTS.some(([key]) => key === part)));
@@ -1639,13 +1640,17 @@ function evenRows(count: number, most: number): number {
   return Math.max(1, Math.ceil(count / Math.ceil(count / Math.max(1, most))));
 }
 
-function StageTiles({ runs, size, inset = false, fft = false, slice = false, probeCorner = false, perRow: fixed, shown, onLook, onPick, colors }: {
-  runs: RunData[]; size: number; inset?: boolean; fft?: boolean; perRow?: number;
+type TileKind = "projection" | "slice" | "spectrum" | "probe";
+
+function StageTiles({ runs, size, fft = false, slice = false, probe = true, enlarge = false, perRow: fixed, shown, onLook, onPick, colors }: {
+  runs: RunData[]; size: number; fft?: boolean; perRow?: number;
   shown?: Stage | null; onLook?: (epoch: number | null) => void; onPick?: (epoch: number) => void; colors: any;
   slice?: boolean;  // the run's middle kept slice beside its projection
-  probeCorner?: boolean;  // the probe stays a small inset in the projection's corner while the spectrum keeps its own picture
+  probe?: boolean;  // the strongest probe mode, its own picture
+  enlarge?: boolean;  // hovering a picture draws it large beside it (the report; the dashboard's hover looks at the stage instead)
 }) {
   const [row, rowWidth] = useWidth(1000);
+  const [large, setLarge] = React.useState<{ index: number; kind: TileKind } | null>(null);
   const ends: TileEnd[] = runs.map((run, index) => {
     const stage = run.stages[0], endRecord = recordAt(run.records, Infinity, "held_out"), scored = recordAt(run.records, Infinity, "image_score");
     const endEpoch = run.records.length ? run.records[run.records.length - 1].epoch : stage ? stage.start : 0;
@@ -1656,30 +1661,47 @@ function StageTiles({ runs, size, inset = false, fft = false, slice = false, pro
   });
   const startScores = runs.map((run) => (run.records.length && run.records[0].start ? run.records[0].held_out : null));
   const best = ends.reduce((found: number, end, index) => (!end.refused && end.score != null && (found < 0 || end.score < ends[found].score!) ? index : found), -1);
-  inset = inset || (!fixed && rowWidth < 520);  // a phone: the probe in the projection's corner, so several stages fit a row
-  const across = inset ? 1 : 1 + (slice ? 1 : 0) + (fft ? 1 : 0) + (probeCorner ? 0 : 1);  // images a tile is wide
-  const most = Math.max(1, Math.min(ends.length, Math.floor(rowWidth / (across * size * 0.9))));  // the stages a row can hold at this size, a tenth under it allowed so four parts still go two a row
+  const kinds: TileKind[] = ["projection", ...(slice ? ["slice" as TileKind] : []), ...(fft ? ["spectrum" as TileKind] : []), ...(probe ? ["probe" as TileKind] : [])];  // every part its own picture: nothing is set into another's corner
+  const across = kinds.length;  // images a tile is wide
+  const least = Math.min(size, Math.max(64, Math.floor(rowWidth / across)));  // a phone: one stage a row at the least, its pictures as wide as the row allows
+  const most = Math.max(1, Math.min(ends.length, Math.floor(rowWidth / (across * least * 0.9))));  // the stages a row can hold at this size, a tenth under it allowed so four parts still go two a row
   const perRow = fixed || evenRows(ends.length, most);
   const image = Math.min(fixed ? Infinity : Math.round(size * 2), Math.floor(rowWidth / perRow / across));  // the images grow to fill the row, a short row only so far
+  const BIG = Math.min(360, Math.max(140, rowWidth - 12));
+  const shownLarge = enlarge && large && ends[large.index] && kinds.includes(large.kind) ? large : null;
   return (
-    <div ref={row} style={{ display: "flex", flexWrap: "wrap", gap: 0 }} onMouseLeave={onLook ? () => onLook(null) : undefined}>
+    <div ref={row} style={{ display: "flex", flexWrap: "wrap", gap: 0, position: "relative" }} onMouseLeave={() => { setLarge(null); if (onLook) onLook(null); }}>
       {ends.map((end, index) => {
         const before = ends.slice(0, index).filter((one) => !one.refused).pop();
         const previous = end.refused || !before ? startScores[index] : before.score;
         const delta = end.score != null && previous != null ? end.score - previous : null;
         const scoreDelta = end.imageScore != null && before && before.imageScore != null ? end.imageScore - before.imageScore : null;
-        return <StageTile key={index} end={end} image={image} across={across} inset={inset} fft={fft} slice={slice} probeCorner={probeCorner} best={index === best} delta={delta} scoreDelta={scoreDelta}
+        return <StageTile key={index} end={end} image={image} kinds={kinds} best={index === best} delta={delta} scoreDelta={scoreDelta}
           against={end.refused || !before ? "its start" : "the run before"} chosen={!!shown && shown.name === end.name && shown.start === end.start}
-          onLook={onLook} onPick={onPick} colors={colors} />;
+          onLook={onLook} onPick={onPick} onLarge={enlarge ? (kind) => setLarge(kind ? { index, kind } : null) : undefined} colors={colors} />;
       })}
+      {shownLarge && (() => {
+        const end = ends[shownLarge.index], place = kinds.indexOf(shownLarge.kind);
+        const pictureLeft = (shownLarge.index % perRow) * across * image + place * image, top = Math.floor(shownLarge.index / perRow) * image;
+        const left = Math.max(0, pictureLeft + image + 4 + BIG <= rowWidth ? pictureLeft + image + 4 : pictureLeft - BIG - 4);
+        const mode = shownLarge.kind === "probe" && end.strongest ? probeModes(end.strongest.data, end.strongest.shape, true)[0] : null;
+        const item = shownLarge.kind === "slice" ? end.slice : shownLarge.kind === "projection" ? end.projection : null;
+        return <div style={{ position: "absolute", left, top, zIndex: 5, pointerEvents: "none", width: BIG, height: BIG, background: "#000", boxShadow: "0 2px 12px rgba(0,0,0,0.5)", border: `1px solid ${colors.border}` }}>
+          {shownLarge.kind === "spectrum" ? <StageSpectrum projection={end.projection} pixelA={end.pixelA} side={BIG} />
+            : mode ? <ModeTile mode={mode} size={BIG} />
+            : item ? <ImageCanvas data={item.data} rows={item.shape[0]} cols={item.shape[1]} low={rangeOf(item.data)[0]} high={rangeOf(item.data)[1]} cmap="gray" height={BIG} keepAspect /> : null}
+          <div style={{ ...ON_IMAGE, ...PLATE, left: 3, top: 3 }}>{end.name} · {shownLarge.kind === "spectrum" ? "FFT" : shownLarge.kind}</div>
+        </div>;
+      })()}
     </div>
   );
 }
 
-function StageTile({ end, image, across, inset, fft, slice, probeCorner, best, delta, scoreDelta, against, chosen, onLook, onPick, colors }: {
-  end: TileEnd; image: number; across: number; inset: boolean; fft: boolean; slice?: boolean; probeCorner?: boolean; best: boolean; delta: number | null; scoreDelta: number | null; against: string; chosen: boolean;
-  onLook?: (epoch: number | null) => void; onPick?: (epoch: number) => void; colors: any;
+function StageTile({ end, image, kinds, best, delta, scoreDelta, against, chosen, onLook, onPick, onLarge, colors }: {
+  end: TileEnd; image: number; kinds: TileKind[]; best: boolean; delta: number | null; scoreDelta: number | null; against: string; chosen: boolean;
+  onLook?: (epoch: number | null) => void; onPick?: (epoch: number) => void; onLarge?: (kind: TileKind | null) => void; colors: any;
 }) {
+  const fft = kinds.includes("spectrum"), across = kinds.length;
   const range = React.useMemo(() => (end.projection ? rangeOf(end.projection.data) : [0, 1]), [end.projection?.data]);
   const sliceRange = React.useMemo(() => (end.slice ? rangeOf(end.slice.data) : [0, 1]), [end.slice?.data]);
   const [rows, cols] = end.projection ? end.projection.shape : [0, 0];
@@ -1693,23 +1715,20 @@ function StageTile({ end, image, across, inset, fft, slice, probeCorner, best, d
     + `${differ ? `; ≠ ${differ}` : ""}; epochs ${end.start}-${end.endEpoch}${end.changes ? `; ${end.changes}` : ""}; ptycho("${end.name}") shows its view`;
   const font = image >= 110 ? TEXT : 10;
   const badge = (style: React.CSSProperties, text: React.ReactNode) => <div style={{ ...ON_IMAGE, ...PLATE, fontSize: font, lineHeight: "13px", ...style }}>{text}</div>;
-  const small = Math.round(image * 0.3);  // the corner insets leave the picture its middle and bottom
-  const spectrumImage = (side: number) => spectrum && <ImageCanvas data={spectrum.image} rows={spectrum.size} cols={spectrum.size} low={spectrum.low} high={spectrum.high} cmap="gray" height={side} keepAspect
-    overlay={spectrumRings(spectrum)} />;
+  const frame = (kind: TileKind, content: React.ReactNode) => (
+    <div key={kind} onMouseEnter={onLarge ? () => onLarge(kind) : undefined} style={{ position: "relative", width: image, height: image, flex: "none", background: "#000", cursor: onLarge ? "zoom-in" : undefined }}>{content}</div>);
+  const pictures: { [kind in TileKind]: React.ReactNode } = {
+    projection: end.projection && <ImageCanvas data={end.projection.data} rows={rows} cols={cols} low={range[0]} high={range[1]} cmap="gray" height={image} keepAspect />,
+    slice: <>{end.slice && <ImageCanvas data={end.slice.data} rows={end.slice.shape[0]} cols={end.slice.shape[1]} low={sliceRange[0]} high={sliceRange[1]} cmap="gray" height={image} keepAspect />}
+      {badge({ left: 2, bottom: 2 }, end.slice ? `slice ${end.slice.slice + 1}/${end.slice.slices}${image >= 130 && end.slice.depth_A ? ` · ${plain(end.slice.depth_A[0], 0)}-${plain(end.slice.depth_A[1], 0)} Å` : ""}` : "no slice kept")}</>,
+    spectrum: <>{spectrum && <ImageCanvas data={spectrum.image} rows={spectrum.size} cols={spectrum.size} low={spectrum.low} high={spectrum.high} cmap="gray" height={image} keepAspect overlay={spectrumRings(spectrum)} />}
+      {spotText(spectrum) && badge({ left: 2, bottom: 2 }, image >= 110 ? spotText(spectrum) : `${Math.round(spectrum!.spotPm!)} pm`)}</>,
+    probe: strongest && <ModeTile mode={strongest} size={image} />,
+  };
   return (
     <div title={why} onMouseEnter={end.refused || !onLook ? undefined : () => onLook(end.endEpoch)} onClick={end.refused || !onPick ? undefined : () => onPick(end.endEpoch)}
       style={{ position: "relative", display: "flex", width: across * image, height: image, cursor: end.refused || !onPick ? "default" : "pointer", background: "#000", opacity: end.refused ? 0.5 : 1 }}>
-      <div style={{ position: "relative", width: image, height: image, flex: "none" }}>
-        {end.projection && <ImageCanvas data={end.projection.data} rows={rows} cols={cols} low={range[0]} high={range[1]} cmap="gray" height={image} keepAspect />}
-        {inset && fft && spectrum && <div style={{ position: "absolute", left: 0, top: 16, width: small, height: small, boxShadow: "0 0 0 1px #000" }}>{spectrumImage(small)}</div>}
-        {(inset || probeCorner) && strongest && <div style={{ position: "absolute", right: 0, top: 16, width: small, height: small, boxShadow: "0 0 0 1px #000" }}><ModeTile mode={strongest} size={small} /></div>}
-      </div>
-      {!inset && slice && <div style={{ position: "relative", width: image, height: image, flex: "none", background: "#111" }}>
-        {end.slice && <ImageCanvas data={end.slice.data} rows={end.slice.shape[0]} cols={end.slice.shape[1]} low={sliceRange[0]} high={sliceRange[1]} cmap="gray" height={image} keepAspect />}
-        {badge({ left: 2, bottom: 2 }, end.slice ? `slice ${end.slice.slice + 1}/${end.slice.slices}${end.slice.depth_A ? ` · ${plain(end.slice.depth_A[0], 0)}-${plain(end.slice.depth_A[1], 0)} Å` : ""}` : "no slice kept")}</div>}
-      {!inset && fft && <div style={{ position: "relative", width: image, height: image, flex: "none" }} title={SPOT_WHY}>{spectrumImage(image)}
-        {spotText(spectrum) && badge({ left: 2, bottom: 2 }, spotText(spectrum))}</div>}
-      {!inset && !probeCorner && strongest && <ModeTile mode={strongest} size={image} />}
+      {kinds.map((kind) => frame(kind, pictures[kind]))}
       {badge({ left: 2, top: 2, maxWidth: across * image - 44, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, end.name)}
       {badge({ right: 2, top: 2, fontSize: image >= 110 ? 13 : 11 }, <><span style={{ color: tone }}>{mark}</span>{differ && <span style={{ color: "#f2b04e" }} title={differ}> ≠</span>}</>)}
       {badge({ left: 2, bottom: 2 }, <>{plain(end.score, delta != null && end.score != null ? pairDigits(end.score, end.score - delta) : 5)}{delta != null && <span style={{ color: end.refused ? "#ccc" : delta <= 0 ? "#7ddc8a" : "#f2b04e" }}> {change(delta)}</span>}</>)}
@@ -1739,7 +1758,7 @@ function ReportView() {
           <InfoTooltip theme={theme} toggleOnClick text={"One tile a run, in the order they ran: its projected phase and strongest probe mode at its end (hue the phase, brightness the amplitude; at small the probe sits in the projection's corner). Top-left its name; bottom-left its held-out score (lower is better) and the change against the run it continued from (▼ better, ▲ worse); above it its image score (repetition × detail of the projected phase, higher is better) and its change; top-right ★ the best kept run, ✓ kept, ▲ worse than its start, ✕ tried and refused (dimmed), and ≠ when held-out and image score move in opposite directions. Each tile: the projected phase, its spectrum (the dashed ring at 50 pm), the strongest probe mode. Hover a tile for its numbers and settings. ptycho(\"name\") shows a run's view; ptycho.report(table=True) gives the numbers."} />
         </span>
       </div>
-      <StageTiles runs={runs} size={bySize(size, 110, 170, 280)} fft={parts.has("fft")} slice={parts.has("slice")} probeCorner={!parts.has("probe")} colors={colors} />
+      <StageTiles runs={runs} size={bySize(size, 110, 170, 280)} fft={parts.has("fft")} slice={parts.has("slice")} probe={parts.has("probe")} enlarge colors={colors} />
     </div>
     </Engine.Provider>
   );
@@ -1988,7 +2007,7 @@ function DashboardView() {
         <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: GAP }}><TilePartsControl parts={parts} onParts={setTiles} colors={colors} /><RenderPathBadge colors={colors} />{controls.toggle}<SizeControl size={size} onSize={setSize} colors={colors} /></span>
       </div>
       {controls.row}
-      <StageTiles runs={runs} size={tileImage} fft={parts.has("fft")} slice={parts.has("slice")} probeCorner={!parts.has("probe") || size === "small"} shown={stageNow} onLook={setPreview} onPick={setEpoch} colors={colors} />
+      <StageTiles runs={runs} size={tileImage} fft={parts.has("fft")} slice={parts.has("slice")} probe={parts.has("probe")} shown={stageNow} onLook={setPreview} onPick={setEpoch} colors={colors} />
       <DetailGrid data={data} epoch={epoch} previewing={previewing} sliceIndex={sliceIndex} setSliceIndex={setSliceIndex} savedLine={savedLine} setSavedLine={setSavedLine}
         smooth={!!smooth} setSmooth={setSmooth} colors={colors} theme={theme} width={rootWidth} size={size} />
       <div style={{ display: "grid", gridTemplateColumns: storyColumns, gridTemplateAreas: storyAreas, gap: GAP, marginTop: GAP }}>
