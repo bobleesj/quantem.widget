@@ -1331,6 +1331,12 @@ function RunView() {
               {moved && <div style={{ ...ON_IMAGE, ...PLATE, left: 3, bottom: 1 }}>±{plain(moved.span, 2)} rad</div>}
             </div>
           </div>
+          <div style={{ display: "flex", alignItems: "center", gap: GAP, marginTop: HAIR, maxWidth: "100%", overflowX: "auto" }}>
+          <IconButton size="small" sx={{ color: colors.textMuted, p: 0.25 }} aria-label="Previous epoch" title="Previous epoch (←)" onClick={() => step(-1)}><NavigateBeforeIcon sx={{ fontSize: 18 }} /></IconButton>
+          <IconButton size="small" sx={{ color: colors.textMuted, p: 0.25 }} aria-label="Next epoch" title="Next epoch (→)" onClick={() => step(1)}><NavigateNextIcon sx={{ fontSize: 18 }} /></IconButton>
+          <span style={{ fontSize: TEXT, color: colors.textMuted }}>epochs</span>
+          <div style={{ display: "flex", gap: 0 }} onMouseLeave={() => setPreview(null)}>{data.projections.epochs.map(thumbnail)}</div>
+        </div>
         </div>
         {hasThird && <div style={{ flex: "1 1 240px", minWidth: 220 }}>
           <div style={{ fontSize: TEXT, lineHeight: "18px", height: 18, ...muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{panelTitle}</div>
@@ -1341,13 +1347,7 @@ function RunView() {
         <ProbeView frame={beforeProbe?.data} shape={beforeProbe?.shape} shares={beforeProbe?.shares} aperture={beforeAperture} size={PROBE} label="before" colors={colors} />
         <ProbeView frame={afterProbe?.data} shape={afterProbe?.shape} shares={afterProbe?.shares} aperture={afterAperture} size={PROBE}
           label={afterFrame && afterFrame.epoch !== last.epoch ? `epoch ${afterFrame.epoch - start}` : "after"} colors={colors} />
-      <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", gap: GAP, flex: `1 1 ${Math.max(260, 110 + data.projections.epochs.length * Math.round(STRIP * (cols && rows ? cols / rows : 1)))}px`, minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: GAP, flex: "none", maxWidth: "100%", overflowX: "auto" }}>
-          <IconButton size="small" sx={{ color: colors.textMuted, p: 0.25 }} aria-label="Previous epoch" title="Previous epoch (←)" onClick={() => step(-1)}><NavigateBeforeIcon sx={{ fontSize: 18 }} /></IconButton>
-          <IconButton size="small" sx={{ color: colors.textMuted, p: 0.25 }} aria-label="Next epoch" title="Next epoch (→)" onClick={() => step(1)}><NavigateNextIcon sx={{ fontSize: 18 }} /></IconButton>
-          <span style={{ fontSize: TEXT, color: colors.textMuted }}>epochs</span>
-          <div style={{ display: "flex", gap: 0 }} onMouseLeave={() => setPreview(null)}>{data.projections.epochs.map(thumbnail)}</div>
-        </div>
+      <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", flex: "1 1 220px", minWidth: 0 }}>
         <div style={{ minWidth: 200 }} title="held-out (solid) and training (dashed) of this run, earlier runs faint, log scale">{objective}</div>
       </div>
       </div>
