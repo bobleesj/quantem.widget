@@ -209,3 +209,19 @@ def test_the_status_view_reads_each_runs_settings_and_what_its_stage_changed():
     assert status.view == "status" and len(status.runs) == 2
     assert second.stages[0]["changed"] == [{"key": "probe.modes", "before": "8", "after": "10"}]
     assert second.settings["object.slices"] == "27" and first.settings == {}
+
+
+def test_the_direct_view_carries_the_mean_pattern_with_the_fitted_centre_and_disk():
+    """ShowDirect(patterns=...): the patterns as recorded (the browser draws the log), their labels, and the beam centre
+    and bright-field disk the fit found, in native detector pixels."""
+    import numpy as np
+
+    from quantem.widget import ShowDirect
+
+    mean = np.arange(48, dtype=np.float64).reshape(6, 8)
+    view = ShowDirect(np.zeros((16, 16)), np.zeros((16, 16)), scan_sampling_A=0.5, patterns=[mean, mean[::-1]], pattern_labels=["mean pattern", "at (8, 8)"],
+                      beam_center_px=(2.5, 3.5), disk_radius_px=2.0, mrad_per_px=0.75)
+    assert view.pattern_shapes == [[6, 8], [6, 8]] and view.pattern_labels == ["mean pattern", "at (8, 8)"]
+    np.testing.assert_array_equal(np.frombuffer(view.patterns, np.float32)[:48].reshape(6, 8), mean.astype(np.float32))
+    assert view.beam_center_px == [2.5, 3.5] and view.disk_radius_px == 2.0 and view.mrad_per_px == 0.75
+    assert ShowDirect(np.zeros((16, 16)), np.zeros((16, 16)), scan_sampling_A=0.5).patterns == b""

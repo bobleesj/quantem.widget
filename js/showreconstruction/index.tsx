@@ -2311,6 +2311,12 @@ function DirectView() {
   const [dark, setDark] = useModelState<boolean>("dark");
   const [editable] = useModelState<boolean>("editable");
   const [origin] = useModelState<number[]>("origin");  // the virtual images' first scan position: a crop about the region, or (0, 0)
+  const [patternBytes] = useModelState<DataView>("patterns");  // diffraction patterns, float32 back to back: the mean first, then single positions
+  const [patternShapes] = useModelState<number[][]>("pattern_shapes");
+  const [patternLabels] = useModelState<string[]>("pattern_labels");
+  const [beamCentre] = useModelState<number[]>("beam_center_px");  // (row, col) the fit found, native detector pixels
+  const [diskRadius] = useModelState<number>("disk_radius_px");  // the bright-field disk's radius, the convergence semiangle in pixels
+  const [mradPerPx] = useModelState<number>("mrad_per_px");
   const [size, setSize] = useModelState<ViewSize>("size");
   const [root, rootWidth] = useWidth(1000);
   const [dragging, setDragging] = React.useState<number[] | null>(null);
@@ -2329,9 +2335,23 @@ function DirectView() {
   const other = phase ? null : dark ? bright : darkField;  // the whole scan alone: both fields side by side, the box dragged on the first and drawn on the second
   const otherRange = React.useMemo(() => rangeOf(other ? other.data : EMPTY_FRAME), [other?.data]);
   const phaseRange = React.useMemo(() => rangeOf(phase ? phase.data : EMPTY_FRAME), [phase?.data]);
+  // the patterns on a log scale (log10(1 + counts)): a mean pattern's disk is thousands of times its dark field, and both are what a person checks
+  const patterns = React.useMemo(() => {
+    const all = floats(patternBytes);
+    let offset = 0;
+    return (patternShapes || []).map((shape, index) => {
+      const length = shape[0] * shape[1], data = new Float32Array(length);
+      for (let pixel = 0; pixel < length; pixel++) data[pixel] = Math.log10(1 + Math.max(0, all[offset + pixel] || 0));
+      offset += length;
+      let high = 0;
+      for (const value of data) high = Math.max(high, value);
+      return { data, rows: shape[0], cols: shape[1], high: high || 1, label: (patternLabels || [])[index] || (index ? `pattern ${index}` : "mean pattern") };
+    });
+  }, [patternBytes, patternShapes, patternLabels]);
   const phaseA = scanA / Math.max(1, upsample || 1);
   const spectrum = useSpectrum(phase ? phase.data : EMPTY_FRAME, phase ? phase.rows : 0, phase ? phase.cols : 0, null, phaseA);
-  const across = bright ? bright.cols / bright.rows + (phase ? phase.cols / phase.rows : other ? other.cols / other.rows : 0) : 2;
+  const patternsAcross = patterns.length ? patterns[0].cols / patterns[0].rows : 0;  // the diffraction panel: one pattern at the images' height, or a grid of four at half of it
+  const across = bright ? bright.cols / bright.rows + (phase ? phase.cols / phase.rows : other ? other.cols / other.rows : 0) + patternsAcross : 2;
   const height = Math.min(bySize(size, 200, 420, 640), Math.max(120, Math.floor((rootWidth - 24) / across)));  // side by side
   const muted = { color: colors.textMuted } as React.CSSProperties;
   if (!bright) return null;
@@ -2385,6 +2405,25 @@ function DirectView() {
             onDrag={setDragging} onDrop={(next) => setRegion(next)} colors={colors} /> : undefined)}
         {other && picture(other, otherRange, scanA, `whole scan, ${dark ? "bright field" : "dark field"}`, box(r0 - o0, c0 - o1, r1 - r0, c1 - c0))}
         {phase && picture(phase, phaseRange, phaseA, "region, direct phase", box((r0 - p0) * (upsample || 1), (c0 - q0) * (upsample || 1), (r1 - r0) * (upsample || 1), (c1 - c0) * (upsample || 1)), undefined, true, <SpectrumInset spectrum={spectrum} side={height} label="region's phase" />)}
+        {patterns.length > 0 && (() => {
+          const grid = patterns.length > 1, tile = grid ? Math.floor(height / 2) : height;
+          const centred = beamCentre && beamCentre.length === 2;
+          return (
+            <div style={{ display: "grid", gridTemplateColumns: grid ? `repeat(2, ${Math.round(tile * patternsAcross)}px)` : undefined, gap: 0, flex: "none" }}
+              title={`diffraction on a log scale (log10(1 + counts)), native detector pixels${centred ? `. Cross: the beam centre the fit found, (${plain(beamCentre[0], 2)}, ${plain(beamCentre[1], 2)}) px (row, col)` : ""}${diskRadius ? `. Circle: the bright-field disk, ${plain(diskRadius, 1)} px${mradPerPx ? ` = ${plain(diskRadius * mradPerPx, 1)} mrad at ${plain(mradPerPx, 4)} mrad/px` : ""}` : ""}`}>
+              {patterns.slice(0, 4).map((pattern, index) => (
+                <div key={index} style={{ position: "relative", width: Math.round(tile * pattern.cols / pattern.rows), height: tile, background: "#000" }}>
+                  <ImageCanvas data={pattern.data} rows={pattern.rows} cols={pattern.cols} low={0} high={pattern.high} cmap="gray" height={tile} keepAspect unit="log counts"
+                    overlay={<>
+                      {centred && diskRadius > 0 && <circle cx={beamCentre[1] + 0.5} cy={beamCentre[0] + 0.5} r={diskRadius} fill="none" stroke="#7ddc8a" strokeWidth={1.2} strokeDasharray="5 3" vectorEffect="non-scaling-stroke" />}
+                      {centred && <path d={`M ${beamCentre[1] + 0.5 - pattern.cols * 0.04} ${beamCentre[0] + 0.5} h ${pattern.cols * 0.08} M ${beamCentre[1] + 0.5} ${beamCentre[0] + 0.5 - pattern.rows * 0.04} v ${pattern.rows * 0.08}`} stroke="#7ddc8a" strokeWidth={1.2} fill="none" vectorEffect="non-scaling-stroke" />}
+                    </>} />
+                  <div style={{ ...ON_IMAGE, ...PLATE, left: 3, top: 2 }}>{pattern.label}{index === 0 ? ", log" : ""}</div>
+                  {index === 0 && centred && tile >= 150 && <div style={{ ...ON_IMAGE, ...PLATE, left: 3, bottom: 2 }}>centre {plain(beamCentre[0], 1)}, {plain(beamCentre[1], 1)} px{diskRadius ? ` · disk ${plain(diskRadius, 1)} px` : ""}</div>}
+                </div>))}
+            </div>
+          );
+        })()}
       </div>
     </div>
     </ViewLink.Provider></Engine.Provider>

@@ -517,6 +517,10 @@ class ShowDirect(anywidget.AnyWidget):
     editable : bool
         The region's box can be dragged (moved, or resized from its corner), kept square on whole scan positions
         (square_region); the browser writes it to region, which a caller observes.
+    patterns : list of array (detector rows, detector cols), optional
+        Diffraction patterns as recorded, the scan's mean first, then single positions (pattern_labels names them): a
+        panel beside the images, on a log scale, at most four. beam_center_px (row, col) draws the fitted beam centre
+        as a cross and disk_radius_px the bright-field disk as a circle on each; mrad_per_px says the circle in mrad.
     """
 
     _esm = BUNDLE.read_text()
@@ -534,9 +538,15 @@ class ShowDirect(anywidget.AnyWidget):
     editable = traitlets.Bool(False).tag(sync=True)  # the region's box can be dragged; the browser writes region back
     origin = traitlets.List(traitlets.Int(), default_value=[0, 0]).tag(sync=True)  # the scan position the virtual images start at: (0, 0) the whole scan, else a crop about the region
     size = traitlets.Unicode("medium").tag(sync=True)  # "small", "medium" or "large"; the browser's S M L writes it back
+    patterns = traitlets.Bytes(b"").tag(sync=True)  # diffraction patterns, float32 back to back: the mean first, then single positions (at most four drawn)
+    pattern_shapes = traitlets.List(traitlets.List(traitlets.Int())).tag(sync=True)
+    pattern_labels = traitlets.List(traitlets.Unicode()).tag(sync=True)
+    beam_center_px = traitlets.List(traitlets.Float()).tag(sync=True)  # (row, col) of the beam on the detector, native pixels: a cross on every pattern
+    disk_radius_px = traitlets.Float(0.0).tag(sync=True)  # the bright-field disk's radius (the convergence semiangle), native pixels: a circle on every pattern
+    mrad_per_px = traitlets.Float(0.0).tag(sync=True)  # the detector's sampling, so the circle is said in mrad
 
     def __init__(self, bright_field, dark_field, phase=None, *, scan_sampling_A, upsample=1, region=None, phase_region=None, readout=None, title="", size="medium",
-                 editable=False, origin=(0, 0), **kwargs):
+                 editable=False, origin=(0, 0), patterns=None, pattern_labels=None, beam_center_px=None, disk_radius_px=0.0, mrad_per_px=0.0, **kwargs):
         arrays = [_float32(bright_field), _float32(dark_field)] + ([] if phase is None else [_float32(phase)])
         rows, cols = arrays[0].shape
         if region is None:  # the middle eighth of the scan, a start to drag from
@@ -548,6 +558,13 @@ class ShowDirect(anywidget.AnyWidget):
                          image_shapes=[list(array.shape) for array in arrays], region=[int(value) for value in region],
                          phase_region=[int(value) for value in (phase_region or (0, rows, 0, cols))], readout=dict(readout or {}), size=str(size),
                          editable=bool(editable), origin=[int(value) for value in origin], **kwargs)
+        shown = [_float32(pattern) for pattern in (patterns if patterns is not None else [])]
+        if shown:  # counts as recorded: the browser draws them on a log scale and says so
+            self.pattern_shapes = [list(pattern.shape) for pattern in shown]
+            self.pattern_labels = [str(label) for label in (pattern_labels or [])]
+            self.beam_center_px = [] if beam_center_px is None else [float(value) for value in beam_center_px]
+            self.disk_radius_px, self.mrad_per_px = float(disk_radius_px), float(mrad_per_px)
+            self.patterns = b"".join(pattern.tobytes() for pattern in shown)
 
     def export_html(self, path):
         """The view as one standalone page that opens offline."""
