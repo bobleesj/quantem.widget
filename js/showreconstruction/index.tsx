@@ -11,6 +11,7 @@ import SkipNextIcon from "@mui/icons-material/SkipNext";
 import NavigateBeforeIcon from "@mui/icons-material/NavigateBefore";
 import NavigateNextIcon from "@mui/icons-material/NavigateNext";
 import { useTheme, WIDGET_UI_FONT, WIDGET_TYPOGRAPHY } from "../theme";
+import { scaleBarGeometry } from "../figure";
 import { compactButton, controlRow, sliderStyles, switchStyles, SPACING } from "../controlStyles";
 import { COLORMAP_NAMES, COLORMAPS } from "../display/luts";
 import { GPUColormapEngine } from "../display/colormaps";
@@ -253,7 +254,7 @@ const Engine = React.createContext<{ engine: DisplayColormapEngine | null; slot:
 
 function ImageCanvas({ data, rows, cols, low: givenLow, high: givenHigh, cmap: givenCmap, line, lineColor, pixelA, barA, height, keepAspect, overlay, children, inset, zoomable, unit = "rad", rangeFrom, symmetric = false }: {
   data: Float32Array; rows: number; cols: number; low: number; high: number; cmap: string;
-  line?: number[]; lineColor?: string; pixelA?: number; barA?: number; height?: number; keepAspect?: boolean;
+  line?: number[]; lineColor?: string; pixelA?: number; barA?: number /* any length: draw the scale bar (its length is chosen as Show2D chooses it) */; height?: number; keepAspect?: boolean;
   overlay?: React.ReactNode;  // drawn in image pixels over the image
   children?: React.ReactNode;  // HTML over the image (handles), positioned in percent
   inset?: React.ReactNode;  // a picture in the image's corner (its spectrum), outside the zoom
@@ -298,7 +299,12 @@ function ImageCanvas({ data, rows, cols, low: givenLow, high: givenHigh, cmap: g
     return () => { cancelled = true; };
   }, [engine, data, rows, cols, low, high, cmap]);
   const scale = linked ? linked.zoom.scale : 1;
-  const barPx = pixelA && barA ? (barA / pixelA) * scale : 0;  // the bar's length on screen follows the zoom
+  // Show2D's scale bar (figure.ts: about 60 px rounded to a nice length, 5 px thick, a 16 px label centred over it, 12 px
+  // in from the corner), bottom left since the spectrum inset holds the bottom right; a small image gets a smaller bar.
+  const boxWidth = height && keepAspect && rows ? height * cols / rows : 0;
+  const roomy = (height || 0) >= 160;
+  const bar = pixelA && barA && boxWidth > 0 ? scaleBarGeometry({ x: 0, y: 0, width: boxWidth, height: height! }, scale * boxWidth / cols, pixelA, "Å",
+    { position: "bottom-left", maxBarFraction: 0.4, margin: roomy ? 12 : 6, barThickness: roomy ? 5 : 3 }) : null;
   const picture = <>
     <canvas ref={ref} style={{ width: "100%", height: "100%", display: "block", imageRendering: smooth ? "auto" : "pixelated" }} />
     <svg viewBox={`0 0 ${cols} ${rows}`} preserveAspectRatio="none" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
@@ -312,10 +318,9 @@ function ImageCanvas({ data, rows, cols, low: givenLow, high: givenHigh, cmap: g
     <div style={{ position: "relative", ...(height && keepAspect ? { height, aspectRatio: `${cols} / ${rows}`, maxWidth: "100%", margin: "0 auto" }
       : height ? { width: "100%", height } : { width: "100%", aspectRatio: `${cols} / ${rows}` }) }}>
       {linked ? <ZoomFrame onHover={setHover}>{picture}</ZoomFrame> : picture}
-      {barPx > 0 && barPx < cols * 0.8 && <svg viewBox={`0 0 ${cols} ${rows}`} preserveAspectRatio="none" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
-        <rect x={cols * 0.04} y={rows * 0.93} width={barPx} height={Math.max(1, rows / 90)} fill="#fff" />
-      </svg>}
-      {barPx > 0 && barPx < cols * 0.8 && <div style={{ ...ON_IMAGE, left: "4%", bottom: "9%" }}>{barA! >= 10 ? `${barA! / 10} nm` : `${barA} Å`}</div>}
+      {bar && <div style={{ position: "absolute", left: bar.barX, top: bar.barY, width: bar.barPx, height: bar.barHeight, background: "#fff", boxShadow: "1px 1px 2px rgba(0,0,0,0.7)", pointerEvents: "none" }} />}
+      {bar && <div style={{ ...ON_IMAGE, left: bar.barX + bar.barPx / 2, bottom: height! - bar.barY + (roomy ? 4 : 2), transform: "translateX(-50%)", whiteSpace: "nowrap",
+        fontSize: roomy ? 16 : 12, lineHeight: 1, textShadow: "1px 1px 2px rgba(0,0,0,0.7)" }}>{bar.label}</div>}
       {inset}
       {read && Number.isFinite(read.value) && <div style={{ ...ON_IMAGE, background: "rgba(0,0,0,0.6)", padding: "0 3px", borderRadius: 2, textShadow: "none", right: 2, top: 2, fontSize: 10 }}>
         {plain(read.value, 3)}{unit ? ` ${unit}` : ""} · {read.nm ? `${plain(read.nm[0], 2)}, ${plain(read.nm[1], 2)} nm` : `${read.row}, ${read.col} px`}</div>}

@@ -10,6 +10,7 @@ import { applyHannWindow2D, fftshift, getDisplayFFT, zeroPadTopLeft, type Displa
 import { InfoTooltip } from "../shared/InfoTooltip";
 import { bySize, ComplexCanvas, SizeControl, type ViewSize } from "../shared/viewSize";
 import { useViewLink, ViewLink, ZoomFrame } from "../shared/zoomPan";
+import { scaleBarGeometry } from "../figure";
 import { contrastOf, groupsOf, plain, signed, type Candidate } from "./search";
 
 // ShowSearch: a parameter search in one view. The geometry candidates as a grid of thumbnails on thickness × focus,
@@ -414,8 +415,11 @@ function ShowSearch() {
                 {projection && projection.shape.length === 2 && <ViewLink.Provider value={objectLink}><ZoomFrame><Picture data={projection.data} rows={projection.shape[0]} cols={projection.shape[1]} width={SHOWN} height={SHOWN} /></ZoomFrame></ViewLink.Provider>}
                 {projection && shownGroup && pixelA > 0 && (() => {  // a stage's field has its own pixel: no bar
 
-                  const barPx = (10 / pixelA) * (SHOWN / projection.shape[1]);
-                  return barPx < SHOWN * 0.6 ? <><div style={{ position: "absolute", left: 8, bottom: 8, width: barPx, height: 3, background: "#fff" }} /><div style={{ ...ON_IMAGE, left: 8, bottom: 13 }}>1 nm</div></> : null;
+                  const roomy = SHOWN >= 160;  // Show2D's bar: about 60 px rounded to a nice length, following the zoom
+                  const bar = scaleBarGeometry({ x: 0, y: 0, width: SHOWN, height: SHOWN }, objectLink.zoom.scale * SHOWN / projection.shape[1], pixelA, "Å",
+                    { position: "bottom-left", maxBarFraction: 0.4, margin: roomy ? 12 : 6, barThickness: roomy ? 5 : 3 });
+                  return bar ? <><div style={{ position: "absolute", left: bar.barX, top: bar.barY, width: bar.barPx, height: bar.barHeight, background: "#fff", boxShadow: "1px 1px 2px rgba(0,0,0,0.7)", pointerEvents: "none" }} />
+                    <div style={{ ...ON_IMAGE, left: bar.barX + bar.barPx / 2, bottom: SHOWN - bar.barY + (roomy ? 4 : 2), transform: "translateX(-50%)", whiteSpace: "nowrap", fontSize: roomy ? 16 : 12, lineHeight: 1, textShadow: "1px 1px 2px rgba(0,0,0,0.7)" }}>{bar.label}</div></> : null;
                 })()}
               </div>
               {(() => {  // the strongest probe mode: complex (2, rows, cols) in complex-wave colors, hue the phase and brightness the amplitude; an intensity as its amplitude
