@@ -25,6 +25,7 @@ import { bySize, ComplexCanvas, SizeControl, type ViewSize } from "../shared/vie
 import { contrastRange, ControlsToggle, CornerInset, DEFAULT_DISPLAY, NO_ZOOM, readAt, useViewLink, ViewControls, ViewLink, ZoomFrame, type Display } from "../shared/zoomPan";
 import { appendCheckpoint, EMPTY, floatsOf, indexAt, mergeStacks, stackFromTrait, type Stack } from "./stacks";
 import { disagreement } from "./tiles";
+import { ledger, shown as shownValue, type Cell } from "./ledger";
 
 // ShowReconstruction: an iterative reconstruction's whole history in one view. The story (training and held-out
 // against total epoch, each run a band) drives every panel through one epoch stepper; the slice stepper drives the
@@ -1745,6 +1746,118 @@ function ReportView() {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// The status: every setting as it stands, and the stage that set it
+
+// ptycho.status(): the settings a person set, one row each, across the stages in the order they ran. A column is a
+// stage (its picture with the probe in the corner, its name, its held-out and what it gained); the last column is now.
+// A cell a stage changed is filled with the new value, the old one on hover; an unchanged cell repeats the value
+// faintly, so any column reads whole. A stage tried and refused is dimmed and its value struck: it never became the
+// setting. On a phone the stages run down the page, each with its changes as chips. Hover anything for the line to type.
+function StatusView() {
+  const { colors, theme } = usePalette();
+  const models = useReferenced("runs");
+  const runs = useStores(models);
+  const [title] = useModelState<string>("title");
+  const [size, setSize] = useModelState<ViewSize>("size");
+  const engineContext = useEngine(false);
+  const [root, rootWidth] = useWidth(1000);
+  const [all, setAll] = React.useState(false);  // the settings no stage changed, listed too
+  const [over, setOver] = React.useState<number | null>(null);  // the stage hovered: its column lit
+  const stages = runs.map((run, index) => {
+    const stage = run.stages[0], endEpoch = run.records.length ? run.records[run.records.length - 1].epoch : stage ? stage.start : 0;
+    const scored = recordAt(run.records, Infinity, "held_out"), imaged = recordAt(run.records, Infinity, "image_score");
+    const startScore = run.records.length && run.records[0].start ? run.records[0].held_out : null;
+    return { name: stage ? stage.name.replace(/ \(tried, refused\)$/, "") : `run ${index + 1}`, refused: !!(stage && stage.refused), changed: stage ? stageChanges(stage) : [],
+      projection: frameOf(run.projections, endEpoch), strongest: frameOf(run.strongest, endEpoch), score: scored ? Number(scored.held_out) : null,
+      delta: scored && startScore != null && scored !== run.records[0] ? Number(scored.held_out) - Number(startScore) : null, image: imaged ? Number(imaged.image_score) : null,
+      epochs: stage ? endEpoch - stage.start : 0 };
+  });
+  const newest = models.length ? (models[models.length - 1].get("settings") as { [key: string]: string } | undefined) : undefined;
+  const groups = React.useMemo(() => ledger(stages, all && newest ? newest : {}), [runs, all, newest]);
+  const moved = groups.reduce((count, group) => count + group.rows.filter((row) => row.moved).length, 0);
+  const others = newest ? Object.keys(newest).length - moved : 0;
+  const muted = { color: colors.textMuted } as React.CSSProperties;
+  const HEAD = bySize(size, 56, 84, 120);
+  const narrow = rootWidth < 150 + (stages.length + 1) * 62;  // the columns would be thinner than a number: the stages run down the page instead
+  const typed = (key: string, value: string) => `ptycho.${key.replace(/^object\./, "obj.")} = ${value === "None" ? "None" : value}`;
+  const head = (stage: (typeof stages)[number], side: number) => {
+    const mode = stage.strongest ? probeModes(stage.strongest.data, stage.strongest.shape, true)[0] : null;
+    const inset = Math.round(side * 0.34);
+    return (
+      <div style={{ position: "relative", width: side, height: side, background: "#000", flex: "none", opacity: stage.refused ? 0.5 : 1 }}>
+        {stage.projection && <ImageCanvas data={stage.projection.data} rows={stage.projection.shape[0]} cols={stage.projection.shape[1]} low={rangeOf(stage.projection.data)[0]} high={rangeOf(stage.projection.data)[1]} cmap="gray" height={side} keepAspect />}
+        {mode && <div style={{ position: "absolute", right: 0, top: 0, width: inset, height: inset, boxShadow: "0 0 0 1px #000" }}><ModeTile mode={mode} size={inset} /></div>}
+      </div>
+    );
+  };
+  const scoreLine = (stage: (typeof stages)[number]) => <>
+    {plain(stage.score, 5)}{stage.delta != null && <span style={{ color: stage.refused ? colors.textMuted : stage.delta <= 0 ? colors.good : colors.warn }}> {change(stage.delta)}</span>}
+  </>;
+  const cellText = (cell: Cell) => shownValue(cell.value);
+  const cellTitle = (key: string, cell: Cell, stage: string) => cell.changed
+    ? `${key}: ${shownValue(cell.before)} → ${shownValue(cell.value)} at "${stage}"${cell.refused ? " (tried, refused: the setting stayed)" : ""}\n${typed(key, cell.value)}`
+    : `${key}: ${shownValue(cell.value)}, as it stood at "${stage}"`;
+  return (
+    <Engine.Provider value={engineContext}>
+    <div ref={root} style={header(colors)}>
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: GAP, lineHeight: "18px", marginBottom: GAP }}>
+        <span style={{ flex: "1 1 200px", minWidth: 0 }}><b style={{ fontSize: 13 }}>Status</b><span style={muted}> · {stages.length} stages · {moved} settings changed · {title}</span></span>
+        <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: GAP }}>
+          {others > 0 && toggleButton(all, `all settings (${moved + others})`, () => setAll(!all))}
+          <SizeControl size={size} onSize={setSize} colors={colors} />
+          <InfoTooltip theme={theme} toggleOnClick text={"The settings a person set, one row each, across the stages in the order they ran; the last column is now. A filled cell is a change: the new value, the old one on hover with the line to type. A faint cell repeats the value, so any column reads whole. A dimmed stage was tried and refused: its value is struck and never became the setting. \"all settings\" lists the ones no stage changed too. Values training measures (tilt, offsets) are not settings and are not listed."} />
+        </span>
+      </div>
+      {narrow ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: HAIR }}>
+          {stages.map((stage, index) => (
+            <div key={index} style={{ display: "flex", gap: GAP, alignItems: "center", background: colors.bgAlt, opacity: stage.refused ? 0.7 : 1 }}>
+              {head(stage, HEAD)}
+              <div style={{ minWidth: 0, flex: "1 1 0" }}>
+                <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}><b>{stage.name}</b>{stage.refused && <span style={muted}> · refused</span>} <span style={{ fontSize: TEXT }}>{scoreLine(stage)}</span></div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: `${HAIR}px ${GAP}px`, fontSize: TEXT }}>
+                  {stage.changed.length === 0 && <span style={muted}>the start</span>}
+                  {stage.changed.map((item) => <span key={item.key} title={typed(item.key, item.after)} style={{ whiteSpace: "nowrap", textDecoration: stage.refused ? "line-through" : undefined }}>
+                    <span style={muted}>{item.key} {shownValue(item.before)} → </span><b>{shownValue(item.after)}</b></span>)}
+                </div>
+              </div>
+            </div>))}
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: `minmax(110px, max-content) repeat(${stages.length}, minmax(${HEAD}px, 1fr)) minmax(56px, max-content)`, columnGap: 0, rowGap: 0, fontSize: TEXT, alignItems: "stretch" }}
+          onMouseLeave={() => setOver(null)}>
+          <div />
+          {stages.map((stage, index) => (
+            <div key={index} onMouseEnter={() => setOver(index)} title={`${stage.name}${stage.refused ? ": tried and refused" : ""} · ${stage.epochs} epochs · held-out ${plain(stage.score, 5)}${stage.image != null ? ` · image score ${plain(stage.image, 3)}` : ""}\nptycho("${stage.name}") shows its view`}
+              style={{ padding: `0 1px ${HAIR}px`, minWidth: 0, background: over === index ? colors.controlBg : undefined }}>
+              {head(stage, HEAD)}
+              <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontWeight: 600, lineHeight: "14px", color: stage.refused ? colors.textMuted : colors.text }}>{stage.name}</div>
+              <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: "13px" }}>{scoreLine(stage)}</div>
+            </div>))}
+          <div style={{ alignSelf: "end", fontWeight: 600, padding: "0 4px", lineHeight: "14px" }}>now</div>
+          {groups.map((group) => (
+            <React.Fragment key={group.part}>
+              <div style={{ gridColumn: "1 / -1", borderTop: `1px solid ${colors.border}`, marginTop: HAIR, paddingTop: 1, fontWeight: 600, lineHeight: "15px" }}>{group.part}</div>
+              {group.rows.map((row) => (
+                <React.Fragment key={row.key}>
+                  <div title={`ptycho.${row.key.replace(/^object\./, "obj.")}`} style={{ paddingLeft: 8, paddingRight: 6, lineHeight: "17px", whiteSpace: "nowrap", color: row.moved ? colors.text : colors.textMuted }}>{row.name}</div>
+                  {row.cells.map((cell, index) => (
+                    <div key={index} onMouseEnter={() => setOver(index)} title={cellTitle(row.key, cell, stages[index].name)}
+                      style={{ lineHeight: "17px", padding: "0 3px", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textAlign: "right",
+                        background: cell.changed && !cell.refused ? colors.accent : over === index ? colors.controlBg : undefined,
+                        color: cell.changed && !cell.refused ? "#fff" : colors.textMuted, opacity: cell.changed ? 1 : 0.6,
+                        fontWeight: cell.changed ? 600 : 400, textDecoration: cell.refused ? "line-through" : undefined }}>{cellText(cell)}</div>))}
+                  <div style={{ lineHeight: "17px", padding: "0 4px", textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }} title={typed(row.key, row.now)}>{shownValue(row.now)}</div>
+                </React.Fragment>))}
+            </React.Fragment>))}
+        </div>
+      )}
+    </div>
+    </Engine.Provider>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // The dashboard: every run as one story
 
 function DashboardView() {
@@ -2237,7 +2350,7 @@ function Root() {
   const [kind] = useModelState<string>("kind");
   const [view] = useModelState<string>("view");
   if (kind === "direct") return <DirectView />;
-  return kind === "compare" ? <CompareReconstruction /> : view === "dashboard" ? <DashboardView /> : view === "report" ? <ReportView /> : <RunView />;
+  return kind === "compare" ? <CompareReconstruction /> : view === "dashboard" ? <DashboardView /> : view === "report" ? <ReportView /> : view === "status" ? <StatusView /> : <RunView />;
 }
 
 export default { render: createRender(Root) };

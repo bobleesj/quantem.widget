@@ -194,3 +194,18 @@ def test_a_rebuilt_bundle_does_not_reach_a_run_model_no_cell_shows():
 
     assert isinstance(ShowReconstruction._esm, str) or isinstance(ShowReconstruction().__class__._esm, str)
     assert ShowReconstruction()._esm == STUB
+
+
+def test_the_status_view_reads_each_runs_settings_and_what_its_stage_changed():
+    """view="status": the runs referenced, each with the settings it started with (text, as a person set them) and its
+    stage's changes, old against new: what the browser lays out as one row a setting, one column a run."""
+    from quantem.widget import ShowReconstruction
+
+    first, second = ShowReconstruction("run"), ShowReconstruction("run")
+    first.stage("search", {})
+    second.stage("10 modes", {"probe.modes": (8, 10)})
+    second.settings = {"probe.modes": "10", "object.slices": "27"}
+    status = ShowReconstruction("status", view="status", runs=[first, second])
+    assert status.view == "status" and len(status.runs) == 2
+    assert second.stages[0]["changed"] == [{"key": "probe.modes", "before": "8", "after": "10"}]
+    assert second.settings["object.slices"] == "27" and first.settings == {}
