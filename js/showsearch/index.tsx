@@ -328,7 +328,7 @@ function ShowSearch() {
   const thicknesses = [...new Set(geometry.map((group) => group.row.thickness_nm))].sort((a, b) => a - b);
   const focuses = [...new Set(geometry.map((group) => group.row.focus_nm))].sort((a, b) => a - b);
   const rowsCount = thicknesses.length;  // the grid holds the geometry candidates only: a thicker slab the search added is a later stage, on the stages strip
-  const TILE = size === "large" ? Math.max(96, Math.min(170, Math.floor((Math.min(500, rootWidth * 0.46) - 40) / Math.max(1, focuses.length))))  // large: the grid about 500 px, the shown panel beside it
+  const TILE = size === "large" ? Math.max(96, Math.min(150, Math.floor((Math.min(500, rootWidth * 0.46) - 40) / Math.max(1, focuses.length))))  // large: the grid about 500 px, the shown panel beside it
     : bySize(size, 56, 76, 108);
   const tile = rowsCount > 3 ? Math.round(TILE * 0.8) : TILE;  // smaller for many thicknesses, so the view keeps its height
   const besideGrid = Math.floor((rootWidth - (56 + Math.max(1, focuses.length) * tile) - 44) / 2.5);  // what "shown" may be for the grid and it to share one row

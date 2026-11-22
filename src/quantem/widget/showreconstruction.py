@@ -91,7 +91,7 @@ class ShowReconstruction(anywidget.AnyWidget):
     >>> ShowReconstruction(view="dashboard", runs=[run])
     """
 
-    _esm = pathlib.Path(__file__).parent / "static" / "showreconstruction.js"
+    _esm = BUNDLE.read_text()  # the code as text, not a watched file: anywidget's live reload would put the whole bundle back into every run model when a builder rebuilds
 
     view = traitlets.Unicode("run").tag(sync=True)  # "run": one run's model; "dashboard": the runs referenced
     runs = traitlets.List(traitlets.Instance(ipywidgets.Widget)).tag(sync=True, **ipywidgets.widget_serialization)
@@ -128,6 +128,7 @@ class ShowReconstruction(anywidget.AnyWidget):
     aperture_shapes = traitlets.List(traitlets.List(traitlets.Int())).tag(sync=True)
     aperture_epochs = traitlets.List(traitlets.Int()).tag(sync=True)
     size = traitlets.Unicode("medium").tag(sync=True)  # "small", "medium" or "large": how big the view draws; the browser's S M L writes it back
+    tiles = traitlets.Unicode("all").tag(sync=True)  # the report's tiles: "image" (the projected phase, the probe a corner inset), "fft" (with its spectrum) or "all" (with the probe too); the browser's buttons write it back
     phase_range = traitlets.List(traitlets.Float(), default_value=[0.0, 1.0]).tag(sync=True)  # one linear range, every slice
     profile_line = traitlets.List(traitlets.Float(), default_value=[]).tag(sync=True)  # row0, col0, row1, col1 in pixels; the browser writes a dragged line back
     profile_line_given = traitlets.List(traitlets.Float(), default_value=[]).tag(sync=True)  # the line Python gave: what "reset line" restores
@@ -403,7 +404,7 @@ class CompareReconstruction(anywidget.AnyWidget):
     ...                        {"name": "10 modes", "source": run_model, "slice_A": 9.6, "pixel_A": 0.178}])
     """
 
-    _esm = pathlib.Path(__file__).parent / "static" / "showreconstruction.js"
+    _esm = BUNDLE.read_text()  # the code as text, not a watched file: anywidget's live reload would put the whole bundle back into every run model when a builder rebuilds
 
     kind = traitlets.Unicode("compare").tag(sync=True)  # which view the shared bundle draws
     title = traitlets.Unicode("").tag(sync=True)
@@ -514,7 +515,7 @@ class ShowDirect(anywidget.AnyWidget):
         (square_region); the browser writes it to region, which a caller observes.
     """
 
-    _esm = BUNDLE
+    _esm = BUNDLE.read_text()
 
     kind = traitlets.Unicode("direct").tag(sync=True)
     title = traitlets.Unicode("").tag(sync=True)

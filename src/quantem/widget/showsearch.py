@@ -34,6 +34,20 @@ def _plain(value, digits=5) -> str:
     return "-" if value is None else f"{value:.{digits}f}"
 
 
+TILE_PX = 150  # the largest a candidate's grid tile is drawn (at large): what a saved notebook keeps of a candidate not shown large
+
+
+def tile_size(image) -> np.ndarray:
+    """An image binned by block means to at most TILE_PX a side, the factor the same on both axes (true proportions):
+    a display copy of a candidate's projection for the saved notebook."""
+    factor = max(1, -(-max(image.shape[-2:]) // TILE_PX))
+    if factor == 1:
+        return image
+    rows, cols = (image.shape[-2] // factor) * factor, (image.shape[-1] // factor) * factor
+    binned = image[..., :rows, :cols].reshape(*image.shape[:-2], rows // factor, factor, cols // factor, factor).mean(axis=(-3, -1))
+    return np.ascontiguousarray(binned, dtype=np.float32)
+
+
 class ShowSearch(anywidget.AnyWidget):
     """A search's candidates, their convergence and the chosen one's pictures, live and saved.
 
@@ -56,7 +70,7 @@ class ShowSearch(anywidget.AnyWidget):
     >>> view.land("pass1-000", 0.20240, projection=phase, probe=intensity, section=cut)
     """
 
-    _esm = pathlib.Path(__file__).parent / "static" / "showsearch.js"
+    _esm = (pathlib.Path(__file__).parent / "static" / "showsearch.js").read_text()  # text, not a watched file: a rebuild never reaches a running kernel's saved state
 
     title = traitlets.Unicode("").tag(sync=True)
     pixel_size_A = traitlets.Float(1.0).tag(sync=True)
@@ -86,13 +100,27 @@ class ShowSearch(anywidget.AnyWidget):
             self.flush()
 
     def flush(self):
-        """Write the arrays and curves into the synced traits: what a saved notebook and a newly opened view read."""
-        entries = list(self._arrays.items())
+        """Write the arrays and curves into the synced traits: what a saved notebook and a newly opened view read. The
+        saved state keeps every picture whole only for what the view shows large: the best, each pass's pick and the
+        finishing stages; every other candidate keeps its projection at the size its grid tile is drawn at most (block
+        means, TILE_PX) and no probe or depth cut, as the view's "i" says. The kernel keeps every array whole."""
+        entries = self._saved()
         with self.hold_sync():
             self.images = b"".join(array.tobytes() for _, array in entries)
             self.image_index = [{"name": name, "kind": kind, "shape": list(array.shape)} for (name, kind), array in entries]
             self.curves = {name: list(points) for name, points in self._curves.items()}
         self._changed = False
+
+    def _saved(self):
+        """((name, kind), array) the saved state holds, under flush's rule."""
+        large = {self.best, *(pick["name"] for pick in self.picks)}
+        out = []
+        for (name, kind), array in self._arrays.items():
+            if name in large or name.startswith("stage:"):
+                out.append(((name, kind), array))
+            elif kind == "projection":
+                out.append(((name, kind), tile_size(array)))
+        return out
 
     def _row(self, name):
         return next((index for index, row in enumerate(self.candidates) if row["name"] == name), None)

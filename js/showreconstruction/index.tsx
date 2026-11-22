@@ -375,7 +375,29 @@ function Fill({ grow = 1, min, children }: { grow?: number; min: number; childre
 // a power of two of at least 256 (padding past the box only interpolates, so a small box still reads smoothly),
 // log10 of |F|^2, centred and cropped to ±2.6 1/Å; the ring marks 50 pm (2 1/Å). Each request waits for the next
 // animation frame and is dropped when a newer one arrives, so a region drag stays live.
-type Spectrum = { image: Float32Array; size: number; low: number; high: number; ringPx: number; edgeQ: number };
+type Spectrum = { image: Float32Array; size: number; low: number; high: number; ringPx: number; edgeQ: number;
+  spotPm: number | null; spotPx: number };  // the finest lattice spot: its spacing in pm and its radius in spectrum pixels (finestSpot)
+
+// The finest lattice spot of a log10 power spectrum (size × size, centred, dq 1/Å a pixel): the largest radius whose
+// ring holds a pixel clearly over the ring's median, from 4 Å inward. "Clearly" is measured on the spectrum itself:
+// in the outermost fifth of the radii (no lattice there on real data) a ring's peak stands about 1.7 decades over its
+// median (window tails and noise), so a spot must stand 0.7 decade (5 ×) over that level, and at least 2 decades.
+// With a fixed 2 decades the read jumped from 58 to 39 pm between two nearly equal pictures (21 Nov 2026): the floor
+// itself reached 2. It reads how far the lattice's information reaches, in the picture's own unit; a read of the
+// picture, not a resolution, and near the floor it moves by one lattice spot between like pictures.
+function finestSpot(image: Float32Array, size: number, dq: number): { pm: number | null; px: number } {
+  const half = size / 2, rings: number[][] = Array.from({ length: Math.floor(half) }, () => []);
+  for (let r = 0; r < size; r++) for (let c = 0; c < size; c++) {
+    const radius = Math.round(Math.hypot(r - half, c - half));
+    if (radius < rings.length) rings[radius].push(image[r * size + c]);
+  }
+  const contrast = rings.map((ring) => { if (ring.length < 8) return 0; const sorted = Float32Array.from(ring).sort(); return sorted[sorted.length - 1] - sorted[sorted.length >> 1]; });
+  const outer = contrast.slice(Math.floor(0.8 * contrast.length)).sort((a, b) => a - b);
+  const needed = Math.max(2, (outer.length ? outer[outer.length >> 1] : 0) + 0.7);
+  for (let radius = Math.floor(0.8 * contrast.length) - 1; radius * dq >= 0.25; radius--) if (contrast[radius] >= needed) return { pm: 100 / (radius * dq), px: radius };
+  return { pm: null, px: 0 };
+}
+
 function useSpectrum(data: Float32Array, rows: number, cols: number, region: { row: number; col: number; size: number } | null, pixelA: number): Spectrum | null {
   const [spectrum, setSpectrum] = React.useState<Spectrum | null>(null);
   const fft = React.useRef<DisplayFFT | null>(null);
@@ -406,7 +428,9 @@ function useSpectrum(data: Float32Array, rows: number, cols: number, region: { r
         image[r * size + c] = Math.log10(out.real[index] ** 2 + out.imag[index] ** 2 + 1e-12);
       }
       const sorted = Float32Array.from(image).sort();
-      setSpectrum({ image, size, low: sorted[Math.floor(0.5 * sorted.length)], high: sorted[Math.floor(0.9995 * (sorted.length - 1))], ringPx: 2 / dq <= half ? 2 / dq : 0, edgeQ: half * dq });
+      const spot = finestSpot(image, size, dq);
+      setSpectrum({ image, size, low: sorted[Math.floor(0.5 * sorted.length)], high: sorted[Math.floor(0.9995 * (sorted.length - 1))], ringPx: 2 / dq <= half ? 2 / dq : 0, edgeQ: half * dq,
+        spotPm: spot.pm, spotPx: spot.px });
     })().catch((error) => console.error("[ShowReconstruction] spectrum failed", error));
   }, [data, rows, cols, region, pixelA]);
   return spectrum;
@@ -543,6 +567,19 @@ function FieldView({ data, rows, cols, low, high, pixelA, height, line, editLine
   );
 }
 
+// What every spectrum carries: the dashed ring at 50 pm, and a thin ring through its finest lattice spot.
+function spectrumRings(spectrum: Spectrum) {
+  const centre = spectrum.size / 2;
+  return <>
+    {spectrum.ringPx > 0 && <circle cx={centre} cy={centre} r={spectrum.ringPx} fill="none" stroke="#fff" opacity={0.7} strokeDasharray="4 3" strokeWidth={1} vectorEffect="non-scaling-stroke" />}
+    {spectrum.spotPx > 0 && <circle cx={centre} cy={centre} r={spectrum.spotPx} fill="none" stroke="#7ddc8a" opacity={0.8} strokeWidth={1} vectorEffect="non-scaling-stroke" />}
+  </>;
+}
+const SPOT_WHY = "finest spot: the smallest spacing whose lattice spot stands clearly (5 ×) over the spectrum's own outer floor (the thin green ring); smaller is finer. A read of the picture, not a resolution; like pictures can differ by one spot.";
+function spotText(spectrum: Spectrum | null): string {
+  return spectrum && spectrum.spotPm != null ? `spots to ${Math.round(spectrum.spotPm)} pm` : "";
+}
+
 // The spectrum inside its image: an inset in the bottom-right corner, dragged anywhere on the image, its side a percent
 // of the image's set in "controls" (FFT size; 0 hides it). A separate panel beside every image cost a column of width.
 function SpectrumInset({ spectrum, side, label, range }: { spectrum: Spectrum | null; side: number; label?: string; range?: number[] | null }) {
@@ -550,10 +587,10 @@ function SpectrumInset({ spectrum, side, label, range }: { spectrum: Spectrum | 
   const size = Math.round(side * (link ? link.display.fft : DEFAULT_DISPLAY.fft) / 100);
   if (!spectrum || size < 24) return null;
   return (
-    <CornerInset size={size} title={`spectrum${label ? ` of the ${label}` : ""}: Hann-windowed power, log scale, the dashed ring at 50 pm. Drag to move, double-click to send back; its size is "FFT size" in controls.`}>
+    <CornerInset size={size} title={`spectrum${label ? ` of the ${label}` : ""}: Hann-windowed power, log scale, the dashed ring at 50 pm${spotText(spectrum) ? `; ${spotText(spectrum)} (${SPOT_WHY})` : ""}. Drag to move, double-click to send back; its size is "FFT size" in controls.`}>
       <ImageCanvas data={spectrum.image} rows={spectrum.size} cols={spectrum.size} low={range ? range[0] : spectrum.low} high={range ? range[1] : spectrum.high} cmap="gray" height={size} keepAspect
-        overlay={spectrum.ringPx > 0 ? <circle cx={spectrum.size / 2} cy={spectrum.size / 2} r={spectrum.ringPx} fill="none" stroke="#fff" opacity={0.7} strokeDasharray="4 3" strokeWidth={1} vectorEffect="non-scaling-stroke" /> : null} />
-      {size >= 90 && <div style={{ ...ON_IMAGE, left: 3, bottom: 1 }}>50 pm ring</div>}
+        overlay={spectrumRings(spectrum)} />
+      {size >= 90 && <div style={{ ...ON_IMAGE, left: 3, bottom: 1 }}>{spotText(spectrum) || "50 pm ring"}</div>}
     </CornerInset>
   );
 }
@@ -1530,8 +1567,10 @@ function evenRows(count: number, most: number): number {
   return Math.max(1, Math.ceil(count / Math.ceil(count / Math.max(1, most))));
 }
 
-function StageTiles({ runs, size, inset = false, fft = false, perRow: fixed, shown, onLook, onPick, colors }: {
-  runs: RunData[]; size: number; inset?: boolean; fft?: boolean; perRow?: number; shown?: Stage | null; onLook?: (epoch: number | null) => void; onPick?: (epoch: number) => void; colors: any;
+function StageTiles({ runs, size, inset = false, fft = false, probeCorner = false, perRow: fixed, shown, onLook, onPick, colors }: {
+  runs: RunData[]; size: number; inset?: boolean; fft?: boolean; perRow?: number;
+  shown?: Stage | null; onLook?: (epoch: number | null) => void; onPick?: (epoch: number) => void; colors: any;
+  probeCorner?: boolean;  // the probe stays a small inset in the projection's corner while the spectrum keeps its own picture
 }) {
   const [row, rowWidth] = useWidth(1000);
   const ends: TileEnd[] = runs.map((run, index) => {
@@ -1544,7 +1583,7 @@ function StageTiles({ runs, size, inset = false, fft = false, perRow: fixed, sho
   const startScores = runs.map((run) => (run.records.length && run.records[0].start ? run.records[0].held_out : null));
   const best = ends.reduce((found: number, end, index) => (!end.refused && end.score != null && (found < 0 || end.score < ends[found].score!) ? index : found), -1);
   inset = inset || (!fixed && rowWidth < 520);  // a phone: the probe in the projection's corner, so several stages fit a row
-  const across = inset ? 1 : fft ? 3 : 2;  // images a tile is wide
+  const across = inset ? 1 : (fft ? 2 : 1) + (probeCorner ? 0 : 1);  // images a tile is wide
   const most = Math.max(1, Math.min(ends.length, Math.floor(rowWidth / (across * size))));  // the stages a row can hold at this size
   const perRow = fixed || evenRows(ends.length, most);
   const image = Math.min(fixed ? Infinity : Math.round(size * 2), Math.floor(rowWidth / perRow / across));  // the images grow to fill the row, a short row only so far
@@ -1555,7 +1594,7 @@ function StageTiles({ runs, size, inset = false, fft = false, perRow: fixed, sho
         const previous = end.refused || !before ? startScores[index] : before.score;
         const delta = end.score != null && previous != null ? end.score - previous : null;
         const scoreDelta = end.imageScore != null && before && before.imageScore != null ? end.imageScore - before.imageScore : null;
-        return <StageTile key={index} end={end} image={image} across={across} inset={inset} fft={fft} best={index === best} delta={delta} scoreDelta={scoreDelta}
+        return <StageTile key={index} end={end} image={image} across={across} inset={inset} fft={fft} probeCorner={probeCorner} best={index === best} delta={delta} scoreDelta={scoreDelta}
           against={end.refused || !before ? "its start" : "the run before"} chosen={!!shown && shown.name === end.name && shown.start === end.start}
           onLook={onLook} onPick={onPick} colors={colors} />;
       })}
@@ -1563,8 +1602,8 @@ function StageTiles({ runs, size, inset = false, fft = false, perRow: fixed, sho
   );
 }
 
-function StageTile({ end, image, across, inset, fft, best, delta, scoreDelta, against, chosen, onLook, onPick, colors }: {
-  end: TileEnd; image: number; across: number; inset: boolean; fft: boolean; best: boolean; delta: number | null; scoreDelta: number | null; against: string; chosen: boolean;
+function StageTile({ end, image, across, inset, fft, probeCorner, best, delta, scoreDelta, against, chosen, onLook, onPick, colors }: {
+  end: TileEnd; image: number; across: number; inset: boolean; fft: boolean; probeCorner?: boolean; best: boolean; delta: number | null; scoreDelta: number | null; against: string; chosen: boolean;
   onLook?: (epoch: number | null) => void; onPick?: (epoch: number) => void; colors: any;
 }) {
   const range = React.useMemo(() => (end.projection ? rangeOf(end.projection.data) : [0, 1]), [end.projection?.data]);
@@ -1581,17 +1620,18 @@ function StageTile({ end, image, across, inset, fft, best, delta, scoreDelta, ag
   const badge = (style: React.CSSProperties, text: React.ReactNode) => <div style={{ ...ON_IMAGE, ...PLATE, fontSize: font, lineHeight: "13px", ...style }}>{text}</div>;
   const small = Math.round(image * 0.36);
   const spectrumImage = (side: number) => spectrum && <ImageCanvas data={spectrum.image} rows={spectrum.size} cols={spectrum.size} low={spectrum.low} high={spectrum.high} cmap="gray" height={side} keepAspect
-    overlay={spectrum.ringPx > 0 ? <circle cx={spectrum.size / 2} cy={spectrum.size / 2} r={spectrum.ringPx} fill="none" stroke="#fff" opacity={0.7} strokeDasharray="4 3" strokeWidth={1} vectorEffect="non-scaling-stroke" /> : null} />;
+    overlay={spectrumRings(spectrum)} />;
   return (
     <div title={why} onMouseEnter={end.refused || !onLook ? undefined : () => onLook(end.endEpoch)} onClick={end.refused || !onPick ? undefined : () => onPick(end.endEpoch)}
       style={{ position: "relative", display: "flex", width: across * image, height: image, cursor: end.refused || !onPick ? "default" : "pointer", background: "#000", opacity: end.refused ? 0.5 : 1 }}>
       <div style={{ position: "relative", width: image, height: image, flex: "none" }}>
         {end.projection && <ImageCanvas data={end.projection.data} rows={rows} cols={cols} low={range[0]} high={range[1]} cmap="gray" height={image} keepAspect />}
         {inset && fft && spectrum && <div style={{ position: "absolute", left: 0, top: 16, width: small, height: small, boxShadow: "0 0 0 1px #000" }}>{spectrumImage(small)}</div>}
-        {inset && strongest && <div style={{ position: "absolute", right: 0, top: 16, width: small, height: small, boxShadow: "0 0 0 1px #000" }}><ModeTile mode={strongest} size={small} /></div>}
+        {(inset || probeCorner) && strongest && <div style={{ position: "absolute", right: 0, top: 16, width: small, height: small, boxShadow: "0 0 0 1px #000" }}><ModeTile mode={strongest} size={small} /></div>}
       </div>
-      {!inset && fft && <div style={{ position: "relative", width: image, height: image, flex: "none" }}>{spectrumImage(image)}</div>}
-      {!inset && strongest && <ModeTile mode={strongest} size={image} />}
+      {!inset && fft && <div style={{ position: "relative", width: image, height: image, flex: "none" }} title={SPOT_WHY}>{spectrumImage(image)}
+        {spotText(spectrum) && badge({ left: 2, bottom: 2 }, spotText(spectrum))}</div>}
+      {!inset && !probeCorner && strongest && <ModeTile mode={strongest} size={image} />}
       {badge({ left: 2, top: 2, maxWidth: across * image - 44, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, end.name)}
       {badge({ right: 2, top: 2, fontSize: image >= 110 ? 13 : 11 }, <><span style={{ color: tone }}>{mark}</span>{differ && <span style={{ color: "#f2b04e" }} title={differ}> ≠</span>}</>)}
       {badge({ left: 2, bottom: 2 }, <>{plain(end.score, delta != null && end.score != null ? pairDigits(end.score, end.score - delta) : 5)}{delta != null && <span style={{ color: end.refused ? "#ccc" : delta <= 0 ? "#7ddc8a" : "#f2b04e" }}> {change(delta)}</span>}</>)}
@@ -1608,18 +1648,26 @@ function ReportView() {
   const [title] = useModelState<string>("title");
   const [size, setSize] = useModelState<ViewSize>("size");
   const engineContext = useEngine(false);
-  const [reportBox, reportWidth] = useWidth(1000);
+  const [tiles, setTiles] = useModelState<string>("tiles");
+  const holds = tiles === "image" || tiles === "fft" ? tiles : "all";  // what each tile holds: the picture alone, the picture and its spectrum, or both and the probe
   return (
     <Engine.Provider value={engineContext}>
-    <div ref={reportBox} style={header(colors)}>
+    <div style={header(colors)}>
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: GAP, lineHeight: "18px", marginBottom: GAP }}>
         <span style={{ flex: "1 1 200px", minWidth: 0 }}><b style={{ fontSize: 13 }}>What each stage bought</b><span style={{ color: colors.textMuted }}> · {title}</span></span>
         <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: GAP }}>
+          <span style={{ display: "inline-flex", border: `1px solid ${colors.border}`, borderRadius: 3, overflow: "hidden", flex: "none" }} role="group" aria-label="What each tile holds">
+            {([["image", "Image", "the projected phase, the probe a small inset in its corner"], ["fft", "Image + FFT", "the projected phase and its spectrum, the probe a small inset"],
+              ["all", "All", "the projected phase, its spectrum and the strongest probe mode"]] as const).map(([key, text, why]) => (
+              <button key={key} type="button" aria-pressed={holds === key} title={why} onClick={() => setTiles(key)}
+                style={{ border: "none", padding: "0 6px", font: "inherit", fontSize: 10, lineHeight: "16px", cursor: "pointer", whiteSpace: "nowrap",
+                  background: holds === key ? colors.accent : "transparent", color: holds === key ? "#fff" : colors.textMuted }}>{text}</button>))}
+          </span>
           <RenderPathBadge colors={colors} /><SizeControl size={size} onSize={setSize} colors={colors} />
           <InfoTooltip theme={theme} toggleOnClick text={"One tile a run, in the order they ran: its projected phase and strongest probe mode at its end (hue the phase, brightness the amplitude; at small the probe sits in the projection's corner). Top-left its name; bottom-left its held-out score (lower is better) and the change against the run it continued from (▼ better, ▲ worse); above it its image score (repetition × detail of the projected phase, higher is better) and its change; top-right ★ the best kept run, ✓ kept, ▲ worse than its start, ✕ tried and refused (dimmed), and ≠ when held-out and image score move in opposite directions. Each tile: the projected phase, its spectrum (the dashed ring at 50 pm), the strongest probe mode. Hover a tile for its numbers and settings. ptycho(\"name\") shows a run's view; ptycho.report(table=True) gives the numbers."} />
         </span>
       </div>
-      <StageTiles runs={runs} size={110} inset={size === "small"} fft perRow={size === "small" ? undefined : evenRows(runs.length, size === "large" ? (reportWidth >= 1000 ? 2 : 1) : reportWidth >= 1000 ? 4 : 2)} colors={colors} />
+      <StageTiles runs={runs} size={bySize(size, 110, 170, 280)} inset={holds === "image"} fft={holds !== "image"} probeCorner={holds === "fft"} colors={colors} />
     </div>
     </Engine.Provider>
   );
