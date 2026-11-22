@@ -1219,6 +1219,10 @@ function RunView() {
   const nowScore = now && !(now.start && scored.length > 1 && now.epoch < epoch) ? now.held_out : null;
   const delta = startScore != null && nowScore != null && now !== records[0] ? nowScore - startScore : null;
   const atEpoch = recordAt(records, epoch, "r99_A") || ({} as Record);
+  const imageStart = records.length && records[0].start && records[0].image_score != null ? Number(records[0].image_score) : null;  // held-out says the patterns fit; the image score says the picture got better
+  const imageRecord = recordAt(records, epoch, "image_score");
+  const imageNow = imageRecord && !(imageRecord.start && imageRecord.epoch < epoch) ? Number(imageRecord.image_score) : null;
+  const imageDelta = imageStart != null && imageNow != null && imageRecord !== records[0] ? imageNow - imageStart : null;
   const finalDelta = startScore != null && scored.length && scored[scored.length - 1] !== records[0] ? scored[scored.length - 1].held_out - startScore : null;
   const verdict = stage && stage.refused ? "refused" : finalDelta == null ? "" : finalDelta > 0 ? "worse than its start" : "kept";  // what became of the run, in plain words
   const muted = { color: colors.textMuted } as React.CSSProperties;
@@ -1318,6 +1322,8 @@ function RunView() {
           <span style={{ fontWeight: 400, ...muted }}> ({epoch} of {start + runEpochs})</span></span>
         {data.status.seconds_per_epoch != null && data.status.left_s > 0.5 && <span style={{ ...muted, whiteSpace: "nowrap" }}>{plain(data.status.seconds_per_epoch, 1)} s/epoch{data.status.left_s > 0.5 ? ` · ${seconds(data.status.left_s)} left` : ""}</span>}
         <span style={{ whiteSpace: "nowrap" }}>held-out {plain(startScore, pairDigits(startScore, nowScore))} → <b>{plain(nowScore, pairDigits(startScore, nowScore))}</b>{delta != null && <span style={{ color: delta <= 0 ? colors.good : colors.warn }}> {change(delta)}</span>}</span>
+        {imageNow != null && <span style={{ whiteSpace: "nowrap" }} title="image score: repetition × detail of the projected phase over the field's central 80 %, higher is better">image {imageStart != null && imageDelta != null ? <>{plain(imageStart, 3)} → </> : null}<b>{plain(imageNow, 3)}</b>
+          {imageDelta != null && Math.abs(imageDelta) >= 0.0005 && <span style={{ color: imageDelta >= 0 ? colors.good : colors.warn }}> {imageDelta >= 0 ? "▲" : "▼"}{Math.abs(imageDelta).toFixed(3)}</span>}</span>}
         <Health label="probe radius" name="r99_A" value={atEpoch.r99_A} unit=" Å" bar={data.bars?.r99_A} colors={colors} digits={1} />
         <Health label="probe copies" name="copies_percent" value={atEpoch.copies_percent} unit=" %" bar={data.bars?.copies_percent} colors={colors} digits={1} />
         {changesText && <span title={changesText} style={{ ...muted, flex: "1 1 120px", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{changesText}</span>}
@@ -1581,7 +1587,6 @@ function StageTile({ end, image, across, inset, fft, best, delta, scoreDelta, ag
       style={{ position: "relative", display: "flex", width: across * image, height: image, cursor: end.refused || !onPick ? "default" : "pointer", background: "#000", opacity: end.refused ? 0.5 : 1 }}>
       <div style={{ position: "relative", width: image, height: image, flex: "none" }}>
         {end.projection && <ImageCanvas data={end.projection.data} rows={rows} cols={cols} low={range[0]} high={range[1]} cmap="gray" height={image} keepAspect />}
-        {end.imageScore != null && (fft || image >= 150) && badge({ left: 2, bottom: 17 }, <>score {plain(end.imageScore, 3)}{scoreDelta != null && <span style={{ color: end.refused ? "#ccc" : scoreDelta >= 0 ? "#7ddc8a" : "#f2b04e" }}> {scoreDelta >= 0 ? "▲" : "▼"}{plain(Math.abs(scoreDelta), 3)}</span>}</>)}
         {inset && fft && spectrum && <div style={{ position: "absolute", left: 0, top: 16, width: small, height: small, boxShadow: "0 0 0 1px #000" }}>{spectrumImage(small)}</div>}
         {inset && strongest && <div style={{ position: "absolute", right: 0, top: 16, width: small, height: small, boxShadow: "0 0 0 1px #000" }}><ModeTile mode={strongest} size={small} /></div>}
       </div>
@@ -1590,6 +1595,7 @@ function StageTile({ end, image, across, inset, fft, best, delta, scoreDelta, ag
       {badge({ left: 2, top: 2, maxWidth: across * image - 44, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, end.name)}
       {badge({ right: 2, top: 2, fontSize: image >= 110 ? 13 : 11 }, <><span style={{ color: tone }}>{mark}</span>{differ && <span style={{ color: "#f2b04e" }} title={differ}> ≠</span>}</>)}
       {badge({ left: 2, bottom: 2 }, <>{plain(end.score, delta != null && end.score != null ? pairDigits(end.score, end.score - delta) : 5)}{delta != null && <span style={{ color: end.refused ? "#ccc" : delta <= 0 ? "#7ddc8a" : "#f2b04e" }}> {change(delta)}</span>}</>)}
+      {end.imageScore != null && badge({ right: 2, bottom: 2 }, <><span style={{ opacity: 0.75 }}>image </span>{plain(end.imageScore, 3)}{scoreDelta != null && Math.abs(scoreDelta) >= 0.0005 && <span style={{ color: end.refused ? "#ccc" : scoreDelta >= 0 ? "#7ddc8a" : "#f2b04e" }}> {scoreDelta >= 0 ? "▲" : "▼"}{Math.abs(scoreDelta).toFixed(3)}</span>}</>)}
       {chosen && !end.refused && <div style={{ position: "absolute", inset: 0, border: `2px solid ${colors.accent}`, pointerEvents: "none" }} />}
     </div>
   );
@@ -1713,6 +1719,7 @@ function DashboardView() {
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: `0 ${3 * GAP}px`, lineHeight: "18px", marginBottom: GAP }}>
         <span style={{ fontWeight: 600, fontSize: 13, overflowWrap: "anywhere" }} title={[data.status.seconds_per_epoch != null ? `${plain(data.status.seconds_per_epoch, 1)} s an epoch` : "", data.status.gpu_GB != null ? `GPU memory ${plain(data.status.gpu_GB, 1)} GB at most` : ""].filter(Boolean).join(" · ")}>{title} · {viewsText} · {stageNow ? `"${stageNow.name}"` : "no run yet"} · epoch {epoch}/{last.epoch}</span>
         <Health label={heldOutLabel} value={atEpoch.held_out} unit="" colors={colors} digits={5} />
+        <Health label="image score" value={(recordAt(history, epoch, "image_score") || ({} as Record)).image_score} unit="" colors={colors} digits={3} />
         <Health label="probe radius" name="r99_A" value={health.r99_A} unit=" Å" bar={data.bars?.r99_A} colors={colors} digits={1} />
         <Health label="probe copies" name="copies_percent" value={health.copies_percent} unit=" %" bar={data.bars?.copies_percent} colors={colors} digits={1} />
         {Array.isArray(atEpoch.tilt_mrad) && <span style={{ ...muted, whiteSpace: "nowrap" }}>tilt {atEpoch.tilt_mrad.map((pair: number[]) => `${plain(pair[0], 2)}, ${plain(pair[1], 2)}`).join(" · ")} mrad{referenceText ? ` (${referenceText})` : ""}</span>}
