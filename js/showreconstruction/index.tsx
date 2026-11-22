@@ -25,7 +25,7 @@ import { bySize, ComplexCanvas, SizeControl, type ViewSize } from "../shared/vie
 import { contrastRange, ControlsToggle, CornerInset, DEFAULT_DISPLAY, NO_ZOOM, readAt, useViewLink, ViewControls, ViewLink, ZoomFrame, type Display } from "../shared/zoomPan";
 import { appendCheckpoint, EMPTY, floatsOf, indexAt, mergeStacks, stackFromTrait, type Stack } from "./stacks";
 import { disagreement } from "./tiles";
-import { ledger, shown as shownValue, type Cell } from "./ledger";
+import { ledger, segments, shown as shownValue } from "./ledger";
 
 // ShowReconstruction: an iterative reconstruction's whole history in one view. The story (training and held-out
 // against total epoch, each run a band) drives every panel through one epoch stepper; the slice stepper drives the
@@ -1748,11 +1748,20 @@ function ReportView() {
 // ---------------------------------------------------------------------------------------------------------------
 // The status: every setting as it stands, and the stage that set it
 
-// ptycho.status(): the settings a person set, one row each, across the stages in the order they ran. A column is a
-// stage (its picture with the probe in the corner, its name, its held-out and what it gained); the last column is now.
-// A cell a stage changed is filled with the new value, the old one on hover; an unchanged cell repeats the value
-// faintly, so any column reads whole. A stage tried and refused is dimmed and its value struck: it never became the
-// setting. On a phone the stages run down the page, each with its changes as chips. Hover anything for the line to type.
+// ptycho.status(): the run as a chart of what was set when. Columns are the stages in the order they ran. On top, three
+// rows of pictures, each its own and touching its neighbours as a series does: the projection, its spectrum, the
+// strongest probe mode; hovering one draws it large. Under them one row a setting: a bar from the stage that set a value
+// to the stage before the next change, the value written once on the bar (a setting that is off draws no bar), so the
+// chart is mostly ink that changed. A stage tried and refused is dimmed and its attempt a struck chip on the bar it did
+// not replace. The last column is now. On a phone the stages run down the page. Hover anything for the line to type.
+function StageSpectrum({ projection, pixelA, side }: { projection: { data: Float32Array; shape: number[] } | null; pixelA: number; side: number }) {
+  const spectrum = useSpectrum(projection ? projection.data : EMPTY_FRAME, projection ? projection.shape[0] : 0, projection ? projection.shape[1] : 0, null, pixelA);
+  return <div style={{ width: side, height: side, background: "#000", position: "relative" }}>
+    {spectrum && <ImageCanvas data={spectrum.image} rows={spectrum.size} cols={spectrum.size} low={spectrum.low} high={spectrum.high} cmap="gray" height={side} keepAspect overlay={spectrumRings(spectrum)} />}
+    {side >= 150 && spotText(spectrum) && <div style={{ ...ON_IMAGE, ...PLATE, left: 2, bottom: 2 }}>{spotText(spectrum)}</div>}
+  </div>;
+}
+
 function StatusView() {
   const { colors, theme } = usePalette();
   const models = useReferenced("runs");
@@ -1763,12 +1772,13 @@ function StatusView() {
   const [root, rootWidth] = useWidth(1000);
   const [all, setAll] = React.useState(false);  // the settings no stage changed, listed too
   const [over, setOver] = React.useState<number | null>(null);  // the stage hovered: its column lit
+  const [large, setLarge] = React.useState<{ stage: number; kind: "projection" | "spectrum" | "probe" } | null>(null);  // the picture hovered: drawn large
   const stages = runs.map((run, index) => {
     const stage = run.stages[0], endEpoch = run.records.length ? run.records[run.records.length - 1].epoch : stage ? stage.start : 0;
     const scored = recordAt(run.records, Infinity, "held_out"), imaged = recordAt(run.records, Infinity, "image_score");
     const startScore = run.records.length && run.records[0].start ? run.records[0].held_out : null;
     return { name: stage ? stage.name.replace(/ \(tried, refused\)$/, "") : `run ${index + 1}`, refused: !!(stage && stage.refused), changed: stage ? stageChanges(stage) : [],
-      projection: frameOf(run.projections, endEpoch), strongest: frameOf(run.strongest, endEpoch), score: scored ? Number(scored.held_out) : null,
+      projection: frameOf(run.projections, endEpoch), strongest: frameOf(run.strongest, endEpoch), pixelA: run.pixelA, score: scored ? Number(scored.held_out) : null,
       delta: scored && startScore != null && scored !== run.records[0] ? Number(scored.held_out) - Number(startScore) : null, image: imaged ? Number(imaged.image_score) : null,
       epochs: stage ? endEpoch - stage.start : 0 };
   });
@@ -1777,81 +1787,98 @@ function StatusView() {
   const moved = groups.reduce((count, group) => count + group.rows.filter((row) => row.moved).length, 0);
   const others = newest ? Object.keys(newest).length - moved : 0;
   const muted = { color: colors.textMuted } as React.CSSProperties;
-  const HEAD = bySize(size, 56, 84, 120);
-  const narrow = rootWidth < 150 + (stages.length + 1) * 62;  // the columns would be thinner than a number: the stages run down the page instead
+  const count = Math.max(1, stages.length);
+  const LABEL = 118, NOW = 64;  // the settings' names, and the last column
+  const side = Math.max(40, Math.min(bySize(size, 64, 132, 220), Math.floor((rootWidth - LABEL - NOW - 10) / count)));  // a picture, and a stage's column: as wide as the view allows up to the size asked
+  const narrow = (rootWidth - LABEL - NOW - 10) / count < 56;  // a column thinner than a number: the stages run down the page instead
   const typed = (key: string, value: string) => `ptycho.${key.replace(/^object\./, "obj.")} = ${value === "None" ? "None" : value}`;
-  const head = (stage: (typeof stages)[number], side: number) => {
-    const mode = stage.strongest ? probeModes(stage.strongest.data, stage.strongest.shape, true)[0] : null;
-    const inset = Math.round(side * 0.34);
-    return (
-      <div style={{ position: "relative", width: side, height: side, background: "#000", flex: "none", opacity: stage.refused ? 0.5 : 1 }}>
-        {stage.projection && <ImageCanvas data={stage.projection.data} rows={stage.projection.shape[0]} cols={stage.projection.shape[1]} low={rangeOf(stage.projection.data)[0]} high={rangeOf(stage.projection.data)[1]} cmap="gray" height={side} keepAspect />}
-        {mode && <div style={{ position: "absolute", right: 0, top: 0, width: inset, height: inset, boxShadow: "0 0 0 1px #000" }}><ModeTile mode={mode} size={inset} /></div>}
-      </div>
-    );
+  const picture = (stage: (typeof stages)[number], kind: "projection" | "spectrum" | "probe", edge: number) => {
+    if (kind === "spectrum") return <StageSpectrum projection={stage.projection} pixelA={stage.pixelA} side={edge} />;
+    if (kind === "probe") { const mode = stage.strongest ? probeModes(stage.strongest.data, stage.strongest.shape, true)[0] : null;
+      return <div style={{ width: edge, height: edge, background: "#000", overflow: "hidden" }}>{mode && <ModeTile mode={mode} size={edge} />}</div>; }
+    return <div style={{ width: edge, height: edge, background: "#000" }}>
+      {stage.projection && <ImageCanvas data={stage.projection.data} rows={stage.projection.shape[0]} cols={stage.projection.shape[1]} low={rangeOf(stage.projection.data)[0]} high={rangeOf(stage.projection.data)[1]} cmap="gray" height={edge} keepAspect />}</div>;
   };
+  const KINDS: ["projection" | "spectrum" | "probe", string][] = [["projection", "projection"], ["spectrum", "FFT"], ["probe", "probe"]];
   const scoreLine = (stage: (typeof stages)[number]) => <>
     {plain(stage.score, 5)}{stage.delta != null && <span style={{ color: stage.refused ? colors.textMuted : stage.delta <= 0 ? colors.good : colors.warn }}> {change(stage.delta)}</span>}
   </>;
-  const cellText = (cell: Cell) => shownValue(cell.value);
-  const cellTitle = (key: string, cell: Cell, stage: string) => cell.changed
-    ? `${key}: ${shownValue(cell.before)} → ${shownValue(cell.value)} at "${stage}"${cell.refused ? " (tried, refused: the setting stayed)" : ""}\n${typed(key, cell.value)}`
-    : `${key}: ${shownValue(cell.value)}, as it stood at "${stage}"`;
+  const BIG = Math.min(360, Math.max(160, rootWidth - 24));
+  const ROW = 18;
+  let line = 2;  // the grid row being written: 1 is the names
+  const pictureRows = KINDS.map(([kind, label]) => ({ kind, label, row: line++ }));
+  const body: React.ReactNode[] = [];
+  for (const group of groups) {
+    body.push(<div key={`g-${group.part}`} style={{ gridColumn: "1 / -1", gridRow: line++, borderTop: `1px solid ${colors.border}`, marginTop: HAIR, fontWeight: 600, lineHeight: "15px" }}>{group.part}</div>);
+    for (const row of group.rows) {
+      const at = line++;
+      body.push(<div key={`n-${row.key}`} title={`ptycho.${row.key.replace(/^object\./, "obj.")}`} style={{ gridColumn: 1, gridRow: at, paddingLeft: 8, paddingRight: 6, lineHeight: `${ROW}px`, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: row.moved ? colors.text : colors.textMuted }}>{row.name}</div>);
+      for (const bar of segments(row)) body.push(
+        <div key={`b-${row.key}-${bar.from}`} onMouseEnter={() => setOver(bar.from)}
+          title={bar.changed ? `${row.key}: ${shownValue(bar.before)} → ${shownValue(bar.value)} at "${stages[bar.from].name}", held to "${stages[bar.to].name}"\n${typed(row.key, bar.value)}` : `${row.key}: ${shownValue(bar.value)} from the start to "${stages[bar.to].name}"`}
+          style={{ gridColumn: `${bar.from + 2} / ${bar.to + 3}`, gridRow: at, height: ROW - 4, alignSelf: "center", lineHeight: `${ROW - 4}px`, padding: "0 4px", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+            background: bar.changed ? colors.accent : colors.border, color: bar.changed ? "#fff" : colors.text, fontWeight: bar.changed ? 600 : 400, borderLeft: `2px solid ${bar.changed ? "#fff" : colors.bg}`, boxSizing: "border-box" }}>{shownValue(bar.value)}</div>);
+      row.cells.forEach((cell, index) => { if (cell.refused) body.push(
+        <div key={`r-${row.key}-${index}`} title={`${row.key}: "${stages[index].name}" tried ${shownValue(cell.value)} (from ${shownValue(cell.before)}) and was refused: the setting stayed`}
+          style={{ gridColumn: index + 2, gridRow: at, height: ROW - 4, alignSelf: "center", justifySelf: "end", lineHeight: `${ROW - 6}px`, padding: "0 3px", zIndex: 1, whiteSpace: "nowrap", textDecoration: "line-through",
+            background: colors.bg, color: colors.textMuted, border: `1px dashed ${colors.textMuted}`, boxSizing: "border-box", maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis" }}>{shownValue(cell.value)}</div>); });
+      body.push(<div key={`w-${row.key}`} title={typed(row.key, row.now)} style={{ gridColumn: count + 2, gridRow: at, lineHeight: `${ROW}px`, padding: "0 4px", textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }}>{shownValue(row.now)}</div>);
+    }
+  }
+  const shownLarge = large && stages[large.stage] ? large : null;
   return (
     <Engine.Provider value={engineContext}>
-    <div ref={root} style={header(colors)}>
+    <div ref={root} style={{ ...header(colors), position: "relative" }} onMouseLeave={() => { setLarge(null); setOver(null); }}>
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: GAP, lineHeight: "18px", marginBottom: GAP }}>
         <span style={{ flex: "1 1 200px", minWidth: 0 }}><b style={{ fontSize: 13 }}>Status</b><span style={muted}> · {stages.length} stages · {moved} settings changed · {title}</span></span>
         <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: GAP }}>
           {others > 0 && toggleButton(all, `all settings (${moved + others})`, () => setAll(!all))}
           <SizeControl size={size} onSize={setSize} colors={colors} />
-          <InfoTooltip theme={theme} toggleOnClick text={"The settings a person set, one row each, across the stages in the order they ran; the last column is now. A filled cell is a change: the new value, the old one on hover with the line to type. A faint cell repeats the value, so any column reads whole. A dimmed stage was tried and refused: its value is struck and never became the setting. \"all settings\" lists the ones no stage changed too. Values training measures (tilt, offsets) are not settings and are not listed."} />
+          <InfoTooltip theme={theme} toggleOnClick text={"The run as a chart of what was set when. Columns: the stages in the order they ran, the last column now. Top: each stage's projection, its spectrum (the dashed ring at 50 pm, the thin ring its finest spot) and its strongest probe mode; hover a picture to see it large, S M L sets their size. Below: one row a setting, a bar from the stage that set a value to the next change, the value on the bar; blue bars are changes, grey the value the run started with, no bar a setting that is off. A dashed, struck chip is what a refused stage tried: the bar under it went on. Hover a bar for the old value and the line to type. \"all settings\" adds the ones no stage changed."} />
         </span>
       </div>
       {narrow ? (
         <div style={{ display: "flex", flexDirection: "column", gap: HAIR }}>
-          {stages.map((stage, index) => (
-            <div key={index} style={{ display: "flex", gap: GAP, alignItems: "center", background: colors.bgAlt, opacity: stage.refused ? 0.7 : 1 }}>
-              {head(stage, HEAD)}
-              <div style={{ minWidth: 0, flex: "1 1 0" }}>
-                <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}><b>{stage.name}</b>{stage.refused && <span style={muted}> · refused</span>} <span style={{ fontSize: TEXT }}>{scoreLine(stage)}</span></div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: `${HAIR}px ${GAP}px`, fontSize: TEXT }}>
-                  {stage.changed.length === 0 && <span style={muted}>the start</span>}
-                  {stage.changed.map((item) => <span key={item.key} title={typed(item.key, item.after)} style={{ whiteSpace: "nowrap", textDecoration: stage.refused ? "line-through" : undefined }}>
-                    <span style={muted}>{item.key} {shownValue(item.before)} → </span><b>{shownValue(item.after)}</b></span>)}
-                </div>
+          {stages.map((stage, index) => { const edge = Math.max(48, Math.min(bySize(size, 64, 96, 120), Math.floor((rootWidth - 12) / 3)));
+            return (
+            <div key={index} style={{ background: colors.bgAlt, opacity: stage.refused ? 0.7 : 1 }}>
+              <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: "17px" }}><b>{stage.name}</b>{stage.refused && <span style={muted}> · refused</span>} <span style={{ fontSize: TEXT }}>{scoreLine(stage)}</span></div>
+              <div style={{ display: "flex", gap: 0 }}>{KINDS.map(([kind]) => <div key={kind} onMouseEnter={() => setLarge({ stage: index, kind })} onClick={() => setLarge(large && large.stage === index && large.kind === kind ? null : { stage: index, kind })}>{picture(stage, kind, edge)}</div>)}</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: `${HAIR}px ${GAP}px`, fontSize: TEXT, lineHeight: "15px" }}>
+                {stage.changed.length === 0 && <span style={muted}>the start</span>}
+                {stage.changed.map((item) => <span key={item.key} title={typed(item.key, item.after)} style={{ whiteSpace: "nowrap", textDecoration: stage.refused ? "line-through" : undefined }}>
+                  <span style={muted}>{item.key} {shownValue(item.before)} → </span><b>{shownValue(item.after)}</b></span>)}
               </div>
-            </div>))}
+            </div>); })}
         </div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: `minmax(110px, max-content) repeat(${stages.length}, minmax(${HEAD}px, 1fr)) minmax(56px, max-content)`, columnGap: 0, rowGap: 0, fontSize: TEXT, alignItems: "stretch" }}
-          onMouseLeave={() => setOver(null)}>
-          <div />
+        <div style={{ display: "grid", gridTemplateColumns: `${LABEL}px repeat(${count}, ${side}px) minmax(${NOW}px, max-content)`, columnGap: 0, rowGap: 0, fontSize: TEXT, width: "fit-content", maxWidth: "100%" }}>
+          <div style={{ gridColumn: 1, gridRow: 1 }} />
           {stages.map((stage, index) => (
-            <div key={index} onMouseEnter={() => setOver(index)} title={`${stage.name}${stage.refused ? ": tried and refused" : ""} · ${stage.epochs} epochs · held-out ${plain(stage.score, 5)}${stage.image != null ? ` · image score ${plain(stage.image, 3)}` : ""}\nptycho("${stage.name}") shows its view`}
-              style={{ padding: `0 1px ${HAIR}px`, minWidth: 0, background: over === index ? colors.controlBg : undefined }}>
-              {head(stage, HEAD)}
-              <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontWeight: 600, lineHeight: "14px", color: stage.refused ? colors.textMuted : colors.text }}>{stage.name}</div>
+            <div key={`h-${index}`} onMouseEnter={() => setOver(index)} title={`${stage.name}${stage.refused ? ": tried and refused" : ""} · ${stage.epochs} epochs · held-out ${plain(stage.score, 5)}${stage.image != null ? ` · image score ${plain(stage.image, 3)}` : ""}\nptycho("${stage.name}") shows its view`}
+              style={{ gridColumn: index + 2, gridRow: 1, minWidth: 0, padding: "0 2px 1px", background: over === index ? colors.controlBg : undefined, opacity: stage.refused ? 0.6 : 1 }}>
+              <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontWeight: 600, lineHeight: "14px" }}>{stage.name}</div>
               <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", lineHeight: "13px" }}>{scoreLine(stage)}</div>
             </div>))}
-          <div style={{ alignSelf: "end", fontWeight: 600, padding: "0 4px", lineHeight: "14px" }}>now</div>
-          {groups.map((group) => (
-            <React.Fragment key={group.part}>
-              <div style={{ gridColumn: "1 / -1", borderTop: `1px solid ${colors.border}`, marginTop: HAIR, paddingTop: 1, fontWeight: 600, lineHeight: "15px" }}>{group.part}</div>
-              {group.rows.map((row) => (
-                <React.Fragment key={row.key}>
-                  <div title={`ptycho.${row.key.replace(/^object\./, "obj.")}`} style={{ paddingLeft: 8, paddingRight: 6, lineHeight: "17px", whiteSpace: "nowrap", color: row.moved ? colors.text : colors.textMuted }}>{row.name}</div>
-                  {row.cells.map((cell, index) => (
-                    <div key={index} onMouseEnter={() => setOver(index)} title={cellTitle(row.key, cell, stages[index].name)}
-                      style={{ lineHeight: "17px", padding: "0 3px", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textAlign: "right",
-                        background: cell.changed && !cell.refused ? colors.accent : over === index ? colors.controlBg : undefined,
-                        color: cell.changed && !cell.refused ? "#fff" : colors.textMuted, opacity: cell.changed ? 1 : 0.6,
-                        fontWeight: cell.changed ? 600 : 400, textDecoration: cell.refused ? "line-through" : undefined }}>{cellText(cell)}</div>))}
-                  <div style={{ lineHeight: "17px", padding: "0 4px", textAlign: "right", fontWeight: 600, whiteSpace: "nowrap" }} title={typed(row.key, row.now)}>{shownValue(row.now)}</div>
-                </React.Fragment>))}
+          <div style={{ gridColumn: count + 2, gridRow: 1, alignSelf: "end", fontWeight: 600, padding: "0 4px", lineHeight: "14px", textAlign: "right" }}>now</div>
+          {pictureRows.map(({ kind, label, row }) => (
+            <React.Fragment key={kind}>
+              <div style={{ gridColumn: 1, gridRow: row, alignSelf: "center", paddingLeft: 8, ...muted }}>{label}</div>
+              {stages.map((stage, index) => (
+                <div key={index} onMouseEnter={() => { setLarge({ stage: index, kind }); setOver(index); }} onMouseLeave={() => setLarge(null)}
+                  style={{ gridColumn: index + 2, gridRow: row, opacity: stage.refused ? 0.5 : 1, cursor: "zoom-in", outline: shownLarge && shownLarge.stage === index && shownLarge.kind === kind ? `2px solid ${colors.accent}` : "none", outlineOffset: -2 }}>{picture(stage, kind, side)}</div>))}
             </React.Fragment>))}
+          {body}
         </div>
       )}
+      {shownLarge && (() => {
+        const stage = stages[shownLarge.stage];
+        const left = narrow ? 6 : Math.max(6, Math.min(rootWidth - BIG - 6, LABEL + shownLarge.stage * side + (shownLarge.stage * side + side / 2 > (rootWidth - LABEL) / 2 ? -BIG - 4 : side + 4)));
+        return <div style={{ position: "absolute", left, top: 44, zIndex: 5, pointerEvents: "none", boxShadow: "0 2px 12px rgba(0,0,0,0.5)", border: `1px solid ${colors.border}`, background: "#000" }}>
+          {picture(stage, shownLarge.kind, BIG)}
+          <div style={{ ...ON_IMAGE, ...PLATE, left: 3, top: 3 }}>{stage.name} · {KINDS.find(([kind]) => kind === shownLarge.kind)![1]}</div>
+        </div>;
+      })()}
     </div>
     </Engine.Provider>
   );

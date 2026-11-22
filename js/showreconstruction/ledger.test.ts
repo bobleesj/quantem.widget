@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ledger, shown } from "./ledger";
+import { ledger, segments, shown } from "./ledger";
 
 describe("status ledger", () => {
   const stages = [
@@ -39,5 +39,12 @@ describe("status ledger", () => {
     expect(shown("True")).toBe("on");
     expect(shown("tensor")).toBe("learned");
     expect(shown("1e-06")).toBe("0");
+  });
+
+  it("draws a row as bars: one a value, from the stage that set it until the next change, a refused stage inside it", () => {
+    const thickness = ledger(stages)[1].rows[0];
+    expect(segments(thickness).map((bar) => [bar.from, bar.to, bar.value, bar.changed])).toEqual([[0, 1, "400.0", false], [2, 3, "450.0", true], [4, 4, "425", true]]);
+    const off = ledger([{ name: "a", refused: false, changed: [] }, { name: "b", refused: false, changed: [{ key: "scan.line_lr", before: "None", after: "0.02" }] }])[0].rows[0];
+    expect(segments(off).map((bar) => [bar.from, bar.to, bar.value])).toEqual([[1, 1, "0.02"]]);  // off draws no bar
   });
 });

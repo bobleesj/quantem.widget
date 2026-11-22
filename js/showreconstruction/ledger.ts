@@ -48,3 +48,18 @@ export function ledger(stages: LedgerStage[], settings: { [key: string]: string 
   }
   return groups;
 }
+
+export type Segment = { from: number; to: number; value: string; before: string | null; changed: boolean };
+
+/** A row as bars: each run of stages over which the setting held one value, from the stage that set it to the stage
+ *  before the next change (refused stages do not break a bar: the value stayed). changed is false for the value the
+ *  row started with. A value of None draws no bar: the setting was off. */
+export function segments(row: Row): Segment[] {
+  const out: Segment[] = [];
+  row.cells.forEach((cell, index) => {
+    const starts = cell.changed && !cell.refused;
+    if (!out.length || starts) out.push({ from: index, to: index, value: starts ? cell.value : cell.value, before: starts ? cell.before : null, changed: starts });
+    else out[out.length - 1].to = index;
+  });
+  return out.filter((segment) => !(segment.value == null || segment.value === "None" || segment.value === ""));
+}
