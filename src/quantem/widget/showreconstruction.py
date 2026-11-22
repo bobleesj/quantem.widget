@@ -191,6 +191,9 @@ class ShowReconstruction(anywidget.AnyWidget):
         rule = self.keep.get(name, "every")
         if name == "projections" and rule == "draws":
             return [entry for index, entry in enumerate(kept) if index == 0 or entry[0] in self._draws or entry is kept[-1]]
+        if name == "strongest":  # the strongest mode at a draw whose probe is saved whole is that probe's first mode: the browser reads it there, not stored twice
+            probes = {entry[0] for entry in self._saved("probes")}
+            return [entry for entry in kept if entry[0] not in probes]
         if name == "apertures":
             rule = self.keep.get("probes", "every")
         if name in ("probes", "apertures") and rule == "last" or name == "volumes" and rule == "last":

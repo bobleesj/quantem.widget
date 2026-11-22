@@ -530,7 +530,7 @@ function ShowSearch() {
         </div>
         {topFive.length > 1 && (
           <Panel title="top five" hint="lowest held-out of every candidate: projection with its probe, spectrum, depth" colors={colors} theme={theme} style={{ marginTop: GAP }}
-            info="The five candidates with the lowest held-out, whatever their pass, best first: each its projected phase with its strongest probe mode in the corner, its spectrum and its depth cut. Top left: rank, thickness and focus; bottom right: held-out. The depth cut's tick and percent say where along the beam the columns sit (50 % the slab's middle, green within 10 %). Hover a card to see it large, click to choose it. A saved notebook keeps the probe and the depth cut of the best only.">
+            info="The five candidates with the lowest held-out, whatever their pass, best first: each its projected phase with its strongest probe mode in the corner, its spectrum and its depth cut. Top left: rank, thickness and focus; bottom right: held-out. The depth cut's tick and percent say where along the beam the columns sit (50 % the slab's middle, green within 10 %). Hover a card to see it large, click to choose it. A saved notebook keeps the probe and the depth cut of these five, each pass's pick and the stages.">
             <div style={{ display: "flex", flexWrap: "wrap", gap: `${GAP}px ${3 * GAP}px` }}>
               {topFive.map((group, index) => (
                 <div key={group.key} style={{ display: "flex", flexDirection: "column", gap: 1 }}>

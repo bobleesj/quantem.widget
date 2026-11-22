@@ -35,7 +35,9 @@ def searched():
     return view, sent, arrays
 
 
-def test_a_search_saves_every_landed_candidates_arrays_native_and_its_curves():
+def test_a_search_sends_every_landed_candidates_arrays_native_and_saves_them_under_the_rule():
+    """Every array goes to the live view whole, once; a saved notebook keeps them whole for what the view shows large:
+    the pick and the five lowest held-out, here all three candidates."""
     view, sent, arrays = searched()
     assert view.images == b"" and view.curves == {}  # nothing synced until flush: each array went once as a message
     assert [content["kind"] for content, _ in sent].count("arrays") == 3
@@ -77,3 +79,29 @@ def test_a_view_that_opens_gets_a_flush_only_when_something_is_new():
     view.images = b""
     view._on_message(view, {"kind": "hello"}, [])
     assert view.images == b""
+
+
+def test_a_saved_search_keeps_whole_only_what_it_shows_large():
+    """flush: the best, each pass's pick, the stages and the five lowest held-out (the top-five cards) keep every
+    picture whole; another candidate keeps its projection binned to tile size (true proportions) and no probe or depth
+    cut; the kernel keeps them all."""
+    import numpy as np
+
+    from quantem.widget import ShowSearch
+    from quantem.widget.showsearch import TILE_PX, TOP
+
+    view = ShowSearch("search")
+    names = ("a", "b", "c", "d", "e", "f", "g")  # held-out rises with the letter: a to e are the top five
+    for index, name in enumerate(names):
+        view.candidate(name, stage="geometry", thickness_nm=20, focus_nm=0, slices=10, modes=4, epochs=12)
+        view.land(name, 0.2 + 0.01 * index, projection=np.ones((340, 300)), probe=np.ones((40, 40)) + 0j, section=np.ones((10, 300)))
+    view.stage("10 modes", verdict="kept", held_out=0.19, start=0.2, projection=np.ones((340, 300)))
+    view.pick("geometry", "g", held_out=0.26)  # a pass's pick is kept whole even when it is not among the lowest
+    view.flush()
+    saved = {(entry["name"], entry["kind"]): entry["shape"] for entry in view.image_index}
+    assert TOP == 5
+    for name in ("a", "b", "c", "d", "e", "g"):
+        assert saved[(name, "projection")] == [340, 300] and (name, "probe") in saved and (name, "section") in saved
+    assert saved[("stage:10 modes", "projection")] == [340, 300]
+    assert saved[("f", "projection")] == [113, 100] and ("f", "probe") not in saved and ("f", "section") not in saved
+    assert max(saved[("f", "projection")]) <= TILE_PX and len(view._arrays) == 3 * len(names) + 1

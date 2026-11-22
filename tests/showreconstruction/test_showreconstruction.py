@@ -41,9 +41,8 @@ def test_a_run_saves_every_projection_the_last_probe_its_strongest_mode_at_every
     assert run.keep == KEEP
     assert run.snapshot_epochs == list(range(9)) and run.projection_shapes == [[12, 10]] * 9  # its start and every epoch
     assert run.probe_epochs == [8] and run.probe_shapes == [[3, 6, 6]] and run.probe_shares == [[0.6, 0.3, 0.1]]
-    assert run.strongest_epochs == [1, 4, 8] and run.strongest_shapes == [[6, 6]] * 3
-    probe = run.last("probes")[1]
-    np.testing.assert_array_equal(frames(run.strongest, run.strongest_shapes)[-1], probe[0])  # the strongest mode is mode 1 of the draw
+    assert run.strongest_epochs == [1, 4] and run.strongest_shapes == [[6, 6]] * 2  # the last draw's strongest mode is its saved probe's first: not stored twice
+    assert len(run._kept["strongest"]) == 3 and np.array_equal(run.last("strongest")[1], run.last("probes")[1][0])
     assert run.volumes == b"" and run.last("volumes")[0] == 8 and run.last("volumes")[1].shape == (4, 12, 10)  # the kernel keeps the volume; a saved state its ends
     assert run.depth_epochs == [1, 4, 8] and len(run.depth_rows[0]) == 4
     assert [row["probe_shares"] for row in run.records if "probe_shares" in row] == [[0.6, 0.3, 0.1]] * 3  # the shares panel reads them from the records
@@ -56,7 +55,7 @@ def test_an_earlier_run_saves_its_projections_at_its_draws():
     run.keep = {"projections": "draws", "probes": "last", "volumes": "none"}
     run.flush()
     assert run.snapshot_epochs == [0, 1, 4, 8] and run.volume_epochs == [] and run.volumes == b""
-    assert run.strongest_epochs == [1, 4, 8] and run.probe_epochs == [8]
+    assert run.strongest_epochs == [1, 4] and run.probe_epochs == [8]
     assert run.saved_bytes() == whole - 5 * 12 * 10 * 4
     assert len(run._kept["projections"]) == 9  # the kernel keeps every epoch
 
@@ -118,7 +117,7 @@ def test_a_complex_probe_is_kept_with_its_phase_and_its_aperture():
     modes = (np.arange(2 * 4 * 5).reshape(2, 4, 5) + 1j * np.ones((2, 4, 5))).astype(np.complex64)
     run.add({"epoch": 1}, probe=modes, probe_shares=[0.8, 0.2], aperture=np.ones((6, 6)))
     run.flush()
-    assert run.probe_shapes == [[2, 2, 4, 5]] and run.strongest_shapes == [[2, 4, 5]] and run.aperture_shapes == [[6, 6]]
+    assert run.probe_shapes == [[2, 2, 4, 5]] and run.last("strongest")[1].shape == (2, 4, 5) and run.aperture_shapes == [[6, 6]]  # the strongest mode is read from the saved probe
     frame = frames(run.probes, run.probe_shapes)[0]
     np.testing.assert_array_equal(frame[:, 0], modes.real)
     np.testing.assert_array_equal(frame[:, 1], modes.imag)
@@ -186,3 +185,12 @@ def test_compare_takes_a_run_of_unknown_thickness_and_says_its_band():
     compare = CompareReconstruction([{"name": "a", "volume": volume, "slice_A": None, "pixel_A": 0.2}, {"name": "b", "volume": volume, "slice_A": 10.0, "pixel_A": 0.2}],
                                     band_per_A=(0.24, 1.9))
     assert compare.runs[0]["slice_A"] == 0.0 and compare.runs[0]["items"][0]["depth_A"] is None and compare.band_per_A == [0.24, 1.9]
+
+
+def test_a_rebuilt_bundle_does_not_reach_a_run_model_no_cell_shows():
+    """The views carry their code as text, not as a watched file: anywidget's live reload would write the whole bundle
+    into every run model when a builder rebuilds, and the saved notebook would carry it once a run (21 Nov 2026)."""
+    from quantem.widget.showreconstruction import STUB
+
+    assert isinstance(ShowReconstruction._esm, str) or isinstance(ShowReconstruction().__class__._esm, str)
+    assert ShowReconstruction()._esm == STUB

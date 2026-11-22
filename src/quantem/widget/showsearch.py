@@ -34,6 +34,7 @@ def _plain(value, digits=5) -> str:
     return "-" if value is None else f"{value:.{digits}f}"
 
 
+TOP = 5  # the lowest held-out candidates the view draws as cards: a saved notebook keeps their probe and depth cut
 TILE_PX = 150  # the largest a candidate's grid tile is drawn (at large): what a saved notebook keeps of a candidate not shown large
 
 
@@ -101,9 +102,10 @@ class ShowSearch(anywidget.AnyWidget):
 
     def flush(self):
         """Write the arrays and curves into the synced traits: what a saved notebook and a newly opened view read. The
-        saved state keeps every picture whole only for what the view shows large: the best, each pass's pick and the
-        finishing stages; every other candidate keeps its projection at the size its grid tile is drawn at most (block
-        means, TILE_PX) and no probe or depth cut, as the view's "i" says. The kernel keeps every array whole."""
+        saved state keeps every picture whole only for what the view shows large: the best, each pass's pick, the
+        finishing stages and the five lowest held-out (the view's top-five cards: projection, probe, depth cut); every
+        other candidate keeps its projection at the size its grid tile is drawn at most (block means, TILE_PX) and no
+        probe or depth cut, as the view's "i" says. The kernel keeps every array whole."""
         entries = self._saved()
         with self.hold_sync():
             self.images = b"".join(array.tobytes() for _, array in entries)
@@ -113,7 +115,8 @@ class ShowSearch(anywidget.AnyWidget):
 
     def _saved(self):
         """((name, kind), array) the saved state holds, under flush's rule."""
-        large = {self.best, *(pick["name"] for pick in self.picks)}
+        landed = sorted((row for row in self.candidates if row.get("held_out") is not None), key=lambda row: row["held_out"])
+        large = {self.best, *(pick["name"] for pick in self.picks), *(row["name"] for row in landed[:TOP])}
         out = []
         for (name, kind), array in self._arrays.items():
             if name in large or name.startswith("stage:"):
