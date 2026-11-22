@@ -178,6 +178,52 @@ def test_interlaced_live_probe_reads_the_measured_visit_for_a_grid_position(view
         assert not replies[-1][1]
 
 
+def test_interlaced_probe_uses_preceding_measurement_then_current_visit(viewer, monkeypatch):
+    widget, _, replies = viewer
+    positions = np.array([(0, 0), (1, 1), (1, 0), (0, 1)])
+    previous_positions = positions[::-1]
+    shape = (1, 4, 16, 16)
+    reads = []
+
+    def source(name, order, received, base):
+        def read(visit):
+            reads.append((name, visit))
+            return np.full((16, 16), base + visit, dtype=np.float32)
+
+        query = SimpleNamespace(frame=read, close=lambda: None)
+        return SimpleNamespace(shape=shape, received=received, detector_session=lambda: query,
+                               metadata={"series": name, "continuous_series": "live_12",
+                                         "scan_positions": order, "scan_positions_shape": (2, 2)})
+
+    current = source("live_12000002", positions, 1, 20)
+    previous = source("live_12000001", previous_positions, 4, 10)
+    recording = SimpleNamespace(detector_preview_source=lambda _: current, datasets=[previous])
+    preview = {"scan": "live_12000002", "visit_path": True, "total": 2, "cols": 2, "detRows": 16, "detCols": 16}
+    request = {"type": "show4dstem_live_probe", "scan": preview["scan"], "center": [0, 1]}
+    widget.send = lambda reply, buffers=None: replies.append((reply, buffers))
+
+    monkeypatch.setattr(widget, "_stream_follower", SimpleNamespace(recording=recording))
+    widget.live_phase_preview = preview
+    widget._handle_live_probe(widget, request, [])
+    reply, buffers = replies[-1]
+    assert reply["scan"] == current.metadata["series"] and reply["source_scan"] == previous.metadata["series"]
+    np.testing.assert_array_equal(np.frombuffer(buffers[0], np.float32), np.full(256, 10, dtype=np.float32))
+
+    retry = {**request, "previous_scan": previous.metadata["series"]}
+    widget._handle_live_probe(widget, retry, [])
+    assert not replies[-1][1] and reads == [(previous.metadata["series"], 0)]
+
+    previous.metadata["continuous_series"] = "live_11"
+    widget._handle_live_probe(widget, request, [])
+    assert not replies[-1][1]
+
+    current.received = 4
+    widget._handle_live_probe(widget, retry, [])
+    reply, buffers = replies[-1]
+    assert reply["source_scan"] == reply["scan"] == current.metadata["series"]
+    np.testing.assert_array_equal(np.frombuffer(buffers[0], np.float32), np.full(256, 23, dtype=np.float32))
+
+
 @pytest.mark.parametrize("mode, inner", [("circle", 0.0), ("annular", 2.25)])
 def test_radius_request_acknowledges_before_one_exact_computation(viewer, monkeypatch, mode, inner):
     widget, values_t, messages = viewer

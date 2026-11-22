@@ -1,5 +1,5 @@
 type Request = { view: string; epoch: number; seq: number; center: number[] };
-type Receipt = Request & { type: string; status: string; scan?: string };
+type Receipt = Request & { type: string; status: string; scan?: string; source_scan?: string };
 
 export function detectorViewId() {
   return Array.from(crypto.getRandomValues(new Uint32Array(4))).join("-");

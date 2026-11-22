@@ -1257,6 +1257,9 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         decoded for nothing (11-17). When the scan is no longer drawn live, its whole image goes once."""
         if not change["old"] or change["new"]:
             return
+        if (self.vi_source == "Direct" and self.live_phase_stream
+                and live_frame_number(change["old"].get("scan")) is not None):
+            return
         if (self.vi_source in (change["old"].get("images") or ())
                 and self.vi_source not in self._vi_product_maps):
             self.vi_source = "roi"  # An interrupted scan may never attach the chosen live image.
@@ -2899,36 +2902,74 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             return
         reply = {key: content.get(key) for key in ("view", "epoch", "seq", "center", "scan")}
         reply.update(type="show4dstem_live_probe_receipt", status="complete")
-        pattern = None
+        selected = None
         if self._stream_lock.acquire(blocking=False):
             try:
-                pattern = self._live_probe_pattern(content)
+                selected = self._live_probe_pattern(content)
             except (LookupError, TypeError, ValueError, RuntimeError, MemoryError):
                 pass  # The current encoder can retire before the selected pattern is decoded.
             finally:
                 self._stream_lock.release()
-        self.send(reply, buffers=[pattern.tobytes()] if pattern is not None else [])
+        if selected is None:
+            self.send(reply)
+        else:
+            source_scan, pattern = selected
+            self.send(dict(reply, source_scan=source_scan), buffers=[pattern.tobytes()])
 
     def _live_probe_pattern(self, request):
-        """Address visit-order storage with a displayed (row, col) pair."""
+        """Prefer the current visit; otherwise read the same pixel from this run's preceding frame."""
         live = self.live_phase_preview
         scan = live.get("scan")
         follower = self._stream_follower
         if (not follower or not live.get("visit_path") or live.get("diffraction_only")
                 or live_frame_number(scan) is None or request.get("scan") != scan):
             return None
-        rows, cols, det_rows, det_cols = self._preset_preview_geometry()
+        rows, cols, _, _ = self._preset_preview_geometry()
         row, col = request["center"]
         if not (type(row) is int and type(col) is int and 0 <= row < rows and 0 <= col < cols):
             return None
+
         recording = follower.recording
         lookup = getattr(recording, "detector_preview_source", None)
-        source = lookup(scan) if callable(lookup) else None
-        if source is None:
-            # The last complete Live frame stays available across Stop.
-            source = next((item for item in getattr(recording, "datasets", ())
-                           if item.metadata.get("series") == scan), None)
-        positions = self._preset_preview_positions(source) if source is not None else None
+        active = lookup(scan) if callable(lookup) else None
+        if active is not None:
+            pattern = self._probe_visit(active, row, col)
+            if pattern is not None:
+                return scan, pattern
+
+        # A continuous scan appends the six-digit frame number to its series.
+        # The previous frame must belong to that same repeating acquisition.
+        series = scan[:-6]
+        previous = None
+        if len(series) > len("live_") and not live.get("frozen"):
+            frame = int(scan[-6:])
+            if frame > 1:
+                previous = f"{series}{frame - 1:06d}"
+        needs_previous = previous is not None and previous != request.get("previous_scan")
+        if active is not None and not needs_previous:
+            return None
+        datasets = getattr(recording, "datasets", ())
+        if active is None:
+            ready = next((item for item in reversed(datasets) if item.metadata.get("series") == scan), None)
+            if ready is not None:
+                pattern = self._probe_visit(ready, row, col)
+                if pattern is not None:
+                    return scan, pattern
+        if not needs_previous:
+            return None
+        ready = next((item for item in reversed(datasets)
+                      if item.metadata.get("series") == previous
+                      and item.metadata.get("continuous_series") == series), None)
+        if ready is not None:
+            pattern = self._probe_visit(ready, row, col)
+            if pattern is not None:
+                return previous, pattern
+        return None
+
+    def _probe_visit(self, source, row: int, col: int) -> np.ndarray | None:
+        """Read the exact visit at a display position using this frame's own order."""
+        rows, cols, det_rows, det_cols = self._preset_preview_geometry()
+        positions = self._preset_preview_positions(source)
         if positions is None:
             return None
         cached = self._live_visit_index

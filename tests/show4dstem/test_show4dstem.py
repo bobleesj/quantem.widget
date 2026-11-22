@@ -1035,6 +1035,21 @@ def test_product_map_from_direct_phase_becomes_the_image(monkeypatch):
         widget.close()
 
 
+def test_direct_selection_survives_live_preview_handoff():
+    widget = Show4DSTEM(_counts(3), device="cpu", precompute_virtual_images=False)
+    try:
+        widget.live_phase_stream = True
+        widget.live_phase_preview = {"scan": "live_2000001", "mode": "Direct", "images": ["Direct"]}
+        widget.vi_source = "Direct"
+        widget.live_phase_preview = {}
+        assert widget.vi_source == "Direct"
+        widget.apply_preset("bf")
+        widget.live_phase_preview = {"scan": "live_2000002", "mode": "Direct", "images": ["Direct"]}
+        assert widget.vi_source == "roi"
+    finally:
+        widget.close()
+
+
 def test_live_com_and_dpc_are_selectable_before_their_full_maps_arrive():
     widget = Show4DSTEM(_counts(3), device="cpu", precompute_virtual_images=False)
     try:

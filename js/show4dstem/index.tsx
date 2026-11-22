@@ -2975,21 +2975,27 @@ function Show4DSTEM() {
   const [retainedPosRow, setLocalPosRow] = React.useState(posRow);
   const [retainedPosCol, setLocalPosCol] = React.useState(posCol);
   const visitProbeKey = showingLivePreview && preview?.visitPath && isLiveFrame(preview.scan)
-    ? `${shapeRows}×${shapeCols}×${detRows}×${detCols}` : "";
+    ? `${preview.scan.slice(0, -6)}:${shapeRows}×${shapeCols}×${detRows}×${detCols}` : "";
   const [visitProbe, setVisitProbe] = React.useState<{ row: number; col: number } | null>(null);
   const [visitPattern, setVisitPattern] = React.useState<{
     row: number; col: number; scan: string; dp: DataView;
   } | null>(null);
+  const visitPatternRef = React.useRef(visitPattern);
   const localPosRow = (visitProbeKey && visitProbe) ? visitProbe.row : retainedPosRow;
   const localPosCol = (visitProbeKey && visitProbe) ? visitProbe.col : retainedPosCol;
   const visitRequests = React.useMemo(() => detectorChannel(detectorViewId(), request => {
-    model.send({type: "show4dstem_live_probe", ...request, scan: model.get("live_phase_preview")?.scan});
+    const shown = visitPatternRef.current;
+    const previousScan = shown?.row === request.center[0] && shown?.col === request.center[1] ? shown.scan : undefined;
+    model.send({type: "show4dstem_live_probe", ...request, scan: model.get("live_phase_preview")?.scan,
+      previous_scan: previousScan});
   }, (reply, buffers) => {
     const frame = model.get("live_phase_preview") as LiveFrame | undefined;
     const dp = buffers?.[0];
     if (reply.status === "complete" && frame && reply.scan && reply.scan === frame.scan && dp
         && dp.byteLength === (frame.detRows ?? 0) * (frame.detCols ?? 0) * 4) {
-      setVisitPattern({row: reply.center[0], col: reply.center[1], scan: reply.scan, dp});
+      const pattern = {row: reply.center[0], col: reply.center[1], scan: reply.source_scan ?? reply.scan, dp};
+      visitPatternRef.current = pattern;
+      setVisitPattern(pattern);
     }
   }, "show4dstem_live_probe_receipt"), [model]);
   React.useEffect(() => {
@@ -2999,6 +3005,7 @@ function Show4DSTEM() {
   React.useEffect(() => {
     visitRequests.clear();
     setVisitProbe(null);
+    visitPatternRef.current = null;
     setVisitPattern(null);
   }, [visitProbeKey, visitRequests]);
   React.useEffect(() => {
@@ -5147,7 +5154,7 @@ function Show4DSTEM() {
     if (!preview?.visitPath) {
       (Array.isArray(viProductLabels) ? viProductLabels : []).forEach(add);
     }
-    if (preview?.mode === "Direct") add("Direct");
+    if (preview?.mode === "Direct" || viSource === "Direct") add("Direct");
     preview?.images.forEach(add);
     if (liveRowImage && !preview?.visitPath) add(liveRowImage.name);
     if (webgpuDpcReady && !preview?.visitPath) {
@@ -5156,7 +5163,7 @@ function Show4DSTEM() {
       add("iDPC");
     }
     return out;
-  }, [directVisible, viProductLabels, webgpuDpcReady, preview, liveRowImage]);
+  }, [directVisible, viProductLabels, webgpuDpcReady, preview, liveRowImage, viSource]);
   const selectedViSource = React.useMemo(() => {
     return viSource === "roi" || viProductSourceOptions.includes(viSource) ? viSource : "roi";
   }, [viProductSourceOptions, viSource]);
@@ -5840,7 +5847,8 @@ function Show4DSTEM() {
     && (!compareMode || compareDpMode === "selected") && preview.sourceId
     && preview.sourceId === streamSourceIds[chosenFrameIdx]
     && preview.detRows === detRows && preview.detCols === detCols);
-  const pinnedVisitPattern = visitProbeKey && visitPattern?.dp.byteLength === detRows * detCols * 4 ? visitPattern : null;
+  const pinnedVisitPattern = visitProbeKey && visitPattern?.row === localPosRow && visitPattern.col === localPosCol
+    && visitPattern.dp.byteLength === detRows * detCols * 4 ? visitPattern : null;
   const liveDp = (showingLivePreview && !pinnedVisitPattern) || liveSelectedDp;
   const selectedDpBytes = pinnedVisitPattern?.dp ?? (liveSelectedDp && livePattern?.byteLength === detRows * detCols * 4 ? livePattern
     : !showingLivePreview && usesViRoiDp ? viRoiDpBytes : frameBytes);
@@ -6461,7 +6469,8 @@ function Show4DSTEM() {
   const dpHeaderTitle = () => {
     const label = visitProbeKey
       ? (pinnedVisitPattern?.dp === paintedDp.current
-        ? `DP at (${pinnedVisitPattern.row}, ${pinnedVisitPattern.col})` : "Live diffraction")
+        ? `DP at (${pinnedVisitPattern.row}, ${pinnedVisitPattern.col})${pinnedVisitPattern.scan !== preview?.scan ? " · previous frame" : ""}`
+        : "Live diffraction")
       : diffractionPositionLabel(model.get("live_phase_preview"), paintedDp.current, localPosRow, localPosCol);
     return `${label} · k (${Math.round(localKRow)}, ${Math.round(localKCol)})`;
   };
