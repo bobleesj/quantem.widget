@@ -2970,16 +2970,20 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         """Read the exact visit at a display position using this frame's own order."""
         rows, cols, det_rows, det_cols = self._preset_preview_geometry()
         positions = self._preset_preview_positions(source)
-        if positions is None:
-            return None
-        cached = self._live_visit_index
-        if cached is None or cached[0] is not positions or cached[1].shape != (rows, cols):
-            flat = np.ravel_multi_index(np.asarray(positions).T, (rows, cols))
-            indices = np.full((rows, cols), -1, np.int32)
-            indices.ravel()[flat] = np.arange(len(positions), dtype=np.int32)
-            self._live_visit_index = cached = (positions, indices)
-        index = int(cached[1][row, col])
-        if not 0 <= index < getattr(source, "received", len(positions)):
+        if positions is not None:
+            cached = self._live_visit_index
+            if cached is None or cached[0] is not positions or cached[1].shape != (rows, cols):
+                flat = np.ravel_multi_index(np.asarray(positions).T, (rows, cols))
+                indices = np.full((rows, cols), -1, np.int32)
+                indices.ravel()[flat] = np.arange(len(positions), dtype=np.int32)
+                self._live_visit_index = cached = (positions, indices)
+            index = int(cached[1][row, col])
+            if not 0 <= index < getattr(source, "received", len(positions)):
+                return None
+        elif (self.live_phase_preview.get("frozen") and source.metadata.get("grid_of")
+                and tuple(source.shape) == (rows, cols, det_rows, det_cols)):
+            index = row * cols + col
+        else:
             return None
         open_session = getattr(source, "detector_session", None)
         compute = open_session() if callable(open_session) else gpu_adapter.prepare_session(source)

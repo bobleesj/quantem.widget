@@ -174,6 +174,11 @@ def test_interlaced_live_probe_reads_the_measured_visit_for_a_grid_position(view
         widget.live_phase_preview = dict(live, frozen=True)
         widget._handle_live_probe(widget, dict(request, center=[1, 1]), [])
         np.testing.assert_array_equal(np.frombuffer(replies[-1][1][0], np.float32), patterns[4].ravel())
+        grid = SimpleNamespace(shape=(2, 3, 16, 16), detector_session=lambda: query,
+                               metadata={"series": "live_9", "grid_of": "live_9"})
+        recording.datasets = [grid]
+        widget._handle_live_probe(widget, dict(request, center=[0, 1]), [])
+        np.testing.assert_array_equal(np.frombuffer(replies[-1][1][0], np.float32), patterns[1].ravel())
         widget._handle_live_probe(widget, dict(request, scan="live_8", center=[1, 1]), [])
         assert not replies[-1][1]
 
