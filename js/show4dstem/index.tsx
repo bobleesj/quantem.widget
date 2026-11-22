@@ -6152,7 +6152,7 @@ function Show4DSTEM() {
 
   // The wheel over a canvas zooms it and must not scroll the page. React attaches onWheel as a passive
   // listener, where preventDefault does nothing, so each overlay gets a native non-passive one. The overlays
-  // mount after the first patterns arrive (a streaming viewer starts on "No acquired patterns") and remount
+  // mount after the first patterns arrive and remount
   // with the FFT and the scan grid, so every render checks which canvases are mounted.
   const wheelLockedRef = React.useRef(new Set<HTMLCanvasElement>());
   React.useEffect(() => {
@@ -9505,11 +9505,12 @@ function Show4DSTEM() {
         </Box>
       </Box>);
   if (nFrames === 0 && !liveImage) {
+    const waiting = embedded && displayedTitle === "Waiting for acquisition";
     return (
       <Box ref={rootRef} className="show4dstem-root" sx={{ p: "4px", bgcolor: themeColors.bg, color: themeColors.text }}>
-        {titleHeading}
+        {!waiting && titleHeading}
         <Typography role="status" sx={themedTypography.label}>
-          No acquired patterns. Images appear when the detector starts sending data.
+          {waiting ? "Waiting for acquisition…" : "No acquired patterns. Images appear when the detector starts sending data."}
         </Typography>
       </Box>
     );
