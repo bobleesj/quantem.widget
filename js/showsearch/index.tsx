@@ -25,6 +25,7 @@ type Frame = { data: Float32Array; shape: number[] };
 
 const TEXT = 11;
 const GAP = SPACING.XS;
+const HAIR = 2;  // between the pictures of one card
 const STAGE_COLORS: { [stage: string]: string } = { geometry: "#8c8c8c", slices: "#6f8fb3", refocus: "#b09a72", refinement: "#9a7fb0" };
 // A thickness for a label: three significant figures (21.0, not 21.04166364182265).
 function sig3(value: number | null | undefined): string {
@@ -290,6 +291,74 @@ function Panel({ title, hint, info, children, colors, theme, style }: {
   );
 }
 
+// Where along the beam the columns sit, from a depth cut (slices down, samples across): each slice's contrast along the
+// line (its standard deviation: columns make it, vacuum does not), then the contrast's centre as a fraction of the
+// slab (0 the entrance, 1 the exit) and the fraction of the slab holding the middle 80 % of it. A slab that fits its
+// specimen reads near 0.5; a centre toward a face says the slab is misplaced or too thick on one side.
+export function depthMiddle(data: Float32Array, slices: number, samples: number): { centre: number; span: number } | null {
+  if (slices < 3 || samples < 2 || data.length < slices * samples) return null;
+  const contrast = new Float64Array(slices);
+  let total = 0, floor = Infinity;
+  for (let slice = 0; slice < slices; slice++) {
+    let mean = 0, square = 0;
+    for (let sample = 0; sample < samples; sample++) { const value = data[slice * samples + sample]; mean += value; square += value * value; }
+    mean /= samples;
+    contrast[slice] = Math.sqrt(Math.max(0, square / samples - mean * mean));
+    floor = Math.min(floor, contrast[slice]);
+  }
+  for (let slice = 0; slice < slices; slice++) { contrast[slice] -= floor; total += contrast[slice]; }
+  if (!(total > 0)) return null;
+  let centre = 0, running = 0, low = 0, high = slices - 1;
+  for (let slice = 0; slice < slices; slice++) centre += (slice + 0.5) * contrast[slice];
+  for (let slice = 0; slice < slices; slice++) { running += contrast[slice]; if (running < 0.1 * total) low = slice + 1; if (running <= 0.9 * total) high = slice; }
+  return { centre: centre / total / slices, span: (high - low + 1) / slices };
+}
+
+// One candidate as a card: its projection (the largest), its strongest probe mode a small inset in the projection's
+// corner, and its spectrum over its depth cut beside it at half the size. The depth cut carries where the columns sit
+// along the beam (the tick at its side, the percent). A card with no probe or depth cut kept shows what it has.
+function Card({ store, name, pixelA, size, zoom, top, bottomLeft, colors, onHover, onPick, active, chosen }: {
+  store: Store; name: string; pixelA: number; size: number; zoom?: ReturnType<typeof useViewLink>; top?: React.ReactNode; bottomLeft?: React.ReactNode;
+  colors: any; onHover?: (on: boolean) => void; onPick?: () => void; active?: boolean; chosen?: boolean;
+}) {
+  const projection = store.frames.get(`${name}/projection`), probe = store.frames.get(`${name}/probe`), section = store.frames.get(`${name}/section`);
+  const spectrum = useSpectrum(projection, pixelA || 1);
+  const half = Math.floor((size - HAIR) / 2), inset = Math.round(size * 0.3);
+  const middle = React.useMemo(() => (section && section.shape.length === 2 ? depthMiddle(section.data, section.shape[0], section.shape[1]) : null), [section]);
+  const centred = middle ? Math.abs(middle.centre - 0.5) <= 0.1 : false;
+  const picture = projection && projection.shape.length === 2 ? <Picture data={projection.data} rows={projection.shape[0]} cols={projection.shape[1]} width={size} height={size} /> : null;
+  const bar = zoom && projection && pixelA > 0 ? scaleBarGeometry({ x: 0, y: 0, width: size, height: size }, zoom.zoom.scale * size / projection.shape[1], pixelA, "Å",
+    { position: "bottom-left", maxBarFraction: 0.4, margin: size >= 160 ? 12 : 6, barThickness: size >= 160 ? 5 : 3 }) : null;
+  const [rows, cols] = probe ? probe.shape.slice(-2) : [1, 1];
+  return (
+    <div onMouseEnter={onHover ? () => onHover(true) : undefined} onMouseLeave={onHover ? () => onHover(false) : undefined} onClick={onPick}
+      style={{ display: "flex", gap: HAIR, flex: "none", cursor: onPick ? "pointer" : "default", outline: chosen ? `2px solid ${colors.accent}` : active ? `1px dashed ${colors.textMuted}` : "none", outlineOffset: 1 }}>
+      <div style={{ width: size, height: size, background: "#000", position: "relative", flex: "none" }}>
+        {zoom ? <ViewLink.Provider value={zoom}><ZoomFrame>{picture}</ZoomFrame></ViewLink.Provider> : picture}
+        {probe && <div style={{ position: "absolute", right: 0, top: 0, width: inset, height: inset, boxShadow: "0 0 0 1px #000", background: "#000" }} title="the strongest probe mode at focus: hue the phase, brightness the amplitude">
+          {probe.shape.length === 3 ? <ComplexCanvas re={probe.data.subarray(0, rows * cols)} im={probe.data.subarray(rows * cols, 2 * rows * cols)} rows={rows} cols={cols} width={inset} height={inset} />
+            : <Picture data={probe.data} rows={rows} cols={cols} width={inset} height={inset} cmap="magma" low={0} transform={Math.sqrt} high={undefined} />}
+        </div>}
+        {top && <div style={{ ...ON_IMAGE, ...PLATE, left: 2, top: 2, maxWidth: size - inset - 6, overflow: "hidden", textOverflow: "ellipsis" }}>{top}</div>}
+        {bottomLeft && <div style={{ ...ON_IMAGE, ...PLATE, right: 2, bottom: 2 }}>{bottomLeft}</div>}
+        {bar && <><div style={{ position: "absolute", left: bar.barX, top: bar.barY, width: bar.barPx, height: bar.barHeight, background: "#fff", boxShadow: "1px 1px 2px rgba(0,0,0,0.7)", pointerEvents: "none" }} />
+          <div style={{ ...ON_IMAGE, left: bar.barX + bar.barPx / 2, bottom: size - bar.barY + (size >= 160 ? 4 : 2), transform: "translateX(-50%)", fontSize: size >= 160 ? 16 : 12, lineHeight: 1, textShadow: "1px 1px 2px rgba(0,0,0,0.7)" }}>{bar.label}</div></>}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: HAIR, flex: "none" }}>
+        <div style={{ width: half, height: half, background: "#000", position: "relative" }}>
+          {spectrum && <Picture data={spectrum.image} rows={spectrum.size} cols={spectrum.size} width={half} height={half} low={spectrum.low} high={spectrum.high} />}
+          {half >= 60 && <div style={{ ...ON_IMAGE, left: 2, bottom: 0, fontSize: 10 }}>spectrum</div>}
+        </div>
+        <div style={{ width: half, height: half, background: "#000", position: "relative" }} title={middle ? `depth cut, the beam entering at the top. The columns' contrast is centred ${Math.round(100 * middle.centre)} % of the way through the slab and fills ${Math.round(100 * middle.span)} % of it: near 50 % and under 100 % is a slab that fits its specimen.` : "depth cut along the line, the beam entering at the top"}>
+          {section && section.shape.length === 2 && <Picture data={section.data} rows={section.shape[0]} cols={section.shape[1]} width={half} height={half} />}
+          {middle && <div style={{ position: "absolute", right: 0, top: `${100 * middle.centre}%`, width: 7, height: 2, marginTop: -1, background: centred ? "#7ddc8a" : "#f2b04e" }} />}
+          {half >= 60 && <div style={{ ...ON_IMAGE, left: 2, bottom: 0, fontSize: 10 }}>{middle ? <>{half >= 110 ? "depth · " : ""}middle <span style={{ color: centred ? "#7ddc8a" : "#f2b04e" }}>{Math.round(100 * middle.centre)} %</span></> : section ? "depth" : "no depth kept"}</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // The view
 
@@ -311,11 +380,9 @@ function ShowSearch() {
   const [selected, setSelected] = useModelState<string>("selected");
   const [size, setSize] = useModelState<ViewSize>("size");
   const objectLink = useViewLink();  // wheel zoom, drag pan and double-click reset on the shown projection
-  const probeLink = useViewLink();  // and on the probe, on its own: a probe never zooms with an object image
   const [root, rootWidth] = useWidth(1000);
   const STRIP_TILE = bySize(size, 52, 64, 92);
-  let SHOWN = Math.min(bySize(size, 150, 230, Math.max(230, Math.floor((rootWidth - Math.min(500, rootWidth * 0.46) - 40) / 2.5))), Math.max(110, Math.floor((rootWidth - 40) / 2)));  // the shown projection and probe; at large beside the grid; half the width on a phone
-  let SMALL = Math.floor((SHOWN - GAP) / 2);  // spectrum and depth cut stacked beside them
+  let SHOWN = Math.min(bySize(size, 160, 260, Math.max(230, Math.floor((rootWidth - Math.min(500, rootWidth * 0.46) - 40) / 2.5))), Math.max(110, Math.floor((rootWidth - 40) / 2)));  // the shown projection and probe; at large beside the grid; half the width on a phone
   const [hovered, setHovered] = React.useState<string | null>(null);
   const [curvesBox, curvesWidth] = useWidth(300);
 
@@ -325,9 +392,6 @@ function ShowSearch() {
   const shownGroup = byKey.get(shownKey) || groups.find((group) => group.members.includes(shownKey));
   const shownStage = (stages || []).find((stage) => `stage:${stage.name}` === shownKey);
   const frameName = shownGroup ? shownGroup.landed : shownStage ? `stage:${shownStage.name}` : "";
-  const frame = (kind: string) => store.frames.get(`${frameName}/${kind}`);
-  const projection = frame("projection"), probe = frame("probe"), section = frame("section");
-  const spectrum = useSpectrum(projection, pixelA || 1);
 
   const geometry = groups.filter((group) => group.row.stage === "geometry");
   const thicknesses = [...new Set(geometry.map((group) => group.row.thickness_nm))].sort((a, b) => a - b);
@@ -336,10 +400,17 @@ function ShowSearch() {
   const TILE = size === "large" ? Math.max(96, Math.min(150, Math.floor((Math.min(500, rootWidth * 0.46) - 40) / Math.max(1, focuses.length))))  // large: the grid about 500 px, the shown panel beside it
     : bySize(size, 56, 76, 108);
   const tile = rowsCount > 3 ? Math.round(TILE * 0.8) : TILE;  // smaller for many thicknesses, so the view keeps its height
-  const besideGrid = Math.floor((rootWidth - (56 + Math.max(1, focuses.length) * tile) - 44) / 2.5);  // what "shown" may be for the grid and it to share one row
-  if (size !== "large" && besideGrid >= 120) { SHOWN = Math.min(besideGrid, bySize(size, 200, 340, 340)); SMALL = Math.floor((SHOWN - GAP) / 2); }  // "shown" takes the room beside the grid, up to a size that keeps the view compact
-  const pairBelow = rootWidth - 40 < 2 * SHOWN + SMALL + 2 * GAP;  // a phone: spectrum and depth go under the object and the probe, as wide as they are
-  if (pairBelow) SMALL = SHOWN;
+  const gridWidth = 56 + Math.max(1, focuses.length) * tile;
+  const withCurves = Math.floor((rootWidth - gridWidth - 44 - 270) / 1.5), alone = Math.floor((rootWidth - gridWidth - 44) / 1.5);
+  const besideGrid = withCurves >= 0.7 * bySize(size, 200, 300, 300) ? withCurves : alone;  // with the curves on the row when "shown" keeps most of its size, else the curves go under  // what "shown" may be for the grid and it to share one row
+  if (size !== "large" && besideGrid >= 120) SHOWN = Math.min(besideGrid, bySize(size, 200, 300, 300));  // the grid, "shown" and the curves share one row when the width allows, up to a size that keeps the view compact
+  SHOWN = Math.min(SHOWN, Math.floor((rootWidth - 26) / 1.5));  // a phone: the card takes the width
+  // the five lowest held-out of every candidate that landed, whatever its pass: the ones worth a look, each a card
+  const topFive = groups.filter((group) => group.row.held_out != null && group.row.state !== "queued").sort((a, b) => a.row.held_out! - b.row.held_out!).slice(0, 5);
+  const topRoom = rootWidth - 12 - 8, topGap = 3 * GAP;  // the panel's inside, and the gap between cards
+  const topMost = Math.max(1, Math.min(topFive.length, Math.floor((topRoom + topGap) / (1.5 * 96 + 2 + topGap))));  // cards a row at the smallest picture (96 px)
+  const topRow = Math.ceil(topFive.length / Math.ceil(topFive.length / topMost));  // rows of equal length: five are 5, or 3 + 2
+  const TOP = Math.max(96, Math.min(bySize(size, 130, 170, 240), Math.floor(((topRoom + topGap) / Math.max(1, topRow) - topGap - 2) / 1.5)));
   const later = ["slices", "refocus", "refinement"].map((stage) => ({ stage, groups: groups.filter((group) => group.row.stage === stage) })).filter((part) => part.groups.length);
   const running = groups.find((group) => group.row.state === "running");
   const focusStage = shownGroup ? shownGroup.row.stage : running ? running.row.stage : groups.length ? groups[groups.length - 1].row.stage : "geometry";
@@ -402,6 +473,23 @@ function ShowSearch() {
           {lastKept && <span> · after {lastKept.name} <b>{plain(lastKept.held_out)}</b></span>}
           {(picks || []).flatMap((one) => one.flags).includes("search_boundary") && <span style={{ color: colors.textMuted }}> · {bestRow && thicknesses.length && bestRow.thickness_nm <= thicknesses[0] ? "at the bottom of the thickness range" : "at the top of the thickness range"}</span>}
         </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 1, height: 10, marginBottom: GAP }} title="the search as it runs: one cell a candidate in the order planned (grouped by pass), then one a finishing stage. Filled: landed; pulsing: running; hollow: waiting; ★ outline: the best. Hover a cell to see it.">
+          {groups.map((group, index) => {
+            const row = group.row, first = index === 0 || groups[index - 1].row.stage !== row.stage;
+            const tone = STAGE_COLORS[row.stage] || "#8c8c8c";
+            return <div key={group.key} onMouseEnter={() => setHovered(group.key)} onMouseLeave={() => setHovered(null)} onClick={choose(group.key)}
+              style={{ flex: "1 1 0", maxWidth: 18, minWidth: 3, height: row.state === "running" ? 10 : 7, marginLeft: first && index ? 5 : 0, cursor: "pointer", boxSizing: "border-box",
+                background: row.state === "queued" ? "transparent" : row.state === "running" ? colors.accent : tone, border: row.state === "queued" ? `1px solid ${colors.border}` : "none",
+                outline: group.members.includes(best || "") ? "2px solid #f2c14e" : hovered === group.key ? `1px solid ${colors.text}` : "none", outlineOffset: 0,
+                animation: row.state === "running" ? "quantem-search-pulse 1s ease-in-out infinite alternate" : undefined }} />;
+          })}
+          {(stages || []).map((stage, index) => <div key={stage.name} onMouseEnter={() => setHovered(`stage:${stage.name}`)} onMouseLeave={() => setHovered(null)}
+            style={{ flex: "1 1 0", maxWidth: 18, minWidth: 3, height: stage.verdict === "running" ? 10 : 7, marginLeft: index ? 0 : 5, cursor: "pointer",
+              background: stage.verdict === "running" ? colors.accent : stage.verdict === "kept" ? "#4caf50" : colors.border,
+              animation: stage.verdict === "running" ? "quantem-search-pulse 1s ease-in-out infinite alternate" : undefined }} />)}
+          <style>{"@keyframes quantem-search-pulse { from { opacity: 1 } to { opacity: 0.35 } }"}</style>
+          <span style={{ marginLeft: GAP, fontSize: TEXT, color: colors.textMuted, whiteSpace: "nowrap" }}>{groups.filter((group) => group.row.state === "done" || group.row.held_out != null).length}/{groups.length} candidates{(stages || []).length ? ` · ${(stages || []).filter((stage) => stage.verdict !== "running").length}/${(stages || []).length} stages` : ""}</span>
+        </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: GAP, alignItems: "stretch" }}>
           <Panel title="candidates" hint="thickness × focus, held-out" colors={colors} theme={theme} style={{ flex: "none" }}
             info="Each tile is one geometry candidate's projected phase at its last epoch, badge its held-out (lower is better). ★ the pick of its stage, ▲ within 2 standard errors of it, ● running with its epochs, gray queued: every tile trained the same epochs, so their scores compare (a thicker slab the search tried later is on the stages strip). Hover a tile to see it; click to choose it. Saved notebook: the best and each pass's pick are kept whole; the other candidates at tile size with no probe or depth cut (the live view has all).">
@@ -419,43 +507,10 @@ function ShowSearch() {
               ))}
             </div>
           </Panel>
-          <Panel title="shown" hint={shownGroup ? `${sig3(shownGroup.row.thickness_nm)} nm, focus ${signed(shownGroup.row.focus_nm, 1)} nm${hovered ? "" : selected ? " (chosen)" : " (best candidate)"}` : shownStage ? shownStage.name : "hover a tile"} colors={colors} theme={theme} style={{ flex: "1 1 auto", minWidth: 0, maxWidth: "100%" }}
-            info="The hovered tile, else the chosen one, else the best: its projected phase, its spectrum (log power, ±2.6 1/Å), its strongest probe mode at focus and the depth cut along its line (slices down).">
-            <div style={{ display: "flex", flexWrap: "wrap", gap: GAP }}>
-              <div style={{ width: SHOWN, height: SHOWN, background: "#000", position: "relative" }}>
-                {projection && projection.shape.length === 2 && <ViewLink.Provider value={objectLink}><ZoomFrame><Picture data={projection.data} rows={projection.shape[0]} cols={projection.shape[1]} width={SHOWN} height={SHOWN} /></ZoomFrame></ViewLink.Provider>}
-                {projection && shownGroup && pixelA > 0 && (() => {  // a stage's field has its own pixel: no bar
-
-                  const roomy = SHOWN >= 160;  // Show2D's bar: about 60 px rounded to a nice length, following the zoom
-                  const bar = scaleBarGeometry({ x: 0, y: 0, width: SHOWN, height: SHOWN }, objectLink.zoom.scale * SHOWN / projection.shape[1], pixelA, "Å",
-                    { position: "bottom-left", maxBarFraction: 0.4, margin: roomy ? 12 : 6, barThickness: roomy ? 5 : 3 });
-                  return bar ? <><div style={{ position: "absolute", left: bar.barX, top: bar.barY, width: bar.barPx, height: bar.barHeight, background: "#fff", boxShadow: "1px 1px 2px rgba(0,0,0,0.7)", pointerEvents: "none" }} />
-                    <div style={{ ...ON_IMAGE, left: bar.barX + bar.barPx / 2, bottom: SHOWN - bar.barY + (roomy ? 4 : 2), transform: "translateX(-50%)", whiteSpace: "nowrap", fontSize: roomy ? 16 : 12, lineHeight: 1, textShadow: "1px 1px 2px rgba(0,0,0,0.7)" }}>{bar.label}</div></> : null;
-                })()}
-              </div>
-              {(() => {  // the strongest probe mode: complex (2, rows, cols) in complex-wave colors, hue the phase and brightness the amplitude; an intensity as its amplitude
-                const [rows, cols] = probe ? probe.shape.slice(-2) : [1, 1];
-                const width = Math.round(SHOWN * cols / rows);
-                const plane = rows * cols;
-                return <div style={{ width, height: SHOWN, background: "#000", position: "relative" }}>
-                  <ViewLink.Provider value={probeLink}><ZoomFrame>
-                    {probe && probe.shape.length === 3 && <ComplexCanvas re={probe.data.subarray(0, plane)} im={probe.data.subarray(plane, 2 * plane)} rows={rows} cols={cols} width={width} height={SHOWN} />}
-                    {probe && probe.shape.length === 2 && <Picture data={probe.data} rows={rows} cols={cols} width={width} height={SHOWN} cmap="magma" low={0} transform={Math.sqrt} high={undefined} />}
-                  </ZoomFrame></ViewLink.Provider>
-                  <div style={{ ...ON_IMAGE, left: 3, bottom: 1 }}>probe, strongest mode{probe && probe.shape.length === 3 ? "" : ", amplitude"}</div>
-                </div>;
-              })()}
-              <div style={{ display: "flex", flexDirection: pairBelow ? "row" : "column", gap: GAP }}>
-                {[["spectrum", spectrum && <Picture data={spectrum.image} rows={spectrum.size} cols={spectrum.size} width={SMALL} height={SMALL} low={spectrum.low} high={spectrum.high} />],
-                  ["depth", section && section.shape.length === 2 && <Picture data={section.data} rows={section.shape[0]} cols={section.shape[1]} width={SMALL} height={SMALL} />]]
-                  .map(([label, content]) => (
-                    <div key={label as string} style={{ width: SMALL, height: SMALL, background: "#000", position: "relative" }}>
-                      {content}<div style={{ ...ON_IMAGE, left: 2, bottom: 0, fontSize: 10 }}>{label}</div>
-                    </div>
-                  ))}
-              </div>
-            </div>
-            <div style={{ fontSize: TEXT, color: colors.textMuted, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 2 * SHOWN + SMALL + 2 * GAP }}>
+          <Panel title="shown" hint={shownGroup ? `${sig3(shownGroup.row.thickness_nm)} nm, focus ${signed(shownGroup.row.focus_nm, 1)} nm${hovered ? "" : selected ? " (chosen)" : " (best candidate)"}` : shownStage ? shownStage.name : "hover a tile"} colors={colors} theme={theme} style={{ flex: "none", minWidth: 0, maxWidth: "100%" }}
+            info="The hovered tile, else the chosen one, else the best: its projected phase with its strongest probe mode a small inset in the corner, its spectrum (log power, ±2.6 1/Å) and the depth cut along its line (slices down; the tick and the percent say where along the beam the columns sit, 50 % the slab's middle).">
+            <Card store={store} name={frameName} pixelA={shownGroup ? pixelA : 0} size={SHOWN} zoom={objectLink} colors={colors} />
+            <div style={{ fontSize: TEXT, color: colors.textMuted, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: Math.round(1.5 * SHOWN) }}>
               {shownGroup ? `${sig3(shownGroup.row.thickness_nm)} nm · ${signed(shownGroup.row.focus_nm, 1)} nm · ${shownGroup.row.slices} slices · ${shownGroup.row.modes} modes · ${shownGroup.epochs} epochs`
                 : shownStage ? `${shownStage.verdict} · start ${plain(shownStage.start)} · control ${plain(shownStage.control)}` : ""}
             </div>
@@ -473,6 +528,22 @@ function ShowSearch() {
             </div>
           </Panel>
         </div>
+        {topFive.length > 1 && (
+          <Panel title="top five" hint="lowest held-out of every candidate: projection with its probe, spectrum, depth" colors={colors} theme={theme} style={{ marginTop: GAP }}
+            info="The five candidates with the lowest held-out, whatever their pass, best first: each its projected phase with its strongest probe mode in the corner, its spectrum and its depth cut. Top left: rank, thickness and focus; bottom right: held-out. The depth cut's tick and percent say where along the beam the columns sit (50 % the slab's middle, green within 10 %). Hover a card to see it large, click to choose it. A saved notebook keeps the probe and the depth cut of the best only.">
+            <div style={{ display: "flex", flexWrap: "wrap", gap: `${GAP}px ${3 * GAP}px` }}>
+              {topFive.map((group, index) => (
+                <div key={group.key} style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                  <Card store={store} name={group.landed} pixelA={pixelA} size={TOP} colors={colors} active={hovered === group.key} chosen={selected === group.key}
+                    onHover={look(group.key)} onPick={choose(group.key)}
+                    top={<>{index + 1}{group.members.includes(best || "") ? " ★" : ""}</>}
+                    bottomLeft={plain(group.row.held_out)} />
+                  <div style={{ fontSize: TEXT, lineHeight: "14px", color: colors.textMuted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: Math.round(1.5 * TOP) }}>
+                    <b style={{ color: colors.text }}>{sig3(group.row.thickness_nm)} nm · focus {signed(group.row.focus_nm, 1)} nm</b> · {group.row.slices} slices · {group.row.stage}</div>
+                </div>))}
+            </div>
+          </Panel>
+        )}
         {(later.length > 0 || (stages || []).length > 0) && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: `${GAP}px ${3 * GAP}px`, marginTop: GAP, background: colors.bgAlt, borderRadius: 4, padding: `${GAP}px 6px 6px` }}>
             {later.map((part) => (

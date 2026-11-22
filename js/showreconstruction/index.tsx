@@ -868,6 +868,17 @@ class RunStore {
     this.volumes = stackFromTrait(get("volumes"), get("volume_shapes"), get("volume_epochs"));
     this.probes = stackFromTrait(get("probes"), get("probe_shapes"), get("probe_epochs"), get("probe_shares"));
     this.strongest = stackFromTrait(get("strongest"), get("strongest_shapes"), get("strongest_epochs"));
+    // a draw whose probe is saved whole keeps its strongest mode only there (its first mode): add it back to the stack
+    const missing = this.probes.epochs.map((epoch, index) => [epoch, index]).filter(([epoch]) => !this.strongest.epochs.includes(epoch));
+    if (missing.length) {
+      const entries = this.strongest.epochs.map((epoch, index) => ({ epoch, frame: this.strongest.frames[index], shape: this.strongest.shapes[index] }));
+      for (const [epoch, index] of missing) {
+        const shape = this.probes.shapes[index], size = shape.slice(1).reduce((product, length) => product * length, 1);
+        entries.push({ epoch, frame: this.probes.frames[index].subarray(0, size), shape: shape.slice(1) });
+      }
+      entries.sort((a, b) => a.epoch - b.epoch);
+      this.strongest = { epochs: entries.map((one) => one.epoch), frames: entries.map((one) => one.frame), shapes: entries.map((one) => one.shape), extras: entries.map(() => null) };
+    }
     this.apertures = stackFromTrait(get("apertures"), get("aperture_shapes"), get("aperture_epochs"));
     this.depthRows = get("depth_rows") || [];
     this.depthEpochs = get("depth_epochs") || [];
