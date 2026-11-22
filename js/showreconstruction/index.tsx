@@ -1517,10 +1517,10 @@ function DetailGrid({ data, epoch, previewing, sliceIndex, setSliceIndex, savedL
   const gridSlices = slicePositions.length <= 9 ? slicePositions : Array.from({ length: 9 }, (_, index) => slicePositions[Math.round(index * (slicePositions.length - 1) / 8)]);  // at most nine, evenly through the slab
   const gridRows = wide === 1 ? Math.ceil(gridSlices.length / 3) : Math.min(3, gridSlices.length);
   const gridCols = Math.max(1, Math.ceil(gridSlices.length / Math.max(1, gridRows)));
-  const tile = wide === 1 ? Math.floor((width - 26 - (gridCols - 1) * HAIR) / gridCols) : Math.floor((tall - (gridRows - 1) * HAIR) / Math.max(1, gridRows));
+  const tile = wide === 1 ? Math.floor((width - 26) / gridCols) : Math.floor(tall / Math.max(1, gridRows));  // a series through the slab: its pictures touch, no gap
   const tileWidth = Math.round(tile / aspect);
   const hasSlices = gridSlices.length > 0;
-  const objectColumn = imageWidth + 12, slicesColumn = gridCols * tileWidth + (gridCols - 1) * HAIR + 12;  // the pictures and the panel's padding
+  const objectColumn = imageWidth + 12, slicesColumn = gridCols * tileWidth + 12;  // the pictures and the panel's padding
   const areas = wide === 1 ? [`"object"`, hasSlices && `"slices"`, `"probe"`].filter(Boolean).join(" ")
     : wide === 2 ? (hasSlices ? `"object slices" "probe probe"` : `"object probe"`) : hasSlices ? `"object slices probe"` : `"object probe"`;
   const columns3 = wide === 1 ? "minmax(0, 1fr)" : wide === 2 ? `minmax(0, ${objectColumn}px) minmax(0, 1fr)`
@@ -1569,7 +1569,7 @@ function DetailGrid({ data, epoch, previewing, sliceIndex, setSliceIndex, savedL
       {hasSlices && <Panel area="slices" title="Slices" hint={gridSlices.length < slicesCount ? `${gridSlices.length} of ${slicesCount}, through the slab` : `${slicesCount} through the slab`} colors={colors} theme={theme}
         info="Slices of the object through the slab, the beam's entrance first, on one display range. Click one to see it large on the left (the accent frame marks it); Projection on the left goes back to the projected phase. A saved notebook keeps three slices of the newest run and the middle one of earlier runs; the running kernel keeps every slice, and up to nine are drawn here.">
         <div style={{ display: "grid", gridAutoFlow: wide === 1 ? "row" : "column", gridTemplateRows: wide === 1 ? undefined : `repeat(${gridRows}, ${tile}px)`,
-          gridTemplateColumns: wide === 1 ? `repeat(${gridCols}, ${tileWidth}px)` : undefined, gap: HAIR }}>
+          gridTemplateColumns: wide === 1 ? `repeat(${gridCols}, ${tileWidth}px)` : undefined, gap: 0 }}>
           {gridSlices.map((position) => (
             <div key={position} onClick={() => { setSliceIndex(position); setShowProjection(false); }} title={`slice ${position + 1} of ${slicesCount}${sliceRange(position)}: click to see it large`}
               style={{ position: "relative", width: tileWidth, height: tile, cursor: "pointer", background: "#000", outline: !projecting && position === slice ? `2px solid ${colors.accent}` : "none", outlineOffset: -2 }}>
