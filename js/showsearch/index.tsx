@@ -256,15 +256,17 @@ function Curves({ series, hovered, width, height, colors }: {
   );
 }
 
-function useWidth(fallback: number): [React.RefObject<HTMLDivElement | null>, number] {
-  const ref = React.useRef<HTMLDivElement>(null);
+function useWidth(fallback: number): [React.RefCallback<HTMLDivElement>, number] {
   const [width, setWidth] = React.useState(fallback);
-  React.useLayoutEffect(() => {
-    const element = ref.current;
+  const observer = React.useRef<ResizeObserver | null>(null);
+  // A callback ref: the element can be replaced (a view first draws a "reading the runs" line, then its real root), and
+  // an observer set once on the first element would keep the view at its first width when the window narrows or turns.
+  const ref = React.useCallback((element: HTMLDivElement | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
     if (!element) return;
-    const observer = new ResizeObserver(([entry]) => { const next = Math.round(entry.contentRect.width); if (next > 0) setWidth(next); });
-    observer.observe(element);
-    return () => observer.disconnect();
+    observer.current = new ResizeObserver(([entry]) => { const next = Math.round(entry.contentRect.width); if (next > 0) setWidth(next); });
+    observer.current.observe(element);
   }, []);
   return [ref, width];
 }
@@ -330,7 +332,7 @@ function ShowSearch() {
     : bySize(size, 56, 76, 108);
   const tile = rowsCount > 3 ? Math.round(TILE * 0.8) : TILE;  // smaller for many thicknesses, so the view keeps its height
   const besideGrid = Math.floor((rootWidth - (56 + Math.max(1, focuses.length) * tile) - 44) / 2.5);  // what "shown" may be for the grid and it to share one row
-  if (size !== "large" && besideGrid >= 120 && besideGrid < SHOWN) { SHOWN = besideGrid; SMALL = Math.floor((SHOWN - GAP) / 2); }
+  if (size !== "large" && besideGrid >= 120) { SHOWN = Math.min(besideGrid, bySize(size, 200, 340, 340)); SMALL = Math.floor((SHOWN - GAP) / 2); }  // "shown" takes the room beside the grid, up to a size that keeps the view compact
   const pairBelow = rootWidth - 40 < 2 * SHOWN + SMALL + 2 * GAP;  // a phone: spectrum and depth go under the object and the probe, as wide as they are
   if (pairBelow) SMALL = SHOWN;
   const later = ["slices", "refocus", "refinement"].map((stage) => ({ stage, groups: groups.filter((group) => group.row.stage === stage) })).filter((part) => part.groups.length);
@@ -397,7 +399,7 @@ function ShowSearch() {
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: GAP, alignItems: "stretch" }}>
           <Panel title="candidates" hint="thickness × focus, held-out" colors={colors} theme={theme} style={{ flex: "none" }}
-            info="Each tile is one geometry candidate's projected phase at its last epoch, badge its held-out (lower is better). ★ the pick of its stage, ▲ within 2 standard errors of it, ● running with its epochs, gray queued: every tile trained the same epochs, so their scores compare (a thicker slab the search tried later is on the stages strip). Hover a tile to see it; click to choose it.">
+            info="Each tile is one geometry candidate's projected phase at its last epoch, badge its held-out (lower is better). ★ the pick of its stage, ▲ within 2 standard errors of it, ● running with its epochs, gray queued: every tile trained the same epochs, so their scores compare (a thicker slab the search tried later is on the stages strip). Hover a tile to see it; click to choose it. Saved notebook: the best and each pass's pick are kept whole; the other candidates at tile size with no probe or depth cut (the live view has all).">
             <div style={{ display: "grid", gridTemplateColumns: `40px repeat(${Math.max(1, focuses.length)}, ${tile}px)`, alignItems: "center", fontSize: TEXT }}>
               <div style={{ color: colors.textMuted }}>focus</div>
               {focuses.map((focus) => <div key={focus} style={{ textAlign: "center", color: colors.textMuted }}>{signed(focus, 1)} nm</div>)}

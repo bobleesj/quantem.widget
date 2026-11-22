@@ -90,15 +90,17 @@ function seconds(value: number | null | undefined): string {
 
 // Charts are drawn at the width they occupy, so their text keeps one size from a phone to a wide notebook instead of
 // shrinking or growing with a fixed viewBox.
-function useWidth(fallback: number): [React.RefObject<HTMLDivElement | null>, number] {
-  const ref = React.useRef<HTMLDivElement>(null);
+function useWidth(fallback: number): [React.RefCallback<HTMLDivElement>, number] {
   const [width, setWidth] = React.useState(fallback);
-  React.useLayoutEffect(() => {
-    const element = ref.current;
+  const observer = React.useRef<ResizeObserver | null>(null);
+  // A callback ref: the element can be replaced (a view first draws a "reading the runs" line, then its real root), and
+  // an observer set once on the first element would keep the view at its first width when the window narrows or turns.
+  const ref = React.useCallback((element: HTMLDivElement | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
     if (!element) return;
-    const observer = new ResizeObserver(([entry]) => { const next = Math.round(entry.contentRect.width); if (next > 0) setWidth(next); });
-    observer.observe(element);
-    return () => observer.disconnect();
+    observer.current = new ResizeObserver(([entry]) => { const next = Math.round(entry.contentRect.width); if (next > 0) setWidth(next); });
+    observer.current.observe(element);
   }, []);
   return [ref, width];
 }
@@ -1074,17 +1076,28 @@ function ProbeView({ frame, shape, shares, aperture, size: wanted, maxWidth, lab
     const strip = Math.ceil(thumbs / perRow) * (thumb + HAIR);
     const large = Math.max(40, Math.min(pair ? Math.floor((width - HAIR) / 2) : width, height - strip));
     const showAperture = !pair && looking === -1;
+    let side = 0;  // the thumbnails' size when they stand beside a full-height tile, 0 when they go under it
+    if (!pair && width - height - HAIR >= 2 * (32 + HAIR)) for (let t = 72; t >= 28 && !side; t -= 4) {
+      if (Math.floor((width - height) / (t + HAIR)) * Math.floor((height + HAIR) / (t + HAIR)) >= thumbs) side = t;
+    }
+    const thumbTiles = (t: number) => <>
+      {modes.map((mode, index) => <div key={index} onMouseEnter={() => setLooking(index)} title={`mode ${index + 1} · ${share(index)}`} style={{ cursor: "zoom-in" }}>
+        <ModeTile mode={mode} size={t} outline={!showAperture && looked === index ? colors.accent : undefined} label={t >= 40 ? `${index + 1} · ${share(index)}` : `${index + 1}`} /></div>)}
+      {aperture && !pair && <div onMouseEnter={() => setLooking(-1)} title="the aperture: the probe's Fourier-space amplitude" style={{ cursor: "zoom-in", outline: showAperture ? `2px solid ${colors.accent}` : "none", outlineOffset: -2 }}>{apertureTile(t)}</div>}
+    </>;
+    if (side) return (
+      <div style={{ display: "flex", gap: HAIR, width, flex: "none" }} onMouseLeave={() => setLooking(null)}>
+        {showAperture ? apertureTile(height) : <ModeTile mode={modes[looked]} size={height} label={`${label ? `${label} · ` : ""}mode ${looked + 1} · ${share(looked)}`} />}
+        <div style={{ display: "flex", flexWrap: "wrap", alignContent: "flex-start", gap: HAIR, flex: "1 1 0", minWidth: 0 }}>{thumbTiles(side)}</div>
+      </div>
+    );
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: HAIR, width, flex: "none" }} onMouseLeave={() => setLooking(null)}>
         <div style={{ display: "flex", gap: HAIR }}>
           {showAperture ? apertureTile(large) : <ModeTile mode={modes[looked]} size={large} label={`${label ? `${label} · ` : ""}mode ${looked + 1} · ${share(looked)}`} />}
           {pair && apertureTile(large)}
         </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: HAIR }}>
-          {modes.map((mode, index) => <div key={index} onMouseEnter={() => setLooking(index)} title={`mode ${index + 1} · ${share(index)}`} style={{ cursor: "zoom-in" }}>
-            <ModeTile mode={mode} size={thumb} outline={!showAperture && looked === index ? colors.accent : undefined} label={thumb >= 40 ? `${index + 1} · ${share(index)}` : `${index + 1}`} /></div>)}
-          {aperture && !pair && <div onMouseEnter={() => setLooking(-1)} title="the aperture: the probe's Fourier-space amplitude" style={{ cursor: "zoom-in", outline: showAperture ? `2px solid ${colors.accent}` : "none", outlineOffset: -2 }}>{apertureTile(thumb)}</div>}
-        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: HAIR }}>{thumbTiles(thumb)}</div>
       </div>
     );
   }
@@ -1415,11 +1428,18 @@ function DetailGrid({ data, epoch, previewing, sliceIndex, setSliceIndex, savedL
     : value != null && value !== epoch ? <span style={muted}> kept epoch {value}</span> : null;
   const large = size === "large";
   const wide = width >= 900 ? (large ? 2 : 3) : width >= 520 ? 2 : 1;  // large: the object and the probe share the first row, the depth spans the next
-  // the object first, then the probe, then the depth cut: in that order across a row and down a phone
-  const areas = wide === 3 ? `"object probe depth"` : wide === 2 ? `"object probe" "depth depth"` : `"object" "probe" "depth"`;
-  const [imagesRow, imagesWidth] = useWidth(320);
-  const fitted = Math.floor(imagesWidth * (shown.rows || 1) / (shown.cols || 1)), preset = bySize(size, 180, 300, 560);
-  const imageHeight = Math.max(80, fitted <= 1.3 * preset ? fitted : preset);  // the panel's width when the preset is near it, so no band is left beside the image
+  // the object first, then the depth cut, then the probe: in that order across a row and down a phone. The three share
+  // one image height; the object's column is exactly its image, the others share what is left, so no panel holds a band.
+  const areas = wide === 3 ? `"object depth probe"` : wide === 2 ? `"object depth" "probe probe"` : `"object" "depth" "probe"`;
+  const aspect = (shown.rows || 1) / (shown.cols || 1);
+  const imageHeight = Math.max(80, wide === 1 ? Math.min(bySize(size, 260, 420, 560), Math.floor((width - 26) * aspect))
+    : Math.min(bySize(size, 180, 300, 560), Math.floor((width / wide - 26) * aspect)));
+  const objectColumn = Math.round(imageHeight / aspect) + 12;  // the image and the panel's padding
+  const columns3 = wide === 1 ? "minmax(0, 1fr)" : wide === 2 ? `minmax(0, ${objectColumn}px) minmax(0, 1fr)` : `minmax(0, ${objectColumn}px) minmax(0, 1fr) minmax(0, 1fr)`;  // minmax(0, ...): a fixed column would hold the view at its old width when the window narrows
+  const FOOT = 24;  // one line under each panel's picture: the object's switches, the depth's band, the probe's numbers
+  const foot: React.CSSProperties = { display: "flex", flexWrap: "wrap", alignItems: "center", gap: `0 ${3 * GAP}px`, minHeight: FOOT, marginTop: HAIR, fontSize: TEXT, overflow: "hidden" };
+  const besideObject = wide > 1;  // the depth panel stands beside the object and ends where it ends
+  const stripHeight = 56;
   const probeSize = imageHeight;  // sized with the object, narrowed by ProbeView to its panel
   const number = (key: string, name: string, unit: string, digits: number) => {  // the probe's health as numbers at the epoch shown, no small plots
     const now = recordAt(data.records, epoch, key);
@@ -1427,21 +1447,21 @@ function DetailGrid({ data, epoch, previewing, sliceIndex, setSliceIndex, savedL
   };
   const sliceRange = (index: number) => data.sliceA ? `, ${plain(index * data.sliceA, 0)}-${plain((index + 1) * data.sliceA, 0)} Å` : "";
   return (
-    <div style={{ display: "grid", gridTemplateColumns: `repeat(${wide}, minmax(0, 1fr))`, gridTemplateAreas: areas, gap: GAP, marginTop: GAP }}>
+    <div style={{ display: "grid", gridTemplateColumns: columns3, gridTemplateAreas: areas, gap: GAP, marginTop: GAP }}>
       <Panel area="object" title="Object" colors={colors} theme={theme}
         hint={<>{projecting ? "projection" : `slice ${slice + 1}/${slicesCount}${sliceRange(slice)}`}{kept(shown.epoch)}</>}
         info="The phase of one slice, or the projected phase. Drag the line or its ends; an end dropped near a column snaps to it, and the line is saved with the notebook. Drag elsewhere on the image to take the spectrum of a square region. Rings: the atomic columns found, tan heavy and blue-gray light; ticks on the profile mark where the line passes one. Spectrum: Hann-windowed power, log scale, ±2.6 1/Å, the dashed ring at 50 pm. Slices are kept at each run's end.">
-        <Box sx={{ ...controlRow, flexWrap: "wrap", border: `1px solid ${colors.border}`, bgcolor: colors.controlBg, gap: `${GAP}px`, mb: `${GAP}px` }}>
+        <div style={{ display: "flex" }}>
+          <FieldView data={shown.data} rows={shown.rows} cols={shown.cols} low={shown.low} high={shown.high} pixelA={data.pixelA} height={imageHeight}
+            line={line} editLine={!projecting && !!volume} onDragLine={setDragLine} onLine={setSavedLine} peaks={columns} showPeaks={showPeaks} region={region} onRegion={setRegion} colors={colors}
+            inset={<SpectrumInset spectrum={spectrum} side={imageHeight} label={region ? `${plain(region.size * data.pixelA, 0)} Å box` : "whole field"} />} />
+        </div>
+        <div style={foot}>
           {(volume || fromEnds) && <Box sx={{ display: "flex" }}>{toggleButton(!projecting, "Slice", () => setShowProjection(false))}{toggleButton(projecting, "Projection", () => setShowProjection(true))}</Box>}
           {columns.length > 0 && switchControl("Columns", showPeaks, () => setShowPeaks(!showPeaks), "Rings on the atomic columns found", colors)}
           {switchControl("Smooth", smooth, () => setSmooth(!smooth), "CSS bilinear interpolation. Same data, the browser smooths visually.", colors)}
           {given.length === 4 && savedLine && savedLine.length === 4 && savedLine.join() !== given.join() && toggleButton(false, "Reset line", () => setSavedLine([...given]))}
           {region && toggleButton(false, "Whole field", () => setRegion(null))}
-        </Box>
-        <div ref={imagesRow} style={{ display: "flex", gap: GAP, alignItems: "flex-start" }}>
-          <FieldView data={shown.data} rows={shown.rows} cols={shown.cols} low={shown.low} high={shown.high} pixelA={data.pixelA} height={imageHeight}
-            line={line} editLine={!projecting && !!volume} onDragLine={setDragLine} onLine={setSavedLine} peaks={columns} showPeaks={showPeaks} region={region} onRegion={setRegion} colors={colors}
-            inset={<SpectrumInset spectrum={spectrum} side={imageHeight} label={region ? `${plain(region.size * data.pixelA, 0)} Å box` : "whole field"} />} />
         </div>
         {!projecting && slicePositions.length > 1 && <Stepper positions={slicePositions} value={slice} onChange={setSliceIndex} name="slice" colors={colors} />}
         {!projecting && <LineChart series={[{ name: "on the line", color: HUES[0], points: profileAlong(sliceData, rows, cols, line || [], data.pixelA) }]} stages={[]} cursor={null}
@@ -1449,27 +1469,30 @@ function DetailGrid({ data, epoch, previewing, sliceIndex, setSliceIndex, savedL
       </Panel>
       <Panel area="depth" title="Depth" hint={<>{slicesCount ? `${slicesCount} slices${data.sliceA ? ` of ${plain(data.sliceA, 1)} Å` : ""}` : "no volume kept"}{kept(volume?.epoch)}</>} colors={colors} theme={theme}
         info="Top: the volume cut along the line through every slice, the beam entering at the top; the accent line marks the slice shown. Bottom: lattice power per slice (down) against draw (across), the accent line at the slice shown, the dashed line at the epoch shown; the specimen's faces form while vacuum slices stay dark.">
-        {cut && <div style={{ position: "relative" }}>
-          <ImageCanvas data={cut.image} rows={slicesCount} cols={cut.width} low={data.phaseRange[0]} high={data.phaseRange[1]} cmap="gray" line={[slice + 0.5, 0, slice + 0.5, cut.width]} lineColor={colors.accent} height={wide === 3 ? (depthCanvas ? Math.max(60, imageHeight - 46) : imageHeight + 30) : Math.min(180, Math.round(0.5 * imageHeight))} />
-          <div style={{ ...ON_IMAGE, left: 3, bottom: 1 }}>{plain(cut.lengthA, 0)} Å along the line</div>
-        </div>}
-        {depthCanvas && <>
-          <div style={{ fontSize: TEXT, lineHeight: "16px", marginTop: GAP }}>lattice power ({data.bandPerA.length === 2 ? `${plain(data.bandPerA[0], 2)} to ${plain(data.bandPerA[1], 2)} 1/Å` : "the lattice's band"}), slice × draw</div>
-          <div style={{ position: "relative" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: HAIR }}>
+          {cut && <div style={{ position: "relative" }}>
+            <ImageCanvas data={cut.image} rows={slicesCount} cols={cut.width} low={data.phaseRange[0]} high={data.phaseRange[1]} cmap="gray" line={[slice + 0.5, 0, slice + 0.5, cut.width]} lineColor={colors.accent}
+              height={besideObject ? Math.max(60, imageHeight - (depthCanvas ? stripHeight + HAIR : 0)) : Math.min(180, Math.round(0.5 * imageHeight))} />
+            <div style={{ ...ON_IMAGE, left: 3, top: 1 }}>cut along the line, beam down</div>
+            <div style={{ ...ON_IMAGE, right: 3, bottom: 1 }}>{plain(cut.lengthA, 0)} Å along the line</div>
+          </div>}
+          {depthCanvas && <div style={{ position: "relative" }}>
             <ImageCanvas data={depthCanvas.image} rows={depthCanvas.slices} cols={depthCanvas.draws} low={depthCanvas.low} high={depthCanvas.high} cmap="magma"
-              line={slicesCount ? [slice + 0.5, 0, slice + 0.5, depthCanvas.draws] : undefined} lineColor={colors.accent} height={60}
+              line={slicesCount ? [slice + 0.5, 0, slice + 0.5, depthCanvas.draws] : undefined} lineColor={colors.accent} height={stripHeight}
               overlay={depthIndex >= 0 ? <line x1={depthIndex + 0.5} x2={depthIndex + 0.5} y1={0} y2={depthCanvas.slices} stroke="#fff" strokeWidth={1} strokeDasharray="3 2" opacity={0.7} vectorEffect="non-scaling-stroke" /> : null} />
+            <div style={{ ...ON_IMAGE, left: 3, top: 1 }}>lattice power, each slice over the epochs</div>
             <div style={{ ...ON_IMAGE, right: 3, bottom: 1 }}>epochs {data.depthEpochs[0]}-{data.depthEpochs[data.depthEpochs.length - 1]}</div>
-          </div>
-        </>}
+          </div>}
+        </div>
+        <div style={{ ...foot, color: colors.textMuted }}>{depthCanvas ? `lattice band ${data.bandPerA.length === 2 ? `${plain(data.bandPerA[0], 2)} to ${plain(data.bandPerA[1], 2)} 1/Å` : "of the crystal"}` : ""}</div>
       </Panel>
       <Panel area="probe" title="Probe" hint={<>modes at focus{kept(probe?.epoch)}</>} colors={colors} theme={theme}
         info="The probe's natural (orthogonal) modes at focus, in complex-wave colors (hue the phase, brightness the amplitude), cropped to where their intensity lives, each with its share of the power; beside the strongest, the Fourier-space amplitude (the aperture). Numbers: the radius holding 99 % of the probe's power (r99), its power on the lattice's sites (copies) and beyond 5 Å, each against its pass bar, with its curve over every epoch.">
         <div ref={probeBox}>
           <ProbeView frame={probe?.data} shape={probe?.shape} shares={shares} aperture={apertureFrame ? { data: apertureFrame.data, shape: apertureFrame.shape } : null} size={probeSize} maxWidth={probeWidth} colors={colors}
-            box={[probeWidth, imageHeight]} />
+            box={[probeWidth, wide === 2 ? Math.min(imageHeight, 220) : wide === 1 ? Math.min(imageHeight, probeWidth) : imageHeight]} />
         </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: `0 ${3 * GAP}px`, marginTop: GAP, fontSize: TEXT }}>
+        <div style={foot}>
           {number("r99_A", "probe radius", " Å", 1)}
           {number("copies_percent", "probe copies", " %", 1)}
           {number("far_power_percent", "power beyond 5 Å", " %", 1)}
@@ -1496,6 +1519,11 @@ type TileEnd = {
   score: number | null; imageScore: number | null; refused: string; changes: string; pixelA: number;
 };
 
+// Rows of equal length: the tiles a row for count tiles when a row holds at most most (eight are 4 + 4, never 6 + 2).
+function evenRows(count: number, most: number): number {
+  return Math.max(1, Math.ceil(count / Math.ceil(count / Math.max(1, most))));
+}
+
 function StageTiles({ runs, size, inset = false, fft = false, perRow: fixed, shown, onLook, onPick, colors }: {
   runs: RunData[]; size: number; inset?: boolean; fft?: boolean; perRow?: number; shown?: Stage | null; onLook?: (epoch: number | null) => void; onPick?: (epoch: number) => void; colors: any;
 }) {
@@ -1511,8 +1539,9 @@ function StageTiles({ runs, size, inset = false, fft = false, perRow: fixed, sho
   const best = ends.reduce((found: number, end, index) => (!end.refused && end.score != null && (found < 0 || end.score < ends[found].score!) ? index : found), -1);
   inset = inset || (!fixed && rowWidth < 520);  // a phone: the probe in the projection's corner, so several stages fit a row
   const across = inset ? 1 : fft ? 3 : 2;  // images a tile is wide
-  const perRow = fixed || Math.max(1, Math.min(ends.length, Math.floor(rowWidth / (across * size))));
-  const image = Math.min(fixed ? Infinity : Math.round(size * 1.6), Math.floor(rowWidth / perRow / across));  // the images grow to fill the row, a short row only so far
+  const most = Math.max(1, Math.min(ends.length, Math.floor(rowWidth / (across * size))));  // the stages a row can hold at this size
+  const perRow = fixed || evenRows(ends.length, most);
+  const image = Math.min(fixed ? Infinity : Math.round(size * 2), Math.floor(rowWidth / perRow / across));  // the images grow to fill the row, a short row only so far
   return (
     <div ref={row} style={{ display: "flex", flexWrap: "wrap", gap: 0 }} onMouseLeave={onLook ? () => onLook(null) : undefined}>
       {ends.map((end, index) => {
@@ -1573,9 +1602,10 @@ function ReportView() {
   const [title] = useModelState<string>("title");
   const [size, setSize] = useModelState<ViewSize>("size");
   const engineContext = useEngine(false);
+  const [reportBox, reportWidth] = useWidth(1000);
   return (
     <Engine.Provider value={engineContext}>
-    <div style={header(colors)}>
+    <div ref={reportBox} style={header(colors)}>
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: GAP, lineHeight: "18px", marginBottom: GAP }}>
         <span style={{ flex: "1 1 200px", minWidth: 0 }}><b style={{ fontSize: 13 }}>What each stage bought</b><span style={{ color: colors.textMuted }}> · {title}</span></span>
         <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: GAP }}>
@@ -1583,7 +1613,7 @@ function ReportView() {
           <InfoTooltip theme={theme} toggleOnClick text={"One tile a run, in the order they ran: its projected phase and strongest probe mode at its end (hue the phase, brightness the amplitude; at small the probe sits in the projection's corner). Top-left its name; bottom-left its held-out score (lower is better) and the change against the run it continued from (▼ better, ▲ worse); above it its image score (repetition × detail of the projected phase, higher is better) and its change; top-right ★ the best kept run, ✓ kept, ▲ worse than its start, ✕ tried and refused (dimmed), and ≠ when held-out and image score move in opposite directions. Each tile: the projected phase, its spectrum (the dashed ring at 50 pm), the strongest probe mode. Hover a tile for its numbers and settings. ptycho(\"name\") shows a run's view; ptycho.report(table=True) gives the numbers."} />
         </span>
       </div>
-      <StageTiles runs={runs} size={110} inset={size === "small"} fft perRow={size === "large" ? 1 : size === "medium" ? 2 : undefined} colors={colors} />
+      <StageTiles runs={runs} size={110} inset={size === "small"} fft perRow={size === "small" ? undefined : evenRows(runs.length, size === "large" ? (reportWidth >= 1000 ? 2 : 1) : reportWidth >= 1000 ? 4 : 2)} colors={colors} />
     </div>
     </Engine.Provider>
   );
