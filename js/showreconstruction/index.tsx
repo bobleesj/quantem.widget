@@ -1096,8 +1096,9 @@ function ModeTile({ mode, size, label, outline }: { mode: ModeImage; size: numbe
 
 // The probe as a panel, sized with the object: its strongest mode at size (complex-wave colors, its share), its
 // Fourier-space amplitude (the aperture) at size beside it, and the other modes in three rows at a third of size.
-function ProbeView({ frame, shape, shares, aperture, size: wanted, maxWidth, label, colors, box }: {
+function ProbeView({ frame, shape, shares, aperture, size: wanted, maxWidth, label, colors, box, largest }: {
   frame?: Float32Array; shape?: number[]; shares?: number[]; aperture?: { data: Float32Array; shape: number[] } | null; size: number; maxWidth?: number; label?: string; colors: any;
+  largest?: number;  // with box: the large mode and the aperture never drawn above this (the probe stays smaller than the object beside it); the thumbnails grow to fill what is left
   box?: [number, number];  // fill this width × height: one mode as large as it allows (with the aperture beside it when the box is wide), every mode a thumbnail under it; hover a thumbnail to see it large
 }) {
   const modes = React.useMemo(() => probeModes(frame, shape), [frame, shape?.join()]);
@@ -1117,7 +1118,28 @@ function ProbeView({ frame, shape, shares, aperture, size: wanted, maxWidth, lab
     </div>) : null;
   if (box && box[0] >= 60 && box[1] >= 60) {
     const [width, height] = box;
-    const pair = !!aperture && width >= 1.5 * height;  // room for the aperture beside the mode at full height
+    const pair = !!aperture && (largest ? width >= 1.6 * Math.min(largest, height) : width >= 1.5 * height);  // room for the aperture beside the mode
+    if (largest && pair) {  // the mode and the aperture side by side, no larger than asked; the modes under them in the rows that draw them largest
+      const large = Math.max(40, Math.min(largest, Math.floor((width - HAIR) / 2), height - 40));
+      let fill = 0;
+      for (let rowsCount = 1; rowsCount <= 4; rowsCount++) {
+        const across = Math.ceil(modes.length / rowsCount);
+        fill = Math.max(fill, Math.min(Math.floor((width + HAIR) / across) - HAIR, Math.floor((height - large - HAIR + HAIR) / rowsCount) - HAIR, large));
+      }
+      fill = Math.max(20, fill);
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: HAIR, width, flex: "none" }} onMouseLeave={() => setLooking(null)}>
+          <div style={{ display: "flex", gap: HAIR }}>
+            <ModeTile mode={modes[looked]} size={large} label={`${label ? `${label} · ` : ""}mode ${looked + 1} · ${share(looked)}`} />
+            {apertureTile(large)}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: HAIR }}>
+            {modes.map((mode, index) => <div key={index} onMouseEnter={() => setLooking(index)} title={`mode ${index + 1} · ${share(index)}`} style={{ cursor: "zoom-in" }}>
+              <ModeTile mode={mode} size={fill} outline={looked === index ? colors.accent : undefined} label={fill >= 40 ? `${index + 1} · ${share(index)}` : `${index + 1}`} /></div>)}
+          </div>
+        </div>
+      );
+    }
     const thumbs = modes.length + (aperture && !pair ? 1 : 0);
     const thumb = Math.max(20, Math.min(56, Math.floor((width + HAIR) / Math.min(thumbs, 8)) - HAIR));
     const perRow = Math.max(1, Math.floor((width + HAIR) / (thumb + HAIR)));
@@ -1482,18 +1504,30 @@ function DetailGrid({ data, epoch, previewing, sliceIndex, setSliceIndex, savedL
     : value != null && value !== epoch ? <span style={muted}> kept epoch {value}</span> : null;
   const large = size === "large";
   const wide = width >= 900 ? (large ? 2 : 3) : width >= 520 ? 2 : 1;  // large: the object and the probe share the first row, the depth spans the next
-  // the object first, then the depth cut, then the probe: in that order across a row and down a phone. The three share
-  // one image height; the object's column is exactly its image, the others share what is left, so no panel holds a band.
-  const areas = wide === 3 ? `"object depth probe"` : wide === 2 ? `"object depth" "probe probe"` : `"object" "depth" "probe"`;
+  // Left: the object's projection (or a slice) with the depth cut under it at the same width. Middle: the slices kept, a
+  // grid to pick from. Right: the probe. One height for the three; curves and charts go under them. The object's column
+  // is exactly its image and the slices' column exactly its grid, so no panel holds a band.
   const aspect = (shown.rows || 1) / (shown.cols || 1);
   const imageHeight = Math.max(80, wide === 1 ? Math.min(bySize(size, 260, 420, 560), Math.floor((width - 26) * aspect))
-    : Math.min(bySize(size, 180, 300, 560), Math.floor((width / wide - 26) * aspect)));
-  const objectColumn = Math.round(imageHeight / aspect) + 12;  // the image and the panel's padding
-  const columns3 = wide === 1 ? "minmax(0, 1fr)" : wide === 2 ? `minmax(0, ${objectColumn}px) minmax(0, 1fr)` : `minmax(0, ${objectColumn}px) minmax(0, 1fr) minmax(0, 1fr)`;  // minmax(0, ...): a fixed column would hold the view at its old width when the window narrows
-  const FOOT = 24;  // one line under each panel's picture: the object's switches, the depth's band, the probe's numbers
+    : wide === 3 ? Math.round(Math.max(0.6, Math.min(1.4, (width - 60) / 3.05 / bySize(size, 180, 300, 520))) * bySize(size, 180, 300, 520))  // object, slices and probe fill the row: the object grows with the view, within 0.6 to 1.4 of its preset
+    : Math.min(bySize(size, 180, 300, 520), Math.floor((width / wide - 26) * aspect)));
+  const imageWidth = Math.round(imageHeight / aspect);
+  const cutHeight = cut ? Math.max(48, Math.round(0.3 * imageHeight)) : 0, stripHeight = depthCanvas ? 40 : 0;
+  const tall = imageHeight + (cutHeight ? cutHeight + HAIR : 0) + (stripHeight ? stripHeight + HAIR : 0);  // the object's pictures, top to bottom: every panel's height
+  const gridSlices = slicePositions.length <= 9 ? slicePositions : Array.from({ length: 9 }, (_, index) => slicePositions[Math.round(index * (slicePositions.length - 1) / 8)]);  // at most nine, evenly through the slab
+  const gridRows = wide === 1 ? Math.ceil(gridSlices.length / 3) : Math.min(3, gridSlices.length);
+  const gridCols = Math.max(1, Math.ceil(gridSlices.length / Math.max(1, gridRows)));
+  const tile = wide === 1 ? Math.floor((width - 26 - (gridCols - 1) * HAIR) / gridCols) : Math.floor((tall - (gridRows - 1) * HAIR) / Math.max(1, gridRows));
+  const tileWidth = Math.round(tile / aspect);
+  const hasSlices = gridSlices.length > 0;
+  const objectColumn = imageWidth + 12, slicesColumn = gridCols * tileWidth + (gridCols - 1) * HAIR + 12;  // the pictures and the panel's padding
+  const areas = wide === 1 ? [`"object"`, hasSlices && `"slices"`, `"probe"`].filter(Boolean).join(" ")
+    : wide === 2 ? (hasSlices ? `"object slices" "probe probe"` : `"object probe"`) : hasSlices ? `"object slices probe"` : `"object probe"`;
+  const columns3 = wide === 1 ? "minmax(0, 1fr)" : wide === 2 ? `minmax(0, ${objectColumn}px) minmax(0, 1fr)`
+    : hasSlices ? `minmax(0, ${objectColumn}px) minmax(0, ${slicesColumn}px) minmax(0, 1fr)` : `minmax(0, ${objectColumn}px) minmax(0, 1fr)`;  // minmax(0, ...): a fixed column would hold the view at its old width when the window narrows
+  const FOOT = 24;  // one line under each panel's pictures: the object's switches, the slices' depth, the probe's numbers
   const foot: React.CSSProperties = { display: "flex", flexWrap: "wrap", alignItems: "center", gap: `0 ${3 * GAP}px`, minHeight: FOOT, marginTop: HAIR, fontSize: TEXT, overflow: "hidden" };
-  const besideObject = wide > 1;  // the depth panel stands beside the object and ends where it ends
-  const stripHeight = 56;
+  const sliceAt = (position: number) => (volume ? volume.data.subarray(position * rows * cols, (position + 1) * rows * cols) : keptList.find((item) => item.slice === position)?.data || EMPTY_FRAME);
   const probeSize = imageHeight;  // sized with the object, narrowed by ProbeView to its panel
   const number = (key: string, name: string, unit: string, digits: number) => {  // the probe's health as numbers at the epoch shown, no small plots
     const now = recordAt(data.records, epoch, key);
@@ -1505,11 +1539,22 @@ function DetailGrid({ data, epoch, previewing, sliceIndex, setSliceIndex, savedL
       <Panel area="object" title="Object" colors={colors} theme={theme}
         hint={<>{projecting ? "projection" : `slice ${slice + 1}/${slicesCount}${sliceRange(slice)}`}{kept(shown.epoch)}</>}
         info="The phase of one slice, or the projected phase. Drag the line or its ends; an end dropped near a column snaps to it, and the line is saved with the notebook. Drag elsewhere on the image to take the spectrum of a square region. Rings: the atomic columns found, tan heavy and blue-gray light; ticks on the profile mark where the line passes one. Spectrum: Hann-windowed power, log scale, ±2.6 1/Å, the dashed ring at 50 pm. Slices are kept at each run's end.">
-        <div style={{ display: "flex" }}>
+        <div style={{ display: "flex", justifyContent: "center" }}>
           <FieldView data={shown.data} rows={shown.rows} cols={shown.cols} low={shown.low} high={shown.high} pixelA={data.pixelA} height={imageHeight}
             line={line} editLine={!projecting && !!volume} onDragLine={setDragLine} onLine={setSavedLine} peaks={columns} showPeaks={showPeaks} region={region} onRegion={setRegion} colors={colors}
             inset={<SpectrumInset spectrum={spectrum} side={imageHeight} label={region ? `${plain(region.size * data.pixelA, 0)} Å box` : "whole field"} />} />
         </div>
+        {cut && <div style={{ position: "relative", width: imageWidth, maxWidth: "100%", margin: `${HAIR}px auto 0` }} title="the volume cut along the line through every slice, the beam entering at the top; the accent line marks the slice shown">
+          <ImageCanvas data={cut.image} rows={slicesCount} cols={cut.width} low={data.phaseRange[0]} high={data.phaseRange[1]} cmap="gray" line={[slice + 0.5, 0, slice + 0.5, cut.width]} lineColor={colors.accent} height={cutHeight} />
+          <div style={{ ...ON_IMAGE, left: 3, top: 1 }}>depth, beam down · {slicesCount} slices{data.sliceA ? ` of ${plain(data.sliceA, 1)} Å` : ""}</div>
+          <div style={{ ...ON_IMAGE, right: 3, bottom: 1 }}>{plain(cut.lengthA, 0)} Å along the line</div>
+        </div>}
+        {depthCanvas && <div style={{ position: "relative", width: imageWidth, maxWidth: "100%", margin: `${HAIR}px auto 0` }} title={`lattice power (${data.bandPerA.length === 2 ? `${plain(data.bandPerA[0], 2)} to ${plain(data.bandPerA[1], 2)} 1/Å` : "the lattice's band"}) of each slice (down) at each draw (across): the specimen's faces form while vacuum slices stay dark; the dashed line the epoch shown`}>
+          <ImageCanvas data={depthCanvas.image} rows={depthCanvas.slices} cols={depthCanvas.draws} low={depthCanvas.low} high={depthCanvas.high} cmap="magma"
+            line={slicesCount ? [slice + 0.5, 0, slice + 0.5, depthCanvas.draws] : undefined} lineColor={colors.accent} height={stripHeight}
+            overlay={depthIndex >= 0 ? <line x1={depthIndex + 0.5} x2={depthIndex + 0.5} y1={0} y2={depthCanvas.slices} stroke="#fff" strokeWidth={1} strokeDasharray="3 2" opacity={0.7} vectorEffect="non-scaling-stroke" /> : null} />
+          <div style={{ ...ON_IMAGE, left: 3, top: 1 }}>lattice power, slices over epochs {data.depthEpochs[0]}-{data.depthEpochs[data.depthEpochs.length - 1]}</div>
+        </div>}
         <div style={foot}>
           {(volume || fromEnds) && <Box sx={{ display: "flex" }}>{toggleButton(!projecting, "Slice", () => setShowProjection(false))}{toggleButton(projecting, "Projection", () => setShowProjection(true))}</Box>}
           {columns.length > 0 && switchControl("Columns", showPeaks, () => setShowPeaks(!showPeaks), "Rings on the atomic columns found", colors)}
@@ -1521,30 +1566,24 @@ function DetailGrid({ data, epoch, previewing, sliceIndex, setSliceIndex, savedL
         {!projecting && <LineChart series={[{ name: "on the line", color: HUES[0], points: profileAlong(sliceData, rows, cols, line || [], data.pixelA) }]} stages={[]} cursor={null}
           height={70} xLabel="Å along the line" yLabel="rad" colors={colors} legend={false} marks={showPeaks ? crossings : []} />}
       </Panel>
-      <Panel area="depth" title="Depth" hint={<>{slicesCount ? `${slicesCount} slices${data.sliceA ? ` of ${plain(data.sliceA, 1)} Å` : ""}` : "no volume kept"}{kept(volume?.epoch)}</>} colors={colors} theme={theme}
-        info="Top: the volume cut along the line through every slice, the beam entering at the top; the accent line marks the slice shown. Bottom: lattice power per slice (down) against draw (across), the accent line at the slice shown, the dashed line at the epoch shown; the specimen's faces form while vacuum slices stay dark.">
-        <div style={{ display: "flex", flexDirection: "column", gap: HAIR }}>
-          {cut && <div style={{ position: "relative" }}>
-            <ImageCanvas data={cut.image} rows={slicesCount} cols={cut.width} low={data.phaseRange[0]} high={data.phaseRange[1]} cmap="gray" line={[slice + 0.5, 0, slice + 0.5, cut.width]} lineColor={colors.accent}
-              height={besideObject ? Math.max(60, imageHeight - (depthCanvas ? stripHeight + HAIR : 0)) : Math.min(180, Math.round(0.5 * imageHeight))} />
-            <div style={{ ...ON_IMAGE, left: 3, top: 1 }}>cut along the line, beam down</div>
-            <div style={{ ...ON_IMAGE, right: 3, bottom: 1 }}>{plain(cut.lengthA, 0)} Å along the line</div>
-          </div>}
-          {depthCanvas && <div style={{ position: "relative" }}>
-            <ImageCanvas data={depthCanvas.image} rows={depthCanvas.slices} cols={depthCanvas.draws} low={depthCanvas.low} high={depthCanvas.high} cmap="magma"
-              line={slicesCount ? [slice + 0.5, 0, slice + 0.5, depthCanvas.draws] : undefined} lineColor={colors.accent} height={stripHeight}
-              overlay={depthIndex >= 0 ? <line x1={depthIndex + 0.5} x2={depthIndex + 0.5} y1={0} y2={depthCanvas.slices} stroke="#fff" strokeWidth={1} strokeDasharray="3 2" opacity={0.7} vectorEffect="non-scaling-stroke" /> : null} />
-            <div style={{ ...ON_IMAGE, left: 3, top: 1 }}>lattice power, each slice over the epochs</div>
-            <div style={{ ...ON_IMAGE, right: 3, bottom: 1 }}>epochs {data.depthEpochs[0]}-{data.depthEpochs[data.depthEpochs.length - 1]}</div>
-          </div>}
+      {hasSlices && <Panel area="slices" title="Slices" hint={gridSlices.length < slicesCount ? `${gridSlices.length} of ${slicesCount}, through the slab` : `${slicesCount} through the slab`} colors={colors} theme={theme}
+        info="Slices of the object through the slab, the beam's entrance first, on one display range. Click one to see it large on the left (the accent frame marks it); Projection on the left goes back to the projected phase. A saved notebook keeps three slices of the newest run and the middle one of earlier runs; the running kernel keeps every slice, and up to nine are drawn here.">
+        <div style={{ display: "grid", gridAutoFlow: wide === 1 ? "row" : "column", gridTemplateRows: wide === 1 ? undefined : `repeat(${gridRows}, ${tile}px)`,
+          gridTemplateColumns: wide === 1 ? `repeat(${gridCols}, ${tileWidth}px)` : undefined, gap: HAIR }}>
+          {gridSlices.map((position) => (
+            <div key={position} onClick={() => { setSliceIndex(position); setShowProjection(false); }} title={`slice ${position + 1} of ${slicesCount}${sliceRange(position)}: click to see it large`}
+              style={{ position: "relative", width: tileWidth, height: tile, cursor: "pointer", background: "#000", outline: !projecting && position === slice ? `2px solid ${colors.accent}` : "none", outlineOffset: -2 }}>
+              <ImageCanvas data={sliceAt(position)} rows={rows} cols={cols} low={data.phaseRange[0]} high={data.phaseRange[1]} cmap="gray" height={tile} keepAspect />
+              <div style={{ ...ON_IMAGE, ...PLATE, left: 2, bottom: 2, fontSize: tile >= 110 ? TEXT : 10 }}>{position + 1}/{slicesCount}{tile >= 110 && data.sliceA ? ` · ${plain(position * data.sliceA, 0)}-${plain((position + 1) * data.sliceA, 0)} Å` : ""}</div>
+            </div>))}
         </div>
-        <div style={{ ...foot, color: colors.textMuted }}>{depthCanvas ? `lattice band ${data.bandPerA.length === 2 ? `${plain(data.bandPerA[0], 2)} to ${plain(data.bandPerA[1], 2)} 1/Å` : "of the crystal"}` : ""}</div>
-      </Panel>
+        <div style={{ ...foot, color: colors.textMuted }}>click a slice to see it large</div>
+      </Panel>}
       <Panel area="probe" title="Probe" hint={<>modes at focus{kept(probe?.epoch)}</>} colors={colors} theme={theme}
         info="The probe's natural (orthogonal) modes at focus, in complex-wave colors (hue the phase, brightness the amplitude), cropped to where their intensity lives, each with its share of the power; beside the strongest, the Fourier-space amplitude (the aperture). Numbers: the radius holding 99 % of the probe's power (r99), its power on the lattice's sites (copies) and beyond 5 Å, each against its pass bar, with its curve over every epoch.">
         <div ref={probeBox}>
           <ProbeView frame={probe?.data} shape={probe?.shape} shares={shares} aperture={apertureFrame ? { data: apertureFrame.data, shape: apertureFrame.shape } : null} size={probeSize} maxWidth={probeWidth} colors={colors}
-            box={[probeWidth, wide === 2 ? Math.min(imageHeight, 220) : wide === 1 ? Math.min(imageHeight, probeWidth) : imageHeight]} />
+            box={[probeWidth, wide === 3 || (wide === 2 && !hasSlices) ? tall : wide === 2 ? Math.min(tall, 260) : Math.min(imageHeight, probeWidth)]} largest={Math.round(0.8 * imageHeight)} />
         </div>
         <div style={foot}>
           {number("r99_A", "probe radius", " Å", 1)}
