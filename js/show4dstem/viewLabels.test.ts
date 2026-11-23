@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diffractionPositionLabel, SCALE_BAR_CORNER, isLiveFrame, keptScanCount, positionLabelAnchor, shortScanName, splitLiveFrameTitle, sourcePathForView, titleNamesScan, virtualImageGridLabel } from "./viewLabels";
+import { diffractionPositionLabel, SCALE_BAR_CORNER, isLiveFrame, keptScanCount, positionLabelAnchor, retainedComparisonTitle, shortScanName, splitLiveFrameTitle, sourcePathForView, titleNamesScan, virtualImageGridLabel } from "./viewLabels";
 import shortScanNameExamples from "./shortScanName.examples.json";
 
 describe("viewer labels", () => {
@@ -11,6 +11,15 @@ describe("viewer labels", () => {
     });
     expect(splitLiveFrameTitle("Live · series_10 · 1,024/16,384")).toBeNull();
     expect(splitLiveFrameTitle("Waiting for acquisition")).toBeNull();
+  });
+
+  it("labels a retained comparison independently of the dismissed Live frame", () => {
+    const live = "Live · frame 5000002 · 65,536/65,536";
+    const go = "Live · 4 · 192/65,536 · 3 kept";
+    expect(retainedComparisonTitle(live, true)).toBe("Retained scans");
+    expect(retainedComparisonTitle(live, false)).toBe(live);
+    expect(retainedComparisonTitle(go, true)).toBe(go);
+    expect(retainedComparisonTitle("Calibrated scans", true)).toBe("Calibrated scans");
   });
 
   it("shows the retained full field while Region waits for its own geometry", () => {

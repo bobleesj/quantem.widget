@@ -5,7 +5,7 @@ import { captureGpuCanvas } from "./captureGpuCanvas";
 import { createLatestFrameQueue } from "./latestFrameQueue";
 import { chosenFrameIndex, createScanChoice } from "./scanChoice";
 import { formatDose, formatMean, formatStat, hasImageStats } from "./statText";
-import { diffractionPositionLabel, isLiveFrame, keptScanCount, positionLabelAnchor, shortScanName, splitLiveFrameTitle, sourcePathForView, titleNamesScan, virtualImageGridLabel, type PreviewSource } from "./viewLabels";
+import { diffractionPositionLabel, isLiveFrame, keptScanCount, positionLabelAnchor, retainedComparisonTitle, shortScanName, splitLiveFrameTitle, sourcePathForView, titleNamesScan, virtualImageGridLabel, type PreviewSource } from "./viewLabels";
 import { createLiveImage, positionIndices, positionValues, type PositionsMessage } from "./liveImagePositions";
 import {
   CONTRAST_PERCENTILES, chosenPercentiles, contrastRangeChoice, handlePositions, percentilesLabel,
@@ -8803,7 +8803,7 @@ function Show4DSTEM() {
     : `Live · ${shortScanName(activePreview.scan)}`);
   const canNamePreview = !title || title === "Waiting for acquisition" || title.startsWith("Live · ");
   const displayedTitle = canNamePreview && previewTitle && title !== previewTitle && !title?.startsWith(`${previewTitle} · `)
-    ? previewTitle : title || "4D-STEM Explorer";
+    ? previewTitle : retainedComparisonTitle(title || "4D-STEM Explorer", compareMode && !preview);
   const shownSource = streamSourceIds[frameIdx];
   const retainedMatches = sourceSelection == null || sourceSelection === (shownSource ?? "");
   const displayedSource = sourcePathForView(preview, previewSource, sourceFolder, sourceFile, retainedMatches, {
@@ -8814,7 +8814,8 @@ function Show4DSTEM() {
   const headingText = embedded && displayedTitle.startsWith("Live · ")
     ? displayedTitle.replace(" ✓", "") : displayedTitle;
   const liveFrameTitle = React.useMemo(() => splitLiveFrameTitle(headingText), [headingText]);
-  const renderPathInHelp = embedded && (streaming || displayedTitle.startsWith("Live · ") || displayedTitle === "Waiting for acquisition");
+  const renderPathInHelp = compareMode || (embedded && (streaming
+    || displayedTitle.startsWith("Live · ") || displayedTitle === "Waiting for acquisition"));
   const titleHeading = React.useMemo(() => (
     showTitle && <Typography variant="h6" sx={{ ...themedTypography.title, mb: `${SPACING.SM}px`, display: "flex", flexWrap: liveFrameTitle ? "wrap" : "nowrap", alignItems: "center", minWidth: 0 }}>
       <Box component="span" title={[displayedTitle, displayedSource].filter(Boolean).join("\n")}

@@ -20,6 +20,11 @@ export function splitLiveFrameTitle(title: string): { frame: string; detail: str
   return match ? { frame: match[1], detail: match[2] } : null;
 }
 
+/** A stopped transient frame cannot label a retained comparison. */
+export function retainedComparisonTitle(title: string, showingRetainedComparison: boolean): string {
+  return showingRetainedComparison && splitLiveFrameTitle(title) ? "Retained scans" : title;
+}
+
 /** The region map shows its retained full field until a regional image arrives. */
 export function virtualImageGridLabel(
   rows: number, cols: number, regionMapSize: number | null, showingRegion: boolean,
