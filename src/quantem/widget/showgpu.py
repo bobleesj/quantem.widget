@@ -13,6 +13,20 @@ import psutil
 import traitlets
 
 
+def labels_from_environment(value: str | None = None) -> dict[str, str]:
+    """GPU card names from ``QUANTEM_GPU_LABELS``: ``"0=Host GPU 2 · stream;1=..."``, keyed by the index this
+    process sees. A container given one physical GPU sees it as 0; its label names the physical one.
+
+    >>> labels_from_environment("0=Host GPU 2 · stream (this notebook)")
+    {'0': 'Host GPU 2 · stream (this notebook)'}
+    >>> labels_from_environment("")
+    {}
+    """
+    text = os.environ.get("QUANTEM_GPU_LABELS", "") if value is None else value
+    pairs = (item.split("=", 1) for item in text.split(";") if "=" in item)
+    return {index.strip(): label.strip() for index, label in pairs if index.strip() and label.strip()}
+
+
 def sample(*, users: bool = True) -> dict:
     """Collect driver telemetry and host memory, without allocating GPU arrays."""
     try:
@@ -115,6 +129,10 @@ class ShowGPU(anywidget.AnyWidget):
 
     Parameters
     ----------
+    labels : dict, optional
+        A name per GPU index, shown on its card instead of "GPU <index>" with an accent border and a role badge
+        when the name says compute, ptychography or stream (``{0: "Host GPU 0 · ptychography (this
+        notebook)"}``). Default: ``QUANTEM_GPU_LABELS`` (``"0=...;1=..."``), as a GPU host's kernel sets it.
     users : bool, default True
         Show compute users, their reported VRAM and process counts per GPU.
         Expand a user to inspect process names, IDs and individual VRAM use.
@@ -161,6 +179,7 @@ class ShowGPU(anywidget.AnyWidget):
     size = traitlets.Enum(
         ["small", "medium", "large", "xlarge"], default_value="medium"
     ).tag(sync=True)
+    labels = traitlets.Dict().tag(sync=True)
 
     def __init__(
         self,
@@ -170,6 +189,7 @@ class ShowGPU(anywidget.AnyWidget):
         size: Literal["small", "medium", "large", "xlarge"] = "medium",
         interval: float = 1.0,
         running: bool = True,
+        labels: dict | None = None,
     ) -> None:
         self._stop = threading.Event()
         self._sample_lock = threading.Lock()
@@ -184,7 +204,8 @@ class ShowGPU(anywidget.AnyWidget):
         self._activity = []
         self._terminating = {}
         super().__init__(
-            users=users, expand=expand, size=size, interval=interval, running=running
+            users=users, expand=expand, size=size, interval=interval, running=running,
+            labels=labels_from_environment() if labels is None else {str(key): str(value) for key, value in labels.items()},
         )
         self.on_msg(self.handle_message)
         self.refresh()

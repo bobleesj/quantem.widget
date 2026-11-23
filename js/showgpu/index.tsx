@@ -67,6 +67,14 @@ export function gib(value: number | null | undefined): string {
   return value == null || !Number.isFinite(value) ? "unavailable" : `${(value / 2 ** 30).toFixed(1)} GiB`;
 }
 
+/** A card's role badge from its label (an operator-set name): what the GPU is for. */
+function roleOf(label?: string): string | null {
+  const text = (label ?? "").toLowerCase();
+  if (text.includes("ptychography") || text.includes("compute")) return "COMPUTE";
+  if (text.includes("stream")) return "STREAM";
+  return null;
+}
+
 function reading(value: number | null, unit: string): string {
   return value == null ? "unavailable" : `${Math.round(value)}${unit}`;
 }
@@ -100,6 +108,7 @@ function ShowGPUView() {
   const [interval] = useModelState<number>("interval");
   const [users, setUsers] = useModelState<boolean>("users");
   const [expand] = useModelState<boolean>("expand");
+  const [labels] = useModelState<Record<string, string>>("labels");
   const [size, setSize] = useModelState<DisplaySize>("size");
   const [actionStatus] = useModelState<{ message?: string; error?: boolean; busy?: boolean }>("action_status");
   const [confirmation, setConfirmation] = React.useState<{ message: string; command: Record<string, unknown> } | null>(null);
@@ -184,9 +193,11 @@ function ShowGPUView() {
     {snapshot?.error && <div role="status" style={{ marginBottom: 8 }}>{snapshot.error}</div>}
     {users && snapshot?.process_error && <div role="status" style={{ marginBottom: 8 }}>{snapshot.process_error}</div>}
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 20em), 1fr))", gap: 8 }}>
-      {gpus.map(gpu => <div key={gpu.uuid} style={card} data-testid={`gpu-${gpu.index}`}>
+      {gpus.map(gpu => { const label = labels?.[String(gpu.index)]; const role = roleOf(label);
+        return <div key={gpu.uuid} style={label ? { ...card, outline: `2px solid ${colors.accent}` } : card} data-testid={`gpu-${gpu.index}`}>
         <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
-          <strong style={{ whiteSpace: "nowrap" }}>GPU {gpu.index}</strong>
+          <strong style={{ whiteSpace: "nowrap" }}>{label ?? `GPU ${gpu.index}`}</strong>
+          {role && <span data-testid={`gpu-${gpu.index}-role`} style={{ background: colors.accent, color: colors.bg, borderRadius: 3, padding: "0 6px", fontSize: "0.85em", fontWeight: 600, whiteSpace: "nowrap" }}>{role}</span>}
           <span title={`${gpu.name} · ${gpu.uuid} · ${gpu.pci_bus_id}`} style={{ color: colors.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{gpu.name}</span>
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
@@ -232,7 +243,7 @@ function ShowGPUView() {
                 </table>}
             </details>)}
         </div>}
-      </div>)}
+      </div>; })}
       <div style={card} data-testid="system-memory">
         <strong>System RAM</strong>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
