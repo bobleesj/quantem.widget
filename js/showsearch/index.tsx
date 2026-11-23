@@ -517,6 +517,16 @@ function ShowSearch() {
   const lastKept = [...(stages || [])].reverse().find((stage) => stage.verdict === "kept");
   const chosenGroup = byKey.get(selected || "");
   const codeLine = chosenGroup && code ? code.replace("{name}", chosenGroup.landed) : "";
+  // Stop: a running cell takes no widget message, so the button interrupts its own notebook's kernel the way
+  // JupyterLab's toolbar does (11-23, the operator: "a quit that halts and releases all the memory"); the search then closes
+  // its workers and gives its GPU memory back, and says so under the cell.
+  const [stopping, setStopping] = React.useState("");
+  const stop = () => {
+    const panel = root.current?.closest(".jp-NotebookPanel");
+    const interrupt = panel?.querySelector('[data-command="notebook:interrupt-kernel"]') as HTMLElement | null;
+    if (interrupt) { interrupt.click(); setStopping("stopping…"); }
+    else setStopping("use the toolbar's ■ (interrupt) to stop");
+  };
 
   return (
     <Engine.Provider value={engine}>
@@ -529,6 +539,8 @@ function ShowSearch() {
                 style={{ border: `1px solid ${colors.border}`, marginLeft: -1, background: middle === each ? colors.accent : "transparent", color: middle === each ? "#fff" : colors.textMuted,
                   fontSize: 10, lineHeight: "16px", padding: "0 5px", cursor: "pointer" }}>{each}×</button>)}
             </span>
+            {live && <button type="button" onClick={stop} disabled={stopping === "stopping…"} title="stop Auto now: interrupts this notebook's kernel; the workers close and the GPU memory is given back (what has landed stays saved)"
+              style={{ border: `1px solid ${colors.border}`, background: "transparent", color: "#d9534f", fontSize: 10, lineHeight: "16px", padding: "0 6px", borderRadius: 3, cursor: "pointer" }}>{stopping || "■ stop"}</button>}
             <button type="button" aria-pressed={display.open} onClick={() => setDisplay({ ...display, open: !display.open })} title="candidate size, how many cards, the charts"
               style={{ border: `1px solid ${colors.border}`, background: display.open ? colors.accent : "transparent", color: display.open ? "#fff" : colors.textMuted, fontSize: 10, lineHeight: "16px", padding: "0 6px", borderRadius: 3, cursor: "pointer" }}>display</button>
             <SizeControl size={size} onSize={setSize} colors={colors} /></span>
