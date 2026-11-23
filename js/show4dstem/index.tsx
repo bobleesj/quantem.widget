@@ -9418,7 +9418,7 @@ function Show4DSTEM() {
         <Box sx={{ ...controlRow, columnGap: `${SPACING.XS}px`, rowGap: "2px", ...(embedded ? { mb: `${SPACING.XS}px`, flexWrap: "nowrap" } : { mt: `${SPACING.XS}px` }), border: `1px solid ${themeColors.border}`, bgcolor: themeColors.controlBg }}>
           <Typography sx={{ ...themedTypography.label, fontSize: 10, flexShrink: 0 }}>View</Typography>
           <Select
-            value={viewMode}
+            value={showingLivePreview ? "single" : viewMode}
             onChange={(event) => { dismissFrozenLive(); setViewMode(String(event.target.value)); }}
             size="small"
             inputProps={{ "aria-label": "Show4DSTEM view mode" }}

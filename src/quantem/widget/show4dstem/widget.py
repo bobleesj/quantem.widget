@@ -1256,12 +1256,22 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         """While a scan arrives (``live_phase_preview`` names it) the page draws it from its rows and positions, so
         refresh() does not send the whole image: at 2048 x 2048 that was 17 MB four times a second, 70 MB/s the page
         decoded for nothing (11-17). When the scan is no longer drawn live, its whole image goes once."""
-        if not change["old"] or change["new"]:
+        old = change["old"]
+        if not old or change["new"]:
             return
-        if (self.vi_source == "Direct" and self.live_phase_stream
-                and live_frame_number(change["old"].get("scan")) is not None):
+        frame = live_frame_number(old.get("scan"))
+        live_heading = ["Live", f"frame {frame}"]
+        if old.get("frozen") and frame is not None and self.title.split(" · ", 2)[:2] == live_heading:
+            # Choosing the same Multiple setting does not change the selected dataset.
+            # Refresh its heading explicitly when the stopped frame leaves the view.
+            if self._stream_follower is not None and self.stream_error is None:
+                self._stream_follower.update_title()
+            if self.title.split(" · ", 2)[:2] == live_heading:
+                kept = any(live_frame_number(label) is None for label in self.frame_labels)
+                self.title = "Retained scans" if kept else "No retained scans"
+        if self.vi_source == "Direct" and self.live_phase_stream and frame is not None:
             return
-        if (self.vi_source in (change["old"].get("images") or ())
+        if (self.vi_source in (old.get("images") or ())
                 and self.vi_source not in self._vi_product_maps):
             self.vi_source = "roi"  # An interrupted scan may never attach the chosen live image.
         elif self._data is not None and not self._multiple_view_active():

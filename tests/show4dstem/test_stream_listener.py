@@ -1301,6 +1301,35 @@ def test_live_titles_name_the_scan_short_and_a_live_frame_by_number(recording):
         viewer.close()
 
 
+def test_dismissing_frozen_live_restores_title_in_the_same_multiple_view(recording):
+    """Choosing Multiple can leave the selected index and acquisition counts unchanged."""
+    recording.acquisitions[:] = [LiveScan(f"series_{number}") for number in range(1, 4)]
+    viewer = Show4DSTEM.stream(recording, view_mode="multiple", compare_dp_mode="average")
+    try:
+        viewer.refresh_stream()
+        retained_title = viewer.title
+        frame = viewer.frame_idx
+        stopped = {"scan": "live_5000006", "frozen": True}
+        live_title = "Live · frame 5000006 · 65,536/65,536"
+        viewer.live_phase_preview = {"scan": stopped["scan"]}
+        viewer.title = live_title
+        viewer.live_phase_preview = stopped
+        assert viewer.title == live_title
+
+        viewer.live_phase_preview = {}
+        assert viewer.title == retained_title
+        assert viewer.frame_idx == frame
+        assert viewer.view_mode == "multiple" and viewer.compare_dp_mode == "average"
+
+        viewer.live_phase_preview = stopped
+        go_title = "Live · 4 · 192/65,536 · 3 kept"
+        viewer.title = go_title
+        viewer.live_phase_preview = {}
+        assert viewer.title == go_title
+    finally:
+        viewer.close()
+
+
 def test_live_title_follows_the_selected_dataset_after_returning_to_another_size(recording):
     """A scan's grid and the earlier scan keep their own titles in a size group."""
     first = LiveScan("series_1")
