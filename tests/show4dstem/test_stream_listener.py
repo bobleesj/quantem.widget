@@ -749,6 +749,47 @@ def test_deferred_retirement_keeps_full_snapshot_identity_and_pixels_atomic(reco
         viewer.close()
 
 
+@pytest.mark.parametrize("browser_closed", [False, True])
+def test_reloaded_stream_uses_the_new_scan_and_detector_shape(recording, browser_closed):
+    first = LiveScan("native")
+    binned = LiveScan("binned")
+    binned.counts = torch.arange(1, 81, dtype=torch.float32).reshape(2, 2, 4, 5)
+    binned.received, binned.total = 0, 4
+    binned.metadata["scan_sampling_A"] = [0.8, 1.2]
+    recording.acquisitions.append(first)
+    viewer = Show4DSTEM.stream(recording, device="cpu")
+    viewer._stream_display_credits = 1
+    ready = {"type": "show4dstem_frontend_ready", "version": 1, "stream_ack": True}
+    try:
+        viewer.refresh_stream()
+        viewer._handle_frontend_ready_msg(None, {**ready, "view": "original"}, None)
+        if browser_closed:
+            viewer._handle_frontend_ready_msg(None, {
+                "type": "show4dstem_frontend_closed", "version": 1, "view": "original"}, None)
+        recording.acquisitions.append(binned)
+        viewer._stream_update()
+        assert viewer.frame_labels == ["native"] and viewer._stream_deferred_snapshot is None
+
+        binned.received = binned.total
+        viewer._stream_update()
+        # This update adopts the new source without asking the blocked browser to redraw.
+        assert viewer._stream_deferred_snapshot is not None
+        assert viewer.get_state()["frame_labels"] == ["native"]
+
+        viewer._handle_frontend_ready_msg(None, {**ready, "view": "reloaded"}, None)
+        assert viewer.stream_error is None and viewer.frame_labels == ["binned"]
+        assert (viewer.shape_rows, viewer.shape_cols, viewer.det_rows, viewer.det_cols) == (2, 2, 4, 5)
+        assert viewer.scan_sampling_A == [0.8, 1.2]
+        counts = binned.counts.numpy()
+        mask = viewer._current_detector_mask()
+        np.testing.assert_array_equal(np.frombuffer(viewer.frame_bytes, np.float32).reshape(4, 5),
+                                      counts[viewer.pos_row, viewer.pos_col])
+        np.testing.assert_array_equal(np.frombuffer(viewer.virtual_image_bytes, np.float32).reshape(2, 2),
+                                      counts[..., mask].sum(-1))
+    finally:
+        viewer.close()
+
+
 @pytest.mark.parametrize("save_state, preview", [(False, "jpeg"), (False, None), (True, "jpeg")])
 def test_deferred_snapshot_preserves_saved_state_policy(recording, save_state, preview):
     scans = [LiveScan(str(i), value=i + 1) for i in range(3)]

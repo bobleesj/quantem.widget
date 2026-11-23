@@ -87,7 +87,9 @@ class StreamFollower:
         self.lock = getattr(recording, "lock", nullcontext())
         self.shown_sources = sources[:1]
         self.previous = None
-        self.initialized = bool(self.shown_sources)
+        # During deferred retirement the new sources can replace the old ones before
+        # their geometry is ready for display.
+        self.geometry_shape = _shape_of(self.shown_sources[0]) if self.shown_sources else None
         self.last_refresh = 0.0
         self.labels = labels
         self.refresh_s = refresh_s
@@ -100,7 +102,10 @@ class StreamFollower:
         self.arriving = None        # a scan arriving in a size of its own, while another size stays in view
 
     def snapshot(self) -> list:
-        return list(self.recording.acquisitions if self.partial else self.recording.datasets)
+        if self.partial:
+            # A detector header may announce a new size before its first pattern.
+            return [source for source in self.recording.acquisitions if source.received]
+        return list(self.recording.datasets)
 
     def of_shown_size(self, sources: list) -> list:
         """The scans of the size in view, and the size tabs when the recording holds several sizes.
@@ -223,20 +228,7 @@ class StreamFollower:
                     and now - self.last_refresh < 0.1):
                 return True
             with self.lock, viewer._defer_stream_observers():
-                sources = self.snapshot()
-                if self.partial:
-                    # Detector headers can announce a new size before its first pattern.
-                    # Leave the previous acquisition drawable until the new size has pixels.
-                    sources = [source for source in sources if source.received]
-                switch_size = False
-                if not sources:
-                    self.of_shown_size(sources)         # no scans: no size tabs
-                if sources:
-                    # One viewer holds one scan and detector shape: a scan of another size replaces the others and
-                    # the scans of its size are shown (2026-11-16: a 256 x 256 scan after 512 x 512 ones stopped the
-                    # live page: 'Live sessions must share scan/detector shape')
-                    sources = self.of_shown_size(sources)
-                    switch_size = bool(self.shown_sources and _shape_of(self.shown_sources[-1]) != self.shown_shape)
+                sources = self.of_shown_size(self.snapshot())
                 shown = len(self.shown_sources)
                 if not sources:
                     if self.shown_sources:
@@ -245,14 +237,15 @@ class StreamFollower:
                     self.shown_sources, self.previous = [], None
                     if not self.partial:
                         # the next completed scan may have another shape: it sets the geometry again
-                        self.initialized = False
+                        self.geometry_shape = None
                     return not complete
+                switch_size = self.geometry_shape != self.shown_shape
                 if viewer._data is None or switch_size:
                     with viewer.hold_sync(), viewer.hold_trait_notifications():
                         viewer._replace_stream_sources(self.shown_sources, sources, labels=self.labels)
-                        if not self.initialized or switch_size:
+                        if switch_size:
                             viewer._initialize_stream_geometry(sources[0], self.options)
-                            self.initialized = True
+                            self.geometry_shape = self.shown_shape
                     self.previous = None
                 elif sources[:shown] == self.shown_sources:
                     if len(sources) > shown:
@@ -268,7 +261,7 @@ class StreamFollower:
                     with viewer.hold_sync(), viewer.hold_trait_notifications():
                         viewer.frame_idx = len(sources) - 1
                         viewer._stream_selected_source = viewer._stream_source_ids[viewer.frame_idx]
-                if arrived:
+                if arrived or switch_size:
                     viewer._adopt_shown_calibration()      # a new scan may have another step (11-16)
                     viewer._update_unvisited()             # and another path
                 shown = len(sources)
