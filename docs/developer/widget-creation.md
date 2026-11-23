@@ -168,7 +168,7 @@ For `Ruler2D`, the important cases are that valid 2D input works, invalid input 
 
 Frontend numerical helpers can be tested with Vitest.
 
-Use browser tests - for behavior that requires users interaction, like clicking or zooming.
+Drive the rendered widget in a browser. For interactive image controls, follow the [playback, zoom, and histogram checklist](../maintainer/widget-ui-protocol.md#playback-zoom-and-histogram-checklist).
 
 ## Step 8: Notebooks
 

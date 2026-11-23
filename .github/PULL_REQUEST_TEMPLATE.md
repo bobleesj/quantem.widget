@@ -110,6 +110,8 @@ evidence in the three visible sections above.
   remain readable.
 - [ ] The widget has no hardcoded dark-only or light-only assumptions in plots,
   canvas backgrounds, tooltips, menus, or exported HTML.
+- [ ] For playback or display changes, run the combined playback, zoom, and histogram checks in
+  `docs/maintainer/widget-ui-protocol.md` on each affected widget and rendering path.
 - [ ] Histogram UI matches the existing Show2D-style interaction: compact panel,
   no extra whitespace, draggable min/max handles, fast center drag, and no
   visible lag.

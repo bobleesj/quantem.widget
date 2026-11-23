@@ -22,7 +22,7 @@ SLOW_GPU = """(() => {
   const submit = GPUQueue.prototype.submit;
   GPUQueue.prototype.submit = function (...args) { window.__submits++; return submit.apply(this, args); };
 })();"""
-STATE = f"""() => {{ const canvas = document.querySelector('{VOLUME}'); return {{ density: canvas.width / canvas.clientWidth, submits: window.__submits }}; }}"""
+STATE = f"""() => {{ const canvas = document.querySelector('{VOLUME}'); return {{ density: canvas.width / canvas.clientWidth, submits: window.__submits, time_ms: performance.now() }}; }}"""
 
 
 @pytest.mark.parametrize("frame_ms", [300, 900])
@@ -53,14 +53,19 @@ def test_3d_view_paces_itself_to_a_slow_gpu(frame_ms, chrome, serve, hardware_ad
             page.wait_for_timeout(int(1000 * seconds / moves))
         during = page.evaluate(STATE)
         page.mouse.up()
-        return {"density": during["density"], "submits": during["submits"] - start["submits"]}
+        return {
+            "density": during["density"],
+            "submits": during["submits"] - start["submits"],
+            "elapsed_ms": during["time_ms"] - start["time_ms"],
+        }
 
     rotate(10, 0.5)  # the first measured full frame tells the view how slow this GPU is
     page.wait_for_timeout(3 * frame_ms + 1_000)
     moving = rotate(90, 3.0)
     # drafts while the view moves, and about one frame per GPU frame time instead of one per pointer move
     assert moving["density"] == 1, moving
-    assert moving["submits"] <= 3_000 / frame_ms + 4, moving
+    # Browser input dispatch takes time in addition to the requested waits.
+    assert moving["submits"] <= moving["elapsed_ms"] / frame_ms + 4, moving
     page.wait_for_timeout(3 * frame_ms + 1_500)
     rested = page.evaluate(STATE)
     page.screenshot(path=str(browser_out / f"show3dslices_slow_gpu_{frame_ms}.png"))

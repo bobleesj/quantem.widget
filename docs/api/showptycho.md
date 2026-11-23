@@ -677,3 +677,7 @@ When Auto is capped, the fit report and viewer settings identify the larger
 requirement; a 4× grid does not imply full nominal bandwidth. Fitting and
 source data are unchanged. Saved Auto fits reopen under the current cap;
 saved explicit 8× choices retain 8×.
+
+## Save a reviewed reconstruction
+
+Set the live panel width with `size="medium"`. With a compatible quantem.gpu session, run `ptycho.save(save_dir="review")` after adjusting the viewer. The calibration and phase preview are saved beside the reviewed waves.

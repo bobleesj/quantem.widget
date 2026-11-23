@@ -69,16 +69,15 @@ export function createCPUColormapEngine(): DisplayColormapEngine {
 
 /**
  * Source pixel of every output pixel of an outW x outH nearest resample, the
- * WGSL scaled-colormap sampling: column min(trunc((outCol + 0.5) * srcW / outW), srcW - 1),
- * rows alike, each step rounded to float32. Null for an equal-size render (the identity).
+ * WGSL nearest_texel sampling: column min(floor((2 outCol + 1) srcW / 2 outW), srcW - 1),
+ * rows alike, in exact arithmetic. Null for an equal-size render (the identity).
  */
 function nearestSourceIndex(srcW: number, srcH: number, outW: number, outH: number): Int32Array | null {
   if (srcW === outW && srcH === outH) return null;
-  const f32 = Math.fround;
-  const columns = Int32Array.from({ length: outW }, (_, outCol) => Math.min(Math.trunc(f32(f32(f32(outCol + 0.5) * srcW) / outW)), srcW - 1));
+  const columns = Int32Array.from({ length: outW }, (_, outCol) => Math.min(Math.floor(((2 * outCol + 1) * srcW) / (2 * outW)), srcW - 1));
   const index = new Int32Array(outW * outH);
   for (let outRow = 0; outRow < outH; outRow++) {
-    const rowStart = Math.min(Math.trunc(f32(f32(f32(outRow + 0.5) * srcH) / outH)), srcH - 1) * srcW;
+    const rowStart = Math.min(Math.floor(((2 * outRow + 1) * srcH) / (2 * outH)), srcH - 1) * srcW;
     for (let outCol = 0; outCol < outW; outCol++) index[outRow * outW + outCol] = rowStart + columns[outCol];
   }
   return index;

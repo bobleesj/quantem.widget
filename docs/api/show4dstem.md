@@ -232,13 +232,20 @@ prints it, and `direct_calibration_json` carries `fit_scan_region`.
 
 ## Direct ptychography
 
+In a standalone QEM viewer packaged with Direct Ptycho calibration, tap the red
+**Direct Ptycho** beside **iDPC**. The browser fits the central 128 × 128 scan
+region with 200 trials and fifth-order refinement. It reconstructs the phase
+over the full scan with automatic upsampling and phase damping of 0.3. Pinch
+to zoom, drag to pan, or tap **Fit** to see the whole phase. Close the view to
+return to the detectors. Tapping **Direct Ptycho** again reopens the result.
+
 The default on CUDA and MPS uses 200 initial TPE trials, then jointly
 refines aberrations through fifth order with sample tilt and depth.
 `ptycho.aberrations(search="broad")` adds broader exploration.
 The initial result is provisional; final refinement can change its phase.
 
 
-With a live kernel on CUDA or MPS, the **Direct ptycho** control (**Calculate Phase**), or
+With a live kernel on CUDA or MPS, the red **Direct Ptycho** button, or
 `viewer.direct_phase()`, runs quantem.gpu's default fit,
 `quantem.gpu.DirectPtycho(...).aberrations()`, on the current 4D frame: the direct ptychography
 model fitted to the data together with the sample tilt and depth spread

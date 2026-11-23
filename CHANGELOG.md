@@ -50,6 +50,29 @@ new `rcN` heading when that rc is published to TestPyPI.
   it changes nothing when a checkout has local commits or edits in the way.
 - `environments/arina-pc.yml`: one conda environment (Python, Git, Node.js, JupyterLab, PyTorch for CUDA 13) for a
   Windows PC with an NVIDIA card that runs both source checkouts.
+- Show3D without WebGPU shows the same pixels as with it at every display size. At a zoom that puts a pixel centre exactly on a source-pixel edge (256 px drawn at 450), whole rows and columns showed the neighbouring pixel. The WebGPU shaders now pick that pixel in exact integer arithmetic too.
+
+- Report visible GPUs and process memory without opening CUDA contexts on idle devices.
+
+- In calibrated standalone QEM viewers, open Direct Ptycho beside iDPC. Pinch to inspect the full-field phase and tap Fit to restore the whole image.
+
+- On a compatible mobile WebGPU device, Show4DSTEM prepares exact detector images in the background so the aperture can follow a held drag.
+
+- In Show4DSTEM, drag the detector aperture with one finger even when zoomed in. Drag outside the aperture to pan.
+
+- Show4DSTEM prepares BF, ADF and ABF images after opening a single QEM. On touch screens the virtual image defaults to the diffraction pattern’s width.
+
+- Save the live ShowPtycho calibration and phase preview with the reviewed reconstruction.
+
+- Show3DSlices refreshes both slice views when WebGPU becomes ready, so the first zoom or reset preserves the other slice’s displayed pixels.
+
+- In Show2D and Show3D, Reset stays available when any visible image panel is zoomed or panned with the panels unlinked. Show3D also restores the original pixels after resetting a linked-contrast comparison with explicit limits.
+
+- In Show3D, drag directly on the histogram bars to adjust contrast. With linked contrast, Auto off, and explicit intensity limits, all panels share the same scale.
+
+- Show3DSlices adds an interactive XY mask under Advanced. Move or resize the rectangle to keep that region at full brightness during playback while the surrounding image stays dimly visible. Zooming over the mask or its handles keeps the page stationary.
+
+- Show3D and Show3DSlices keep the current frame visible when you zoom or pan during playback. Show3DSlices also keeps the selected histogram contrast while you drag during playback.
 
 ### Show3DSlices and Show3D hold less memory, every value exact
 

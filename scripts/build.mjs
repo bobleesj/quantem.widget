@@ -12,7 +12,7 @@
 // through js/display validates borrowed count images with its contract.
 
 import { build, context } from "esbuild";
-import { copyFileSync, mkdirSync, rmSync } from "fs";
+import { copyFileSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "fs";
 import { syncGpuWebgpuSources } from "./sync-gpu-webgpu.mjs";
 
 const watch = process.argv.includes("--watch");
@@ -36,6 +36,8 @@ const widgets = [
   "showpdf",
   "showptycho",
   "showgpu",
+  "showreconstruction",
+  "showsearch",
   "scancontrol",
   "diffractionsim",
 ];
@@ -70,11 +72,18 @@ try {
   process.exit(1);
 }
 
-// A full build replaces the whole static tree so retired bundles cannot linger.
-if (!requested.length) rmSync("src/quantem/widget/static", { recursive: true, force: true });
+// Every file in static/ is replaced atomically: written to a temporary name beside it, then renamed into place, so a
+// notebook running while a builder rebuilds always reads a whole bundle and never finds it missing (a delete-then-write
+// build broke a running notebook's widgets on 21 Nov 2026).
 mkdirSync("src/quantem/widget/static", { recursive: true });
+function replaceAtomically(path, contents) {
+  const temporary = `${path}.${process.pid}.tmp`;
+  writeFileSync(temporary, contents);
+  renameSync(temporary, path);
+}
 // The wheel names the quantem.gpu sources its bundles carry; quantem.widget.profile() prints it.
-copyFileSync("js/.generated/engine/MANIFEST.json", "src/quantem/widget/static/engine-manifest.json");
+copyFileSync("js/.generated/engine/MANIFEST.json", "src/quantem/widget/static/engine-manifest.json.tmp");
+renameSync("src/quantem/widget/static/engine-manifest.json.tmp", "src/quantem/widget/static/engine-manifest.json");
 
 for (const name of selected) {
   const opts = {
@@ -88,8 +97,18 @@ for (const name of selected) {
     console.log(`watching ${name}...`);
   } else {
     const start = Date.now();
-    await build(opts);
+    const result = await build({ ...opts, write: false });
+    for (const file of result.outputFiles) replaceAtomically(file.path, file.contents);
     console.log(`built ${name}.js (${Date.now() - start}ms)`);
+  }
+}
+
+// A full build then removes the bundles no widget builds any more, after the new ones are in place: retired bundles
+// cannot linger, and no current one is ever absent.
+if (!requested.length && !watch) {
+  const kept = new Set([...selected.map((name) => `${name}.js`), "engine-manifest.json"]);
+  for (const file of readdirSync("src/quantem/widget/static")) {
+    if (file.endsWith(".js") && !kept.has(file)) rmSync(`src/quantem/widget/static/${file}`, { force: true });
   }
 }
 

@@ -654,6 +654,18 @@ def test_save_writes_the_calibration_and_mirrors_it_onto_the_session(widget, dir
     assert direct.known_aberrations == {"C10_nm": -4.0, "C12_nm": 0.25, "phi12_deg": 12.0} and direct.best_loss == saved["loss"]
 
 
+def test_reviewed_result_uses_displayed_settings_in_requested_folder(widget, direct, tmp_path, monkeypatch):
+    received = {}
+    monkeypatch.setattr(direct, "run", lambda **kwargs: received.update(kwargs), raising=False)
+    destination = tmp_path / "review"
+    widget._reviewed_result(destination)
+    record = json.loads((destination / "calibration.json").read_text())
+    assert received == dict(aberrations=record["aberrations"], upsample=record["upsample"],
+                            compute_loss=False, **record["reconstruction"])
+    assert (destination / "calibration_phase.png").is_file()
+    assert widget.panel_px == 450
+
+
 def test_save_calibration_writes_what_the_save_button_writes(widget, direct, tmp_path):
     # a notebook had no public Save: it had to bump the button's trait, viewer.save_trigger += 1
     widget._on_preview_message(widget, {"type": "direct-preview", "request": {"id": 1, "C10_nm": -4.0, "C12_nm": 0.25, "phi12_deg": 12.0, "committed": True}}, [])

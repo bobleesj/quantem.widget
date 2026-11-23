@@ -7203,7 +7203,10 @@ function Show2D() {
   // Render (Show3D-style layout)
   // -------------------------------------------------------------------------
   const selectedView = getZoomState(isGallery ? selectedIdx : 0);
-  const needsReset = selectedView.zoom !== 1 || selectedView.panX !== 0 || selectedView.panY !== 0;
+  const needsReset = visibleImageIndices.some(panel => {
+    const { zoom, panX, panY } = getZoomState(panel);
+    return zoom !== 1 || panX !== 0 || panY !== 0;
+  });
   // Scientists inspect across galleries by moving the mouse, not by selecting
   // every panel first. Keep control state tied to selectedIdx, but let the
   // stats/readout strip follow the hovered panel while the cursor is over it.

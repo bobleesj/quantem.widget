@@ -169,16 +169,20 @@ export const Histogram = React.memo(function Histogram({
   React.useEffect(() => () => {
     if (rangeRafRef.current != null) window.cancelAnimationFrame(rangeRafRef.current);
   }, []);
-  const beginRangeDrag = React.useCallback((event: React.PointerEvent, dragWidth: number, lo0: number, hi0: number) => {
+  const beginRangeDrag = React.useCallback((event: React.PointerEvent, dragWidth: number, lo0: number, hi0: number, handle?: "lower" | "upper", startPct = 0) => {
     const startX = event.clientX;
     const span = Math.max(1, hi0 - lo0);
     const previousCursor = document.body.style.cursor;
     document.body.style.cursor = "grabbing";
-    const onMove = (moveEvent: PointerEvent) => {
-      moveEvent.preventDefault();
-      const deltaPct = ((moveEvent.clientX - startX) / Math.max(1, dragWidth)) * 100;
+    const update = (clientX: number) => {
+      const deltaPct = ((clientX - startX) / Math.max(1, dragWidth)) * 100;
       const lo = Math.max(0, Math.min(100 - span, lo0 + deltaPct));
-      const next: [number, number] = [lo, lo + span];
+      const pct = Math.round(startPct + deltaPct);
+      const next: [number, number] = handle === "lower"
+        ? [Math.max(0, Math.min(hi0 - 1, pct)), hi0]
+        : handle === "upper"
+          ? [lo0, Math.min(100, Math.max(lo0 + 1, pct))]
+          : [lo, lo + span];
       pendingRangeRef.current = next;
       if (rangeRafRef.current == null) {
         rangeRafRef.current = window.requestAnimationFrame(() => {
@@ -192,7 +196,14 @@ export const Histogram = React.memo(function Histogram({
         });
       }
     };
-    const onUp = () => {
+    if (handle) update(startX);
+    const onMove = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== event.pointerId) return;
+      moveEvent.preventDefault();
+      update(moveEvent.clientX);
+    };
+    const onUp = (endEvent: PointerEvent) => {
+      if (endEvent.pointerId !== event.pointerId) return;
       document.removeEventListener("pointermove", onMove);
       document.removeEventListener("pointerup", onUp);
       document.removeEventListener("pointercancel", onUp);
@@ -232,7 +243,15 @@ export const Histogram = React.memo(function Histogram({
       <Box sx={{ position: "relative", width, height: height + 6, overflow: "visible" }}>
         <canvas
           ref={canvasRef}
-          style={{ width, height, border: `1px solid ${colors.border}`, display: "block" }}
+          onPointerDown={(event) => {
+            if (!event.isPrimary || event.button !== 0) return;
+            const rect = event.currentTarget.getBoundingClientRect();
+            const pct = 100 * (event.clientX - rect.left) / rect.width;
+            const handle = pct < (liveVminPct + liveVmaxPct) / 2 ? "lower" : "upper";
+            event.preventDefault();
+            beginRangeDrag(event, rect.width, liveVminPct, liveVmaxPct, handle, pct);
+          }}
+          style={{ width, height, touchAction: "none", cursor: "ew-resize", border: `1px solid ${colors.border}`, display: "block" }}
           role={ariaHidden ? undefined : "img"}
           aria-hidden={ariaHidden ? "true" : undefined}
           aria-label={ariaHidden ? undefined : "Histogram of intensity values with min and max clip handles"}

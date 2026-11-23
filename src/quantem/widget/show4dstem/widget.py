@@ -344,6 +344,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     direct_request = traitlets.Unicode("").tag(sync=True)
     direct_status = traitlets.Unicode("").tag(sync=True)
     direct_busy = traitlets.Bool(False).tag(sync=True)
+    direct_folder = traitlets.Unicode("").tag(sync=True)
     direct_enabled = traitlets.Bool(True).tag(sync=True)
     show_direct = traitlets.Bool(True).tag(sync=True)
     direct_trials = traitlets.Int(200).tag(sync=True)

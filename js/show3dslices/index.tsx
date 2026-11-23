@@ -939,7 +939,7 @@ function Show3DSlices() {
     cmap: string; logScale: boolean; flip: boolean;
     imageVminPct: number; imageVmaxPct: number; imageDataRange: { min: number; max: number };
     traitVmin: number | null; traitVmax: number | null;
-    zooms: { zoom: number; panX: number; panY: number }[]; canvasSizes: { w: number; h: number }[]; smooth: boolean;
+    canvasSizes: { w: number; h: number }[]; smooth: boolean;
     alignment?: { rowShift: number; colShift: number; segment: { start: ImagePoint; stop: ImagePoint } };
   } | null>(null);
   const fftComputeGenerationRef = React.useRef(0);
@@ -1091,6 +1091,19 @@ function Show3DSlices() {
   const [exportMenuAnchor, setExportMenuAnchor] = React.useState<HTMLElement | null>(null);
   const [exportBusy, setExportBusy] = React.useState(false);
   const [localExportStatus, setLocalExportStatus] = React.useState("");
+  const [maskEnabled, setMaskEnabled] = React.useState(false);
+  const maskBounds = React.useRef<{ start: ImagePoint; stop: ImagePoint } | null>(null);
+  const maskBox = React.useRef<HTMLDivElement>(null);
+  const maskDrag = React.useRef<{
+    pointerId: number; grip: string; origin: ImagePoint; start: ImagePoint; stop: ImagePoint;
+  } | null>(null);
+  const maskFrame = React.useRef<number | null>(null);
+  React.useEffect(() => {
+    maskBounds.current = null;
+    maskDrag.current = null;
+    setMaskEnabled(false);
+    return () => { if (maskFrame.current !== null) cancelAnimationFrame(maskFrame.current); maskFrame.current = null; };
+  }, [safeActivePanel, volumeBytes]);
   const [advancedControlsOpen, setAdvancedControlsOpen] = React.useState(false);
   const [localAlignmentStatus, setLocalAlignmentStatus] = React.useState("");
   const [liveRowShift, setLiveRowShift] = React.useState(rowShiftPxPerSlice || 0);
@@ -1710,16 +1723,17 @@ function Show3DSlices() {
     }
   }, [sliceDims]);
 
-  // Prevent page scroll on canvases
+  // Bind to the zoom surface so mask handles and other overlays also consume the wheel.
   React.useEffect(() => {
-    const preventDefault = (event: WheelEvent) => event.preventDefault();
-    canvasRefs.current.forEach(c => c?.addEventListener("wheel", preventDefault, { passive: false }));
-    fftCanvasRefs.current.forEach(c => c?.addEventListener("wheel", preventDefault, { passive: false }));
-    return () => {
-      canvasRefs.current.forEach(c => c?.removeEventListener("wheel", preventDefault));
-      fftCanvasRefs.current.forEach(c => c?.removeEventListener("wheel", preventDefault));
-    };
-  }, [panelFloats, showFft]);
+    const surfaces = [
+      ...imageBoxRefs.current,
+      ...fftCanvasRefs.current.map(canvas => canvas?.parentElement),
+      volumeCanvasRef.current?.parentElement,
+    ];
+    const preventScroll = (event: WheelEvent) => event.preventDefault();
+    surfaces.forEach(surface => surface?.addEventListener("wheel", preventScroll, { passive: false }));
+    return () => surfaces.forEach(surface => surface?.removeEventListener("wheel", preventScroll));
+  }, [panelFloats, showFft, webgpuSupported]);
 
   const histogramSample = React.useMemo(() => makeHistogramSample(panelFloats), [panelFloats]);
   const displayHistogramSample = React.useMemo(
@@ -1863,6 +1877,7 @@ function Show3DSlices() {
     const subMax = (subMaxData - imageDataRange.min) / span;
     return { vmin: subMin, vmax: subMax };
   };
+  const contrastPreviewRef = React.useRef<[number, number] | null>(null);
   const volTexRange = volumeTextureRangeForPercent(imageVminPct, imageVmaxPct);
   // Keep live slice positions separate from committed model traits. Slider drag
   // updates these refs every frame; model traits sync only on release.
@@ -1893,7 +1908,9 @@ function Show3DSlices() {
     vmin: volTexRange.vmin, vmax: volTexRange.vmax,
   };
   const volumeRenderParamsRef = React.useRef(volumeRenderParams);
-  volumeRenderParamsRef.current = volumeRenderParams;
+  volumeRenderParamsRef.current = contrastPreviewRef.current
+    ? { ...volumeRenderParams, ...volumeTextureRangeForPercent(...contrastPreviewRef.current) }
+    : volumeRenderParams;
   const bgColorRef = React.useRef<[number, number, number]>([0, 0, 0]);
   React.useEffect(() => {
     const r = parseInt(themeColors.bg.slice(1, 3), 16) / 255;
@@ -1927,15 +1944,6 @@ function Show3DSlices() {
     });
     return () => cancelAnimationFrame(id);
   }, [rendererReady, panelFloats]);
-
-  // Prevent scroll on volume canvas
-  React.useEffect(() => {
-    const canvas = volumeCanvasRef.current;
-    if (!canvas || !webgpuSupported) return;
-    const preventDefault = (event: WheelEvent) => event.preventDefault();
-    canvas.addEventListener("wheel", preventDefault, { passive: false });
-    return () => canvas.removeEventListener("wheel", preventDefault);
-  }, [webgpuSupported]);
 
   // -------------------------------------------------------------------------
   // 3D Volume mouse handlers - document-level listeners for robust drag
@@ -2283,10 +2291,6 @@ function Show3DSlices() {
       alignStartCol !== prev.alignStartCol || alignStartRow !== prev.alignStartRow ||
       alignStopCol !== prev.alignStopCol || alignStopRow !== prev.alignStopRow ||
       numCols !== prev.numCols || numRows !== prev.numRows || numSlices !== prev.numSlices;
-    const axisChanged = [
-      globalChanged || sliceIndex !== prev.sliceIndex,
-      true,
-    ];
 
     const lut = COLORMAPS[cmap] || COLORMAPS.inferno;
     const extractors = [
@@ -2307,10 +2311,11 @@ function Show3DSlices() {
       }
       if (gpuVolReady) engine.uploadLUT(cmap, lut);
     }
+    const backendChanged = gpuVolReadyRef.current !== gpuVolReady;
     gpuVolReadyRef.current = gpuVolReady;
     const { vmin, vmax } = volumeDisplayWindow(displayDataRange, imageVminPct, imageVmaxPct, flip);
     for (let axis = 0; axis < sliceDims.length; axis++) {
-      if (!axisChanged[axis]) continue;
+      if (axis === 0 && !globalChanged && !backendChanged && sliceIndex === prev.sliceIndex) continue;
       const [sliceH, sliceW] = sliceDims[axis];
       if (gpuVolReady && engine) {
         // Always cache the native slice raster. The displayed panel may be
@@ -2358,8 +2363,11 @@ function Show3DSlices() {
   // slider handler (which fires faster than React commits) reads current values.
   React.useEffect(() => {
     paintParamsRef.current = {
-      cmap, logScale, flip, imageVminPct, imageVmaxPct, imageDataRange: displayDataRange,
-      traitVmin, traitVmax, zooms, canvasSizes, smooth, alignment: gpuSliceParams,
+      cmap, logScale, flip,
+      imageVminPct: contrastPreviewRef.current?.[0] ?? imageVminPct,
+      imageVmaxPct: contrastPreviewRef.current?.[1] ?? imageVmaxPct,
+      imageDataRange: displayDataRange,
+      traitVmin, traitVmax, canvasSizes, smooth, alignment: gpuSliceParams,
     };
   });
 
@@ -2378,7 +2386,7 @@ function Show3DSlices() {
     if (!engine || !gpuVolReadyRef.current || !paint) return false;
     const canvas = canvasRefs.current[axis];
     if (!canvas) return false;
-    const canvasSize = paint.canvasSizes[axis]; const view = paint.zooms[axis];
+    const canvasSize = paint.canvasSizes[axis]; const view = liveZoomsRef.current[axis];
     if (!canvasSize) return false;
     const { vmin, vmax } = volumeDisplayWindow(paint.imageDataRange, paint.imageVminPct, paint.imageVmaxPct, paint.flip);
     engine.uploadLUT(paint.cmap, COLORMAPS[paint.cmap] || COLORMAPS.inferno);
@@ -2448,20 +2456,49 @@ function Show3DSlices() {
   // Redraw slices with zoom/pan (cheap: just drawImage from cached offscreen)
   // useLayoutEffect prevents black flash when canvas dimensions change (resize)
   // -------------------------------------------------------------------------
-  React.useLayoutEffect(() => {
-    for (let axis = 0; axis < sliceDims.length; axis++) {
-      const canvas = canvasRefs.current[axis];
-      const offscreen = sliceOffscreenRefs.current[axis];
-      if (!canvas || !offscreen) continue;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) continue;
-      const { w: canvasW, h: canvasH } = canvasSizes[axis];
-      drawZoomedOffscreen(ctx, offscreen, canvasW, canvasH, zooms[axis], smooth);
+  const paintMask = () => {
+    const bounds = maskBounds.current;
+    let mask = "";
+    if (maskEnabled && bounds) {
+      const a = dataPointToCanvas(0, bounds.start.col, bounds.start.row);
+      const b = dataPointToCanvas(0, bounds.stop.col, bounds.stop.row);
+      const position = `${Math.min(a.x, b.x)}px ${Math.min(a.y, b.y)}px`;
+      const size = `${Math.abs(b.x - a.x)}px ${Math.abs(b.y - a.y)}px`;
+      if (maskBox.current) Object.assign(maskBox.current.style, {
+        left: `${a.x}px`, top: `${a.y}px`, width: `${b.x - a.x}px`, height: `${b.y - a.y}px`,
+      });
+      // Show the selection at full brightness over a dim, still-visible XY image.
+      mask = `linear-gradient(black, black) ${position} / ${size} no-repeat, linear-gradient(rgb(0 0 0 / 40%), rgb(0 0 0 / 40%))`;
     }
+    for (const layer of [canvasRefs.current[0], overlayRefs.current[0]]) {
+      if (layer) layer.style.mask = mask;
+    }
+  };
+  React.useLayoutEffect(paintMask, [maskEnabled, zooms, canvasSizes]);
+  const drawSliceDirect = (axis: number) => {
+    if (axis === 0) paintMask();
+    // Playback and scrubbing advance the XY frame without replacing the committed offscreen.
+    if (contrastPreviewRef.current || (axis === 0 && liveSliderRef.current[0] !== sliceIndex)) {
+      const index = liveSliderRef.current[0];
+      if (!directPaintPlane(axis, index)) previewCpuPlane(axis, index);
+      return;
+    }
+    const view = liveZoomsRef.current[axis];
+    const { w: canvasW, h: canvasH } = canvasSizes[axis];
+    const canvas = canvasRefs.current[axis];
+    const offscreen = sliceOffscreenRefs.current[axis];
+    if (!canvas || !offscreen) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    drawZoomedOffscreen(ctx, offscreen, canvasW, canvasH, view, smooth);
+  };
+
+  React.useLayoutEffect(() => {
+    for (let axis = 0; axis < sliceDims.length; axis++) drawSliceDirect(axis);
     // gpuSliceParams belongs here: toggling Align re-renders the offscreens with
     // new depth shifts, but without this dependency the blit never re-runs and
     // the visible canvases keep the previous alignment.
-  }, [panelFloats, colIndex, rowIndex, sliceIndex, obliqueAngle, numCols, numRows, numSlices, cmap, logScale, autoContrast, zooms, sliceDims, canvasSizes, imageVminPct, imageVmaxPct, smooth, flip, gpuSliceParams]);
+  }, [panelFloats, colIndex, rowIndex, sliceIndex, obliqueAngle, numCols, numRows, numSlices, cmap, logScale, autoContrast, zooms, sliceDims, canvasSizes, imageVminPct, imageVmaxPct, smooth, flip, gpuSliceParams, cmapReady]);
 
   // -------------------------------------------------------------------------
   // Render crosshair lines for the orthogonal slice intersections.
@@ -2914,17 +2951,6 @@ function Show3DSlices() {
   // -------------------------------------------------------------------------
   // Direct canvas draw (bypasses React state for 60fps pan during drag)
   // -------------------------------------------------------------------------
-  const drawSliceDirect = (axis: number) => {
-    const view = liveZoomsRef.current[axis];
-    const { w: canvasW, h: canvasH } = canvasSizes[axis];
-    const canvas = canvasRefs.current[axis];
-    const offscreen = sliceOffscreenRefs.current[axis];
-    if (!canvas || !offscreen) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    drawZoomedOffscreen(ctx, offscreen, canvasW, canvasH, view, smooth);
-  };
-
   const drawFftDirect = (axis: number) => {
     const view = liveFftZoomsRef.current[axis];
     const { w: canvasW, h: canvasH } = canvasSizes[axis];
@@ -3026,7 +3052,7 @@ function Show3DSlices() {
   const [liveObliqueOffset, setLiveObliqueOffset] = React.useState<number | null>(null);
   const [obliqueAngleBounds, setObliqueAngleBounds] = React.useState<[number, number] | null>(null);
   const [obliquePositionBounds, setObliquePositionBounds] = React.useState<[number, number] | null>(null);
-  const imagePointFromEvent = (event: React.MouseEvent | MouseEvent, axis: number): ImagePoint | null => {
+  const imagePointFromEvent = (event: { clientX: number; clientY: number }, axis: number): ImagePoint | null => {
     const canvas = canvasRefs.current?.[axis];
     if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
@@ -3038,6 +3064,45 @@ function Show3DSlices() {
     const col = ((canvasX - centerX - view.panX) / view.zoom + centerX) / scaleX;
     const row = ((canvasY - centerY - view.panY) / view.zoom + centerY) / scaleY;
     return { row, col };
+  };
+  const toggleMask = (enabled: boolean) => {
+    const rect = canvasRefs.current[0]?.getBoundingClientRect();
+    if (enabled && rect) {
+      const corner = (fraction: number) => imagePointFromEvent({
+        clientX: rect.left + fraction * rect.width, clientY: rect.top + fraction * rect.height,
+      }, 0)!;
+      const a = corner(0.25), b = corner(0.75);
+      const start = { col: clampNumber(a.col, 0, numCols - 1), row: clampNumber(a.row, 0, numRows - 1) };
+      maskBounds.current = { start, stop: {
+        col: clampNumber(b.col, start.col + 1, numCols), row: clampNumber(b.row, start.row + 1, numRows),
+      } };
+    } else maskBounds.current = null;
+    maskDrag.current = null;
+    setMaskEnabled(enabled);
+  };
+  const moveMask = (event: React.PointerEvent) => {
+    const drag = maskDrag.current, point = imagePointFromEvent(event, 0);
+    if (!drag || drag.pointerId !== event.pointerId || !point) return;
+    const { start, stop, grip } = drag;
+    let dx = point.col - drag.origin.col, dy = point.row - drag.origin.row;
+    if (grip === "move") {
+      dx = clampNumber(dx, -start.col, numCols - stop.col);
+      dy = clampNumber(dy, -start.row, numRows - stop.row);
+      maskBounds.current = {
+        start: { col: start.col + dx, row: start.row + dy }, stop: { col: stop.col + dx, row: stop.row + dy },
+      };
+    } else {
+      maskBounds.current = {
+        start: { col: grip.includes("w") ? clampNumber(start.col + dx, 0, stop.col - 1) : start.col,
+          row: grip.includes("n") ? clampNumber(start.row + dy, 0, stop.row - 1) : start.row },
+        stop: { col: grip.includes("e") ? clampNumber(stop.col + dx, start.col + 1, numCols) : stop.col,
+          row: grip.includes("s") ? clampNumber(stop.row + dy, start.row + 1, numRows) : stop.row },
+      };
+    }
+    if (maskFrame.current === null) maskFrame.current = requestAnimationFrame(() => {
+      maskFrame.current = null;
+      paintMask();
+    });
   };
   const updateObliqueCenter = (
     centerCol: number,
@@ -3256,7 +3321,15 @@ function Show3DSlices() {
     // the current (row, col) center, rotated about the slice axis.
     let value: number;
     if (axis === 0) {
-      value = panelFloats[sliceIndex * numRows * numCols + pixelRow * numCols + pixelCol];
+      const bounds = maskEnabled && maskBounds.current;
+      if (bounds && (point.col < Math.min(bounds.start.col, bounds.stop.col) ||
+          point.col >= Math.max(bounds.start.col, bounds.stop.col) ||
+          point.row < Math.min(bounds.start.row, bounds.stop.row) ||
+          point.row >= Math.max(bounds.start.row, bounds.stop.row))) {
+        setCursorInfoThrottled(null);
+        return;
+      }
+      value = panelFloats[liveSliderRef.current[0] * numRows * numCols + pixelRow * numCols + pixelCol];
     } else {
       const denom = Math.max(1, sliceW - 1);
       const t = pixelCol / denom;
@@ -3651,7 +3724,6 @@ function Show3DSlices() {
   const liveSliderRef = React.useRef<number[]>([sliceIndex, rowIndex, colIndex]);
   const pendingPaintRef = React.useRef<Map<number, number>>(new Map());
   const sliderPaintRafRef = React.useRef<number | null>(null);
-  const pendingContrastRangeRef = React.useRef<[number, number] | null>(null);
   const contrastPaintRafRef = React.useRef<number | null>(null);
   // Take only the indices whose trait changed: playback of All moves the cut, which commits the row and
   // column, while the top slice it plays lives in liveSliderRef; resetting all three froze the top slice.
@@ -3674,25 +3746,27 @@ function Show3DSlices() {
   // steps of the committed paint (extract, log, flip, colormap, zoomed blit), so
   // the slice follows the thumb instead of appearing on release. Its own
   // offscreen keeps the committed one a cache of the committed slice.
-  const previewOffscreenRef = React.useRef<{ canvas: HTMLCanvasElement; image: ImageData } | null>(null);
-  const previewTopPlane = (topSliceIndex: number) => {
-    const canvas = canvasRefs.current[0];
+  const previewOffscreenRef = React.useRef<({ canvas: HTMLCanvasElement; image: ImageData } | undefined)[]>([]);
+  const previewCpuPlane = (axis: number, topSliceIndex: number) => {
+    const canvas = canvasRefs.current[axis];
     const ctx = canvas?.getContext("2d");
     const paint = paintParamsRef.current;
     if (!ctx || !paint || !panelFloats) return;
-    const [sliceH, sliceW] = sliceDims[0];
-    let preview = previewOffscreenRef.current;
+    const [sliceH, sliceW] = sliceDims[axis];
+    let preview = previewOffscreenRef.current[axis];
     if (!preview || preview.canvas.width !== sliceW || preview.canvas.height !== sliceH) {
       const offscreen = document.createElement("canvas");
       offscreen.width = sliceW; offscreen.height = sliceH;
       preview = { canvas: offscreen, image: new ImageData(sliceW, sliceH) };
-      previewOffscreenRef.current = preview;
+      previewOffscreenRef.current[axis] = preview;
     }
-    const slice = extractTopSlice(panelFloats, numCols, numRows, numSlices, topSliceIndex);
+    const slice = axis === 0
+      ? extractTopSlice(panelFloats, numCols, numRows, numSlices, topSliceIndex)
+      : extractOblique(panelFloats, numCols, numRows, numSlices, obliqueSegment.start, obliqueSegment.stop);
     const { vmin, vmax } = volumeDisplayWindow(paint.imageDataRange, paint.imageVminPct, paint.imageVmaxPct, paint.flip);
     renderToOffscreenReuse(maybeFlip(paint.logScale ? applyLogScale(slice) : slice, paint.flip), COLORMAPS[paint.cmap] || COLORMAPS.inferno, vmin, vmax, preview.canvas, preview.image);
-    const { w: canvasW, h: canvasH } = paint.canvasSizes[0];
-    drawZoomedOffscreen(ctx, preview.canvas, canvasW, canvasH, paint.zooms[0], paint.smooth);
+    const { w: canvasW, h: canvasH } = paint.canvasSizes[axis];
+    drawZoomedOffscreen(ctx, preview.canvas, canvasW, canvasH, liveZoomsRef.current[axis], paint.smooth);
   };
   // DURING DRAG: only direct-paint (GPU, off React) - do NOT set the model trait,
   // which would re-render the whole component per drag-frame (the 39->stuck cap).
@@ -3721,27 +3795,18 @@ function Show3DSlices() {
       const pending = pendingPaintRef.current;
       pendingPaintRef.current = new Map();
       for (const [pendingAxis, pendingValue] of pending) {
-        if (!directPaintPlane(pendingAxis, pendingValue) && pendingAxis === 0) previewTopPlane(pendingValue);
+        if (!directPaintPlane(pendingAxis, pendingValue) && pendingAxis === 0) previewCpuPlane(0, pendingValue);
       }
       renderVolumePlanesLive();
       setLiveSlider(liveSliderRef.current);
     });
   };
   const paintContrastRange = (min: number, max: number) => {
-    pendingContrastRangeRef.current = [min, max];
-    const paint = paintParamsRef.current;
-    if (paint) paintParamsRef.current = { ...paint, imageVminPct: min, imageVmaxPct: max };
-    const nextVolRange = volumeTextureRangeForPercent(min, max);
-    volumeRenderParamsRef.current = {
-      ...volumeRenderParamsRef.current,
-      vmin: nextVolRange.vmin,
-      vmax: nextVolRange.vmax,
-    };
+    contrastPreviewRef.current = [min, max];
     if (contrastPaintRafRef.current != null) return;
     contrastPaintRafRef.current = requestAnimationFrame(() => {
       contrastPaintRafRef.current = null;
-      const pending = pendingContrastRangeRef.current;
-      pendingContrastRangeRef.current = null;
+      const pending = contrastPreviewRef.current;
       if (!pending) return;
       const [pendingMin, pendingMax] = pending;
       const current = paintParamsRef.current;
@@ -3753,7 +3818,9 @@ function Show3DSlices() {
         vmax: pendingVolRange.vmax,
       };
       const slices = liveSliderRef.current;
-      for (let axis = 0; axis < sliceDims.length; axis++) directPaintPlane(axis, slices[axis]);
+      for (let axis = 0; axis < sliceDims.length; axis++) {
+        if (!directPaintPlane(axis, slices[axis])) previewCpuPlane(axis, slices[0]);
+      }
       renderVolumePlanesLive();
     });
   };
@@ -4427,10 +4494,34 @@ function Show3DSlices() {
                 {cursorInfo && cursorInfo.view === panelName && (
                   <Box sx={{ position: "absolute", top: 3, right: 3, bgcolor: "rgba(0,0,0,0.35)", px: 0.5, py: 0.15, pointerEvents: "none", minWidth: 100, textAlign: "right" }}>
                     <Typography sx={{ fontSize: 9, fontFamily: "monospace", color: "rgba(255,255,255,0.7)", whiteSpace: "nowrap", lineHeight: 1.2 }}>
-                      ({cursorInfo.row}, {cursorInfo.col}) {formatNumber(cursorInfo.value)}
+                      ({cursorInfo.row}, {cursorInfo.col}) {formatNumber(axis === 0 && panelFloats
+                        ? panelFloats[liveSlider[0] * numRows * numCols + cursorInfo.row * numCols + cursorInfo.col]
+                        : cursorInfo.value)}
                     </Typography>
                   </Box>
                 )}
+                {axis === 0 && maskEnabled && <div
+                  ref={maskBox} aria-label="XY mask" title="Drag to move. Drag a corner to resize."
+                  style={{ position: "absolute", boxSizing: "border-box", outline: "1px solid rgba(255,255,255,.65)", cursor: "move", touchAction: "none" }}
+                  onMouseDown={e => e.stopPropagation()} onMouseUp={e => e.stopPropagation()}
+                  onDoubleClick={e => e.stopPropagation()}
+                  onPointerDown={e => {
+                    const bounds = maskBounds.current, origin = imagePointFromEvent(e, 0);
+                    if (e.button !== 0 || maskDrag.current || !bounds || !origin) return;
+                    maskDrag.current = { ...bounds, origin, pointerId: e.pointerId, grip: (e.target as HTMLElement).dataset.grip ?? "move" };
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                  }}
+                  onPointerMove={moveMask}
+                  onPointerUp={e => { if (maskDrag.current?.pointerId === e.pointerId) { moveMask(e); maskDrag.current = null; } }}
+                  onLostPointerCapture={e => { if (maskDrag.current?.pointerId === e.pointerId) maskDrag.current = null; }}
+                >
+                  {["nw", "ne", "sw", "se"].map(grip => <span key={grip} data-grip={grip}
+                    style={{ position: "absolute", [grip.includes("n") ? "top" : "bottom"]: -8,
+                      [grip.includes("w") ? "left" : "right"]: -8, width: 16, height: 16,
+                      display: "grid", placeItems: "center", cursor: `${grip}-resize` }}>
+                    <span style={{ width: 5, height: 5, background: "white", boxShadow: "0 0 1px black", pointerEvents: "none" }} />
+                  </span>)}
+                </div>}
                 {/* Over-clip warning: image is mostly black because histogram thumbs sit outside data range */}
                 {isOverClipped && axis === 0 && (
                   <Box sx={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", bgcolor: "rgba(255, 180, 0, 0.85)", color: "#000", px: 1, py: 0.5, fontSize: 11, fontWeight: "bold", borderRadius: 0.5, textAlign: "center", lineHeight: 1.3, pointerEvents: "none", maxWidth: canvasW - 20 }}>
@@ -4679,6 +4770,11 @@ function Show3DSlices() {
               </Button>
             </Box>
             {advancedControlsOpen && <Box id="show3dslices-advanced-controls" sx={contentControlRow}>
+              <Typography sx={controlLabel}>Mask</Typography>
+              <Switch checked={maskEnabled} size="small" sx={switchStyles.small}
+                slotProps={switchInputSlot("Mask XY slice")}
+                onChange={e => toggleMask(e.target.checked)} />
+              {maskEnabled && <Typography sx={controlLabel}>Drag to move · corners resize</Typography>}
               <Typography sx={{ ...controlLabel }} title="Display-only global post-alignment through depth. Raw volume data is unchanged.">Align</Typography>
               <Switch
                 checked={alignmentActive}
@@ -4777,6 +4873,7 @@ function Show3DSlices() {
                 }}
                 onRangeCommit={(min, max) => {
                   // User drag overrides Auto. Commit once on release so dragging stays local.
+                  contrastPreviewRef.current = null;
                   if (autoContrast) {
                     manualImageRangeBeforeAutoRef.current = null;
                     setAutoContrast(false);

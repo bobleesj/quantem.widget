@@ -672,7 +672,7 @@ def write_webgpu_bundle(widget, out_dir, *, port: int = 8794, title: str | None 
     return write_command_launcher(root, "Show4DSTEM", viewer_html="index.html", port=int(port))
 
 
-def write_qem_bundle(paths, out_dir, *, title: str | None = None, frame_labels=None, port: int = 8794) -> pathlib.Path:
+def write_qem_bundle(paths, out_dir, *, title: str | None = None, frame_labels=None, port: int = 8794, direct_folder=None) -> pathlib.Path:
     """Write a Show4DSTEM WebGPU folder over ``.qem`` acquisitions and return its ``Show4DSTEM.command``.
 
     ``out_dir/qem`` links each file by a relative path, so the folder and its
@@ -738,6 +738,14 @@ def write_qem_bundle(paths, out_dir, *, title: str | None = None, frame_labels=N
         title=title or "",
         show_controls=True,
     )
+    if direct_folder is not None:
+        direct = pathlib.Path(direct_folder).resolve()
+        if len(paths) != 1 or not direct.is_relative_to(root.resolve()):
+            raise ValueError("Use one QEM and keep the calibrated Direct Ptycho folder inside the bundle.")
+        for name in ("source.json", "full.json", "crop.json", "load.mjs"):
+            if not (direct / name).is_file():
+                raise ValueError(f"Missing Direct Ptycho bundle file: {name}")
+        widget.direct_folder = pathlib.Path(os.path.relpath(direct, root / ".viewer")).as_posix() + "/"
     launcher = write_webgpu_bundle(widget, root, port=port, title=title)
     widget.close()
     return launcher

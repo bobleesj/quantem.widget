@@ -35,13 +35,18 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+          cache: pip
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
       - uses: actions/configure-pages@v6
       # Python deps must install BEFORE the frontend build: npm run build syncs
       # the WebGPU engine sources from quantem.gpu (scripts/sync-gpu-webgpu.mjs),
       # which imports quantem.gpu and its deps (numpy).
+      # The tutorials run on CPU torch; the CUDA wheel adds 3 GB of NVIDIA libraries.
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: pip install -r docs/requirements.txt
       - run: pip install --extra-index-url https://test.pypi.org/simple/ -e .
       # The TestPyPI quantem.gpu release can lag the webgpu module the sync
