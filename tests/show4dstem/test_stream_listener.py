@@ -105,6 +105,24 @@ def test_idle_first_arrival_matches_opening_the_same_scan(recording):
         opened.close()
 
 
+def test_multiple_excludes_the_stopped_live_frame_from_retained_images_and_diffraction(recording):
+    first = LiveScan("series_1", value=2)
+    second = LiveScan("series_2", value=6)
+    stopped = LiveScan("live_3000001", value=20)
+    recording.acquisitions[:] = [first, second, stopped]
+    viewer = Show4DSTEM.stream(recording, view_mode="multiple", compare_dp_mode="average")
+    try:
+        viewer.refresh_stream()
+        assert viewer.frame_labels == ["series_1", "series_2", "live_3000001"]
+        assert set(viewer.compare_panel_indices) == {0, 1}
+        np.testing.assert_array_equal(np.frombuffer(viewer.frame_bytes, np.float32), np.full(80, 4))
+        viewer.compare_hidden_panels = [0, 1]
+        assert len(viewer.compare_panel_indices) == 1
+        assert viewer.compare_panel_indices[0] in (0, 1)
+    finally:
+        viewer.close()
+
+
 def test_first_preview_accepts_detector_presets_and_ring_before_the_scan_attaches(recording):
     viewer = Show4DSTEM.stream(recording, device="cpu")
     messages = []

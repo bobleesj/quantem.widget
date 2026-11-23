@@ -2928,14 +2928,16 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             self.send(dict(reply, source_scan=source_scan), buffers=[pattern.tobytes()])
 
     def _live_probe_pattern(self, request):
-        """Prefer the current visit; otherwise read the same pixel from this run's preceding frame."""
+        """Read the stopped frame, or the latest acquired visit of a running interlaced frame."""
         live = self.live_phase_preview
         scan = live.get("scan")
         follower = self._stream_follower
-        if (not follower or not live.get("visit_path") or live.get("diffraction_only")
+        probeable = live.get("visit_path") or (live.get("frozen") and not live.get("region"))
+        if (not follower or not probeable or live.get("diffraction_only")
                 or live_frame_number(scan) is None or request.get("scan") != scan):
             return None
-        rows, cols, _, _ = self._preset_preview_geometry()
+        geometry = (live["total"], live["cols"], live["detRows"], live["detCols"])
+        rows, cols, _, _ = geometry
         row, col = request["center"]
         if not (type(row) is int and type(col) is int and 0 <= row < rows and 0 <= col < cols):
             return None
@@ -2944,7 +2946,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         lookup = getattr(recording, "detector_preview_source", None)
         active = lookup(scan) if callable(lookup) else None
         if active is not None:
-            pattern = self._probe_visit(active, row, col)
+            pattern = self._probe_visit(active, row, col, geometry)
             if pattern is not None:
                 return scan, pattern
 
@@ -2963,7 +2965,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         if active is None:
             ready = next((item for item in reversed(datasets) if item.metadata.get("series") == scan), None)
             if ready is not None:
-                pattern = self._probe_visit(ready, row, col)
+                pattern = self._probe_visit(ready, row, col, geometry)
                 if pattern is not None:
                     return scan, pattern
         if not needs_previous:
@@ -2972,14 +2974,14 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
                       if item.metadata.get("series") == previous
                       and item.metadata.get("continuous_series") == series), None)
         if ready is not None:
-            pattern = self._probe_visit(ready, row, col)
+            pattern = self._probe_visit(ready, row, col, geometry)
             if pattern is not None:
                 return previous, pattern
         return None
 
-    def _probe_visit(self, source, row: int, col: int) -> np.ndarray | None:
+    def _probe_visit(self, source, row: int, col: int, geometry: tuple[int, int, int, int]) -> np.ndarray | None:
         """Read the exact visit at a display position using this frame's own order."""
-        rows, cols, det_rows, det_cols = self._preset_preview_geometry()
+        rows, cols, det_rows, det_cols = geometry
         positions = self._preset_preview_positions(source)
         if positions is not None:
             cached = self._live_visit_index
@@ -2991,8 +2993,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             index = int(cached[1][row, col])
             if not 0 <= index < getattr(source, "received", len(positions)):
                 return None
-        elif (self.live_phase_preview.get("frozen") and source.metadata.get("grid_of")
-                and tuple(source.shape) == (rows, cols, det_rows, det_cols)):
+        elif self.live_phase_preview.get("frozen") and tuple(source.shape) == (rows, cols, det_rows, det_cols):
             index = row * cols + col
         else:
             return None
@@ -3365,9 +3366,11 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
             self.compare_group_mode = self._normalize_compare_group_mode(change.get("new", "paged"))
         if change and change.get("name") == "compare_hidden_panels":
             hidden = self._panel_set(change.get("new", []))
-            if len(hidden) >= self.n_frames:
+            order = self._panel_order()
+            if order and all(idx in hidden for idx in order):
                 # Hiding every panel would leave the grid blank; keep one visible.
-                keep = next((idx for idx in self._panel_order() if idx not in self._panel_set(change.get("old", []))), 0)
+                previously_hidden = self._panel_set(change.get("old", []))
+                keep = next((idx for idx in order if idx not in previously_hidden), order[0])
                 hidden.discard(keep)
                 self.compare_hidden_panels = sorted(hidden)
         self._refresh_compare_virtual_images()
@@ -3413,7 +3416,11 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
 
     def _multiple_view_active(self) -> bool:
         """Whether the comparison grid shows: multiple view requested and more than one dataset to compare."""
-        return self.view_mode == "multiple" and self.n_frames > 1
+        if self.view_mode != "multiple" or self.n_frames < 2:
+            return False
+        return self._stream_follower is None or self.n_frames - sum(
+            live_frame_number(label) is not None for label in self.frame_labels
+        ) > 1
 
     def _panel_title(self, panel: int) -> str:
         """Grid caption of a dataset: its label, else ``"<frame_dim_label> <n>"``."""
@@ -3426,11 +3433,15 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         return {int(idx) for idx in values if not isinstance(idx, bool) and 0 <= int(idx) < self.n_frames}
 
     def _panel_order(self) -> list[int]:
-        """Dataset indices in display order: the user's order when it is a full permutation."""
+        """Display order of comparable datasets. Transient Live frames stay available to the single view."""
+        natural = list(range(self.n_frames))
         order = [int(idx) for idx in self.compare_panel_order]
-        if sorted(order) == list(range(self.n_frames)):
-            return order
-        return list(range(self.n_frames))
+        if sorted(order) != natural:
+            order = natural
+        if self._stream_follower is not None:
+            return [idx for idx in order if idx >= len(self.frame_labels)
+                    or live_frame_number(self.frame_labels[idx]) is None]
+        return order
 
     def _page_indices(self) -> list[int]:
         """Visible datasets of the active page (every visible one when groups are collapsed)."""
@@ -3457,7 +3468,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         """Show the page that contains the active dataset."""
         ordered = self._panel_order()
         frame_idx = int(self.frame_idx)
-        if frame_idx in self._panel_set(self.compare_hidden_panels):
+        if frame_idx not in ordered or frame_idx in self._panel_set(self.compare_hidden_panels):
             return
         page_idx = ordered.index(frame_idx) // max(1, int(self.compare_max_panels))
         if int(self.compare_page_idx) != page_idx:
@@ -3466,7 +3477,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
     def _compare_status(self, shown: Sequence[int]) -> str:
         """Grid status line: shown panels out of the unhidden total, with the page when the grid is paged."""
         label = self.frame_dim_label.lower()
-        total = self.n_frames - len(self._panel_set(self.compare_hidden_panels))
+        total = len(set(self._panel_order()) - self._panel_set(self.compare_hidden_panels))
         if self.compare_group_mode == "all":
             return f"{len(shown)}/{total} {label} panels{' · all groups' if self.compare_page_count > 1 else ''}"
         page = f" · page {self.compare_page_idx + 1}/{self.compare_page_count}" if self.compare_page_count > 1 else ""
@@ -3497,7 +3508,7 @@ class Show4DSTEM(SavedStateMixin, HtmlExportMixin, StaticFallbackMixin, anywidge
         try:
             indices = self._page_indices()
             if not indices:
-                self._clear_compare_virtual_images(f"0/{self.n_frames} {self.frame_dim_label.lower()} panels · hidden")
+                self._clear_compare_virtual_images(f"0/{len(self._panel_order())} {self.frame_dim_label.lower()} panels · hidden")
                 return
             if self.vi_source != "roi":
                 # Product maps travel once in vi_product_maps_bytes; the grid only needs the indices.

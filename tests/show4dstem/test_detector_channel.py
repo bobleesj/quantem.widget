@@ -229,6 +229,24 @@ def test_interlaced_probe_uses_preceding_measurement_then_current_visit(viewer, 
     np.testing.assert_array_equal(np.frombuffer(buffers[0], np.float32), np.full(256, 23, dtype=np.float32))
 
 
+def test_stopped_raster_probe_reads_the_completed_frame_at_the_new_cursor(viewer, monkeypatch):
+    widget, _, replies = viewer
+    patterns = np.arange(6 * 16 * 16, dtype=np.float32).reshape(6, 16, 16)
+    query = SimpleNamespace(frame=lambda index: patterns[index], close=lambda: None)
+    source = SimpleNamespace(shape=(2, 3, 16, 16), detector_session=lambda: query,
+                             metadata={"series": "live_3000002"})
+    recording = SimpleNamespace(detector_preview_source=lambda _: None, datasets=[source])
+    monkeypatch.setattr(widget, "_stream_follower", SimpleNamespace(recording=recording))
+    widget.send = lambda reply, buffers=None: replies.append((reply, buffers))
+    widget.live_phase_preview = dict(scan="live_3000002", total=2, cols=3, detRows=16, detCols=16, frozen=True)
+
+    request = {"type": "show4dstem_live_probe", "scan": "live_3000002", "center": [1, 2]}
+    widget._handle_live_probe(widget, request, [])
+    reply, buffers = replies[-1]
+    assert reply["source_scan"] == "live_3000002"
+    np.testing.assert_array_equal(np.frombuffer(buffers[0], np.float32), patterns[5].ravel())
+
+
 @pytest.mark.parametrize("mode, inner", [("circle", 0.0), ("annular", 2.25)])
 def test_radius_request_acknowledges_before_one_exact_computation(viewer, monkeypatch, mode, inner):
     widget, values_t, messages = viewer

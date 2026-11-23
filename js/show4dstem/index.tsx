@@ -2922,6 +2922,7 @@ function Show4DSTEM() {
   React.useEffect(() => {
     const scan = streamedScanRef.current;
     if (streaming || !scan) return;
+    if (isLiveFrame(scan)) { streamedScanRef.current = null; return; }
     const index = frameNames ? frameNames.indexOf(scan) : -1;
     if (index < 0) return;
     streamedScanRef.current = null;
@@ -2940,6 +2941,14 @@ function Show4DSTEM() {
   const [frameReverse, setFrameReverse] = useModelState<boolean>("frame_reverse");
   const [frameBoomerang, setFrameBoomerang] = useModelState<boolean>("frame_boomerang");
   const [viewMode, setViewMode] = useModelState<string>("view_mode");
+  const returnToRetained = () => {
+    if (preview?.frozen && isLiveFrame(frameNames?.[chosenFrameIdx])) {
+      for (let idx = nFrames - 1; idx >= 0; idx--) {
+        if (!isLiveFrame(frameNames?.[idx])) { setFrameIdx(idx); return; }
+      }
+    }
+    dismissFrozenLive();
+  };
   const [compareCols, setCompareCols] = useModelState<number>("compare_columns");
   const [compareVirtualImageBytes] = useModelState<DataView>("compare_virtual_image_bytes");
   const [streamCompareImages, setStreamCompareImages] = React.useState<DataView | null | undefined>(
@@ -2974,7 +2983,8 @@ function Show4DSTEM() {
   const [localKRow, setLocalKRow] = React.useState(roiCenterRow);
   const [retainedPosRow, setLocalPosRow] = React.useState(posRow);
   const [retainedPosCol, setLocalPosCol] = React.useState(posCol);
-  const visitProbeKey = showingLivePreview && preview?.visitPath && isLiveFrame(preview.scan)
+  const visitProbeKey = showingLivePreview && preview && (preview.visitPath || (preview.frozen && !preview.regional))
+    && isLiveFrame(preview.scan)
     ? `${preview.scan.slice(0, -6)}:${shapeRows}×${shapeCols}×${detRows}×${detCols}` : "";
   const [visitProbe, setVisitProbe] = React.useState<{ row: number; col: number } | null>(null);
   const [visitPattern, setVisitPattern] = React.useState<{
@@ -5141,7 +5151,7 @@ function Show4DSTEM() {
   const compareGridResizeCleanupRef = React.useRef<(() => void) | null>(null);
   const [compareHiddenMenuAnchor, setCompareHiddenMenuAnchor] = React.useState<HTMLElement | null>(null);
 
-  const compareMode = !showingLivePreview && viewMode === "multiple" && nFrames > 1;
+  const compareMode = !showingLivePreview && viewMode === "multiple" && (streamSourceIds.length ? keptFrames : nFrames) > 1;
   const viProductSourceOptions = React.useMemo(() => {
     const seen = new Set<string>();
     const out: string[] = [];
@@ -9420,7 +9430,7 @@ function Show4DSTEM() {
           <Typography sx={{ ...themedTypography.label, fontSize: 10, flexShrink: 0 }}>View</Typography>
           <Select
             value={showingLivePreview ? "single" : viewMode}
-            onChange={(event) => { dismissFrozenLive(); setViewMode(String(event.target.value)); }}
+            onChange={(event) => { returnToRetained(); setViewMode(String(event.target.value)); }}
             size="small"
             inputProps={{ "aria-label": "Show4DSTEM view mode" }}
             sx={{ ...themedSelect, minWidth: 72, fontSize: 10, ...(embedded ? { flexShrink: 0 } : {}) }}
@@ -9547,7 +9557,7 @@ function Show4DSTEM() {
           {scanChoiceRows}
         </Box> : titleHeading}
       {preview?.frozen && keptFrames > 0 && !sizeGroups?.length && (
-        <Button size="small" sx={compactButton} onClick={dismissFrozenLive}>Show retained scan</Button>
+        <Button size="small" sx={compactButton} onClick={returnToRetained}>Show retained scan</Button>
       )}
       {sizeGroups && sizeGroups.length > 1 && (
         <Box role="tablist" aria-label="Scan size" sx={{ display: "flex", flexWrap: "wrap", gap: "4px", mb: `${SPACING.SM}px` }}>
