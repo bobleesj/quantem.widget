@@ -508,7 +508,7 @@ def test_sample_tilt_panel_uses_the_thick_sample_model(widget, direct):
     # the panel's depth is the model's depth spread: it is stored under that name and never as a thickness
     assert saved["sample_tilt_mrad"] == [3.0, -4.0] and saved["depth_spread_nm"] == 12.0 and "thickness_nm" not in saved
     rot = math.radians(10.0)
-    assert saved["propagator_tilt_mrad"] == pytest.approx([3.0 * math.cos(rot) + (-4.0) * math.sin(rot), -3.0 * math.sin(rot) + (-4.0) * math.cos(rot)])
+    assert saved["tilt_mrad"] == pytest.approx([3.0 * math.cos(rot) + (-4.0) * math.sin(rot), -3.0 * math.sin(rot) + (-4.0) * math.cos(rot)])
 
 
 @pytest.fixture
@@ -636,7 +636,7 @@ def test_save_writes_the_calibration_and_mirrors_it_onto_the_session(widget, dir
     widget.save_trigger += 1
     assert widget.calibration_path == str(tmp_path / "calibration.json") and widget.calibration_saved_at
     saved = json.loads((tmp_path / "calibration.json").read_text())
-    assert saved["schema"] == "quantem.direct-calibration/9"
+    assert saved["schema"] == "quantem.direct-calibration/10"
     # nm and degrees under names that say so: phi12 was radians beside higher-order angles in degrees
     assert saved["aberrations"] == {"C10_nm": -4.0, "C12_nm": 0.25, "phi12_deg": 12.0}
     assert (saved["scan_detector_rotation_deg"], saved["scan_detector_rotation_flipped"], saved["display_negate_phase"]) == (10.0, False, False)
@@ -1145,11 +1145,11 @@ def test_the_rewrite_script_carries_earlier_calibration_files_over(tmp_path):
     assert saved.read_text() == before and "would be rewritten" in dry.stdout and "row step 0.5" in dry.stdout
     subprocess.run([sys.executable, str(script), str(saved), str(fitted)], capture_output=True, text=True, check=True)
     current = json.loads(saved.read_text())
-    assert current["schema"] == "quantem.direct-calibration/9" and (tmp_path / "calibration.json.before").read_text() == before
+    assert current["schema"] == "quantem.direct-calibration/10" and (tmp_path / "calibration.json.before").read_text() == before
     assert current["aberrations"] == pytest.approx({"C10_nm": -4.0, "C12_nm": 0.25, "phi12_deg": 12.0, "C21_nm": 5.0, "phi21_deg": 45.0, "C30_nm": 2.0})
     assert (current["scan_detector_rotation_deg"], current["scan_sampling_A"], current["source"]) == (
         345.5, [0.5, 0.5], {"file_name": "scan_master.h5", "relative_path": None})
-    assert (current["sample_tilt_mrad"], current["propagator_tilt_mrad"], current["depth_spread_nm"]) == ([3.0, -4.0], [2.3, -4.5], 12.0)
+    assert (current["sample_tilt_mrad"], current["tilt_mrad"], current["depth_spread_nm"]) == ([3.0, -4.0], [2.3, -4.5], 12.0)
     current = json.loads(fitted.read_text())
     assert current["schema"] == "quantem.show4dstem-direct-calibration/5"  # Show4DSTEM's record, not ShowPtycho's
     assert current["refinement"] == "nelder-mead" and "refine" not in current
@@ -1191,7 +1191,7 @@ def test_the_rewrite_script_carries_a_path_identity_over_with_its_data(tmp_path)
     saved.write_text(json.dumps(record))
     subprocess.run([sys.executable, str(script), str(saved)], capture_output=True, text=True, check=True)
     current = json.loads(saved.read_text())
-    assert current["schema"] == "quantem.direct-calibration/9" and "source_path" not in current
+    assert current["schema"] == "quantem.direct-calibration/10" and "source_path" not in current
     assert current["source"] == {"file_name": "scan.npy", "relative_path": "scan.npy"}
     identity = current["session_identity"]
     assert identity["data"] == {"kind": "detector"} and identity["geometry"] == {"voltage_kV": 300.0}
@@ -1233,7 +1233,7 @@ def test_the_rewrite_script_carries_layout_4_records_to_the_canonical_names(tmp_
         read_calibration(tmp_path / "calibration.json", {}, (0, 1, 0, 1), CALIBRATION_SCHEMA)
     subprocess.run([sys.executable, str(script), *(str(tmp_path / name) for name in files)], capture_output=True, text=True, check=True)
     calibration = json.loads((tmp_path / "calibration.json").read_text())
-    assert (calibration["schema"], calibration["display_negate_phase"], calibration["loss"]) == ("quantem.direct-calibration/9", True, 0.1)
+    assert (calibration["schema"], calibration["display_negate_phase"], calibration["loss"]) == ("quantem.direct-calibration/10", True, 0.1)
     fit = calibration["local_tilt"]["fits"][0]
     assert (fit["sample_tilt_mrad"], fit["sample_agreement"]) == ([1.0, 2.0], 0.9)
     assert fit["fit_record"]["fits"][0] == {"seed": 11, "sample_tilt_mrad": [1.0, 2.0], "sample_agreement": 0.9,
@@ -1270,16 +1270,16 @@ def test_the_rewrite_script_carries_layouts_6_and_7_and_show4dstem_3_to_quantem_
         (tmp_path / name).write_text(json.dumps(record))
     subprocess.run([sys.executable, str(script), *(str(tmp_path / name) for name in files)], capture_output=True, text=True, check=True)
     assert json.loads((tmp_path / "calibration.json").read_text()) == {
-        "schema": "quantem.direct-calibration/9", "upsample": 3, "upsample_mode": "auto", "loss": 0.1,
+        "schema": "quantem.direct-calibration/10", "upsample": 3, "upsample_mode": "auto", "loss": 0.1,
         "reconstruction": {"method": "complex", "phase_damp": 0.07, "amplitude_damp": 0.15},
         "local_tilt": {"fits": [{"id": "a", "reconstruction": {"upsample": 2}, "fit_record": {"trials": 200}}]}}
     assert json.loads((tmp_path / "gpu_calibration.json").read_text()) == {
-        "schema": "quantem.direct-calibration/9", "upsample": 2, "upsample_mode": "auto",
+        "schema": "quantem.direct-calibration/10", "upsample": 2, "upsample_mode": "auto",
         "reconstruction": {"method": "phase_of_mean"}}
     assert json.loads((tmp_path / "show4dstem_ssb_calibration.json").read_text()) == {
         "schema": "quantem.show4dstem-direct-calibration/5", "trials": 200, "loss": 0.2}
     assert json.loads((tmp_path / "layout_6.json").read_text()) == {
-        "schema": "quantem.direct-calibration/9", "upsample": 4, "upsample_mode": "explicit",
+        "schema": "quantem.direct-calibration/10", "upsample": 4, "upsample_mode": "explicit",
         "reconstruction": {"method": "phase", "phase_damp": 0.03}}
     assert json.loads((tmp_path / "showptycho_stars.json").read_text()) == {
         "schema": "quantem.direct-stars/6", "stars": [{"id": "a", "reconstruction": {"method": "phase_of_mean"}},
@@ -1291,7 +1291,7 @@ def test_the_rewrite_script_moves_each_last_layout_to_its_direct_ptychography_id
     # each last layout keeps its content and moves one version on under its direct ptychography id
     script = Path(__file__).resolve().parents[2] / "scripts" / "rewrite_direct_calibration.py"
     moved = {
-        "calibration.json": ("quantem.ssb-calibration/8", "quantem.direct-calibration/9"),
+        "calibration.json": ("quantem.ssb-calibration/8", "quantem.direct-calibration/10"),
         "showptycho_stars.json": ("quantem.ssb-stars/5", "quantem.direct-stars/6"),
         "snapshots.json": ("quantem.ssb-snapshots/2", "quantem.direct-snapshots/3"),
         "cal.json": ("quantem.ssb-browser-calibration/3", "quantem.direct-browser-calibration/4"),
@@ -1603,7 +1603,7 @@ def test_a_saved_fit_restores_after_its_data_folder_moves_and_names_no_absolute_
         viewer.close()
     saved = json.loads((folder / "calibration.json").read_text())
     stars = json.loads((folder / "showptycho_stars.json").read_text())
-    assert saved["schema"] == "quantem.direct-calibration/9"
+    assert saved["schema"] == "quantem.direct-calibration/10"
     assert saved["source"] == stars["stars"][0]["source"] == {"file_name": "scan.npy", "relative_path": "scan.npy"}
     assert _absolute_paths(saved) == [] and _absolute_paths(stars) == []
     assert saved["session_identity"]["source"]["detector"]["file_name"] == "scan.npy"
@@ -1769,11 +1769,11 @@ def test_the_propagator_tilt_of_a_flipped_session_follows_the_detector_axes(tmp_
             viewer = ShowPtycho(direct, save_dir=tmp_path)
             viewer.upsample = 1
             viewer._on_preview_message(viewer, {"type": "direct-preview", "request": {"id": 1, **START, "sample": sample, "committed": True}}, [])
-            assert viewer.calibration()["propagator_tilt_mrad"] == pytest.approx(expected)
+            assert viewer.calibration()["tilt_mrad"] == pytest.approx(expected)
             viewer.save_trigger += 1
             saved = json.loads((tmp_path / "calibration.json").read_text())
             assert saved["scan_detector_rotation_flipped"] is flipped
-            assert saved["propagator_tilt_mrad"] == pytest.approx(expected)
+            assert saved["tilt_mrad"] == pytest.approx(expected)
             viewer.close()
 
 
@@ -2442,3 +2442,20 @@ def test_showptycho_uses_shared_ui_presets(mode, controls, collapsed, scale_bar)
     viewer = ShowPtycho(_object_wave(), ui_mode=mode)
     assert (viewer.show_controls, viewer.controls_collapsed, viewer.show_scale_bar) == (controls, collapsed, scale_bar)
     viewer.close()
+
+
+def test_the_rewrite_script_names_the_detector_axes_tilt_tilt_mrad(tmp_path):
+    """A direct calibration /9 names the tilt along the detector axes propagator_tilt_mrad; /10 names it tilt_mrad,
+    myptycho's Propagator(tilt_mrad=). The script renames that one key and moves the schema on; the scan-frame
+    sample_tilt_mrad and every number stay; a /10 file is left as it is."""
+    script = Path(__file__).resolve().parents[2] / "scripts" / "rewrite_direct_calibration.py"
+    earlier = {"schema": "quantem.direct-calibration/9", "sample_tilt_mrad": [3.0, -4.0], "propagator_tilt_mrad": [2.3, -4.5],
+               "depth_spread_nm": 9.9, "aberrations": {"C10_nm": 10.0}}
+    (tmp_path / "calibration.json").write_text(json.dumps(earlier))
+    subprocess.run([sys.executable, str(script), str(tmp_path / "calibration.json")], capture_output=True, text=True, check=True)
+    assert json.loads((tmp_path / "calibration.json").read_text()) == {
+        "schema": "quantem.direct-calibration/10", "sample_tilt_mrad": [3.0, -4.0], "tilt_mrad": [2.3, -4.5],
+        "depth_spread_nm": 9.9, "aberrations": {"C10_nm": 10.0}}
+    current = (tmp_path / "calibration.json").read_text()
+    subprocess.run([sys.executable, str(script), str(tmp_path / "calibration.json")], capture_output=True, text=True, check=True)
+    assert (tmp_path / "calibration.json").read_text() == current

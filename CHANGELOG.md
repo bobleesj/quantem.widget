@@ -6,6 +6,7 @@ new `rcN` heading when that rc is published to TestPyPI.
 
 ## Unreleased
 
+- Renamed: ShowPtycho's calibration names the tilt along the detector axes `tilt_mrad` (was `propagator_tilt_mrad`), schema `quantem.direct-calibration/10`; the adapter method is `tilt_mrad(...)`. `python scripts/rewrite_direct_calibration.py FILE` rewrites a /9 file once (`FILE.before` kept). No number changes.
 - Show4DSTEM redraws the spectrum when you dock the FFT or return it to the inset.
 - ShowPtycho has a Fit row: Max order, Refine rotation and Check 180° set what Fit searches (`aberrations()`'s `max_order`, `refine_rotation`, `check_rotation`), and Other 180° fits the opposite rotation branch and keeps it. Fit replaces the Joint fit button of the Sample tilt panel. `viewer.save_calibration(path)` writes the calibration to a named file; the record says the fit's `max_order` and `higher_order_limit`, and a scan held in GPU memory records its geometry too, so `quantem.gpu.DirectPtycho.load_calibration(path)` gives the fit back.
 - Show4DSTEM stays responsive while a scan streams: the newest pattern and the arriving image are drawn once per

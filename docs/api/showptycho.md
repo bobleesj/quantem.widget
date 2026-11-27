@@ -378,7 +378,7 @@ quantem.gpu's default fit adds the sample to the model, and the
   - **Other 180°** turns the rotation half a turn and fits there, for a phase whose columns look dark. It
     switches Check 180° off, so a later Fit keeps that choice.
 - The status line gives the tilt in the scan frame; Save also records it along
-  the detector axes (`propagator_tilt_mrad`, the scan frame turned by the
+  the detector axes (`tilt_mrad`, the scan frame turned by the
   scan-detector rotation and swapped when the rotation is flipped), which
   seeds a quantem.thick reconstruction directly.
 
@@ -401,7 +401,7 @@ pd.concat([ordinary.report(), tilted.report()])
 ```
 
 **Save** writes the tilt into `calibration.json` (`sample_tilt_mrad` in the
-scan frame, `propagator_tilt_mrad` along the detector axes, the ptychography
+scan frame, `tilt_mrad` along the detector axes, the ptychography
 frame, from `quantem.gpu.geometry.sample_to_propagator_tilt` with the session's
 rotation and flip, and
 `depth_spread_nm`, the model's depth spread, which is not a sample thickness).

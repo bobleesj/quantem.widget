@@ -52,7 +52,7 @@ STARS_FILENAME = "showptycho_stars.json"
 CALIBRATION_FILENAME = "calibration.json"
 CALIBRATION_IMAGE_FILENAME = "calibration_phase.png"
 # every stored record names its layout; a reader takes the current value only
-CALIBRATION_SCHEMA = "quantem.direct-calibration/9"
+CALIBRATION_SCHEMA = "quantem.direct-calibration/10"
 STARS_SCHEMA = "quantem.direct-stars/6"
 MIN_CROP_SPAN = 32
 # Damping strengths a slider drags: the browser sends them and shows them itself.
@@ -1516,9 +1516,9 @@ class ShowPtycho(anywidget.AnyWidget):
                 "sample_tilt_mrad": [tilt_row, tilt_col],
                 "depth_spread_nm": result["depth_spread_nm"],
             })
-        propagator_tilt = self._direct.propagator_tilt_mrad((tilt_row, tilt_col), self.scan_detector_rotation_deg)
+        propagator_tilt = self._direct.tilt_mrad((tilt_row, tilt_col), self.scan_detector_rotation_deg)
         self.sample_fit_json = json.dumps({
-            **result["aberrations"], "sample_tilt_mrad": [tilt_row, tilt_col], "propagator_tilt_mrad": propagator_tilt,
+            **result["aberrations"], "sample_tilt_mrad": [tilt_row, tilt_col], "tilt_mrad": propagator_tilt,
             "depth_spread_nm": result["depth_spread_nm"], "tilt_fit_gain": result["tilt_fit_gain"],
             "scan_detector_rotation_deg": self.scan_detector_rotation_deg,
             "phase_ready": True,
@@ -1684,7 +1684,7 @@ class ShowPtycho(anywidget.AnyWidget):
         """The one ``quantem.direct-calibration`` record: what ``calibration()`` returns and Save writes.
 
         ``_calibration``'s optics and geometry with the Sample panel beside them (``sample_tilt_mrad``
-        in the scan frame, ``propagator_tilt_mrad`` along the detector axes, ``depth_spread_nm``), the
+        in the scan frame, ``tilt_mrad`` along the detector axes, ``depth_spread_nm``), the
         output sampling, display settings, the measured ``scan_shape`` of ``scan_region``, the
         bright-field radius, the regional views and the acquisition identity. ``id`` and
         ``generated_at_utc`` are None until Save writes the record.
@@ -1701,7 +1701,7 @@ class ShowPtycho(anywidget.AnyWidget):
             "schema": CALIBRATION_SCHEMA, "id": None, "generated_at_utc": None, "notes": self.notes,
             **self._calibration(aberrations, self.scan_detector_rotation_deg, self.display_negate_phase, loss),
             "sample_tilt_mrad": list(sample["sample_tilt_mrad"]) if sample else None,
-            "propagator_tilt_mrad": self._direct.propagator_tilt_mrad(sample["sample_tilt_mrad"], self.scan_detector_rotation_deg)
+            "tilt_mrad": self._direct.tilt_mrad(sample["sample_tilt_mrad"], self.scan_detector_rotation_deg)
             if sample else None,
             "depth_spread_nm": sample["depth_spread_nm"] if sample else None,
             "upsample": self._output_factor,

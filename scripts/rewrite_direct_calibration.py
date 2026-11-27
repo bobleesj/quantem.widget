@@ -54,6 +54,10 @@ earlier one, with no other change: ``quantem.ssb-calibration/8`` is ``quantem.di
 ``manifest.json``) is ``quantem.direct-browser-folder/4`` and
 ``quantem.show4dstem-ssb-calibration/4`` is ``quantem.show4dstem-direct-calibration/5``.
 
+``quantem.direct-calibration/9`` named the tilt along the detector axes ``propagator_tilt_mrad``;
+``/10`` names it ``tilt_mrad``, myptycho's ``Propagator(tilt_mrad=)``. No number changes. (The ``tilt_mrad`` of a /4
+layout above is the scan-frame tilt and becomes ``sample_tilt_mrad``, as before.)
+
     python scripts/rewrite_direct_calibration.py --dry-run path/to/calibration.json
     python scripts/rewrite_direct_calibration.py path/to/calibration.json path/to/showptycho_stars.json
     python scripts/rewrite_direct_calibration.py --data path/to/scan_master.h5 path/to/calibration.json
@@ -106,6 +110,8 @@ BROWSER_FOLDER_SCHEMA = "quantem.ssb-browser-folder/3"
 DIRECT_IDS = {CALIBRATION_SCHEMA: "quantem.direct-calibration/9", STARS_SCHEMA: "quantem.direct-stars/6",
               SNAPSHOTS_SCHEMA: "quantem.direct-snapshots/3", BROWSER_CALIBRATION_SCHEMA: "quantem.direct-browser-calibration/4",
               BROWSER_FOLDER_SCHEMA: "quantem.direct-browser-folder/4", SHOW4DSTEM_SCHEMA: "quantem.show4dstem-direct-calibration/5"}
+# the direct calibration whose detector-axes tilt is tilt_mrad (was propagator_tilt_mrad)
+DETECTOR_TILT_SCHEMA = "quantem.direct-calibration/10"
 # Show4DSTEM layouts up to /2 fitted at tilt 0 and recorded no sample model
 SHOW4DSTEM_TILT_ZERO = {"tilt": False, "sample_tilt_mrad": None, "depth_spread_nm": None, "tilt_fit_gain": None}
 RENAMED = {"flip_phase": "display_negate_phase", "tilt_mrad": "sample_tilt_mrad",
@@ -174,6 +180,10 @@ def rewrite(earlier, path: pathlib.Path | None = None, data: pathlib.Path | None
     ``path`` is where the file is (the folder a relative data path is measured from), ``data``
     the acquisition when it is not beside the file under the name the file recorded.
     """
+    if isinstance(earlier, dict) and earlier.get("schema") == DETECTOR_TILT_SCHEMA:
+        return None, []
+    if isinstance(earlier, dict) and earlier.get("schema") == "quantem.direct-calibration/9":
+        return detector_tilt(earlier), []
     if isinstance(earlier, dict) and earlier.get("schema") in DIRECT_IDS.values():
         return None, []
     current, notes = path_layout(earlier)
@@ -186,7 +196,15 @@ def rewrite(earlier, path: pathlib.Path | None = None, data: pathlib.Path | None
         current["reconstruction"] = {"method": current.pop("reconstruction_method"), **options}
     if current is not None:
         current["schema"] = DIRECT_IDS[current["schema"]]
+        current = detector_tilt(current)
     return current, notes
+
+
+def detector_tilt(record: dict) -> dict:
+    """A direct calibration /9 in the /10 layout: ``propagator_tilt_mrad`` named ``tilt_mrad``; other ids as they are."""
+    if record.get("schema") != "quantem.direct-calibration/9":
+        return record
+    return {("tilt_mrad" if key == "propagator_tilt_mrad" else key): value for key, value in record.items()} | {"schema": DETECTOR_TILT_SCHEMA}
 
 
 def portable(record: dict, path: pathlib.Path, data: pathlib.Path | None) -> dict:

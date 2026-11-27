@@ -479,7 +479,7 @@ class DirectSession:
             if saved["depth_spread_nm"] is not None else None
         ))
 
-    def propagator_tilt_mrad(self, sample_tilt_mrad, scan_detector_rotation_deg: float) -> list[float]:
+    def tilt_mrad(self, sample_tilt_mrad, scan_detector_rotation_deg: float) -> list[float]:
         """A scan-frame sample tilt along the detector axes, the ptychographic propagator's frame.
 
         ``quantem.gpu.geometry.sample_to_propagator_tilt`` at
