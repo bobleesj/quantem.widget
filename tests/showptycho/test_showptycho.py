@@ -648,8 +648,9 @@ def test_save_writes_the_calibration_and_mirrors_it_onto_the_session(widget, dir
     assert saved["loss"] == json.loads(widget.result_json)["loss"] and "source_path" not in saved
     assert saved["sample_tilt_mrad"] is None and saved["generated_at_utc"] == widget.calibration_saved_at and saved["generated_at_utc"].endswith("Z")
     assert saved["upsample"] == widget.upsample
+    # tilt_mrad was the scan-frame tilt up to /4 (now sample_tilt_mrad); since /10 it is the tilt along the detector axes
     retired = {"schema_version", "version", "aberration_unit", "rotation_angle_deg", "higher_order", "det_sampling_mrad_px",
-               "source_file", "source_stem", "label", "timestamp", "tilt_mrad", "tilt_object_mrad"}
+               "source_file", "source_stem", "label", "timestamp", "tilt_object_mrad", "propagator_tilt_mrad"}
     assert not retired & set(saved)
     assert direct.known_aberrations == {"C10_nm": -4.0, "C12_nm": 0.25, "phi12_deg": 12.0} and direct.best_loss == saved["loss"]
 
